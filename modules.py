@@ -13,9 +13,10 @@ class overlap_tile(torch.nn.Module):
         self._use_gpu = False
         self._modules['model'] = model
         
-    def cuda(self, *args, **kwargs):
+    def cuda(self, device=None):
         self._use_gpu = True
-        super(overlap_tile, self).cuda(*args, **kwargs)
+        self._device = device
+        return self._apply(lambda t: t.cuda(device))
         
     def forward(self, input):
         ndim = len(self.input_patch_size)+2
@@ -28,41 +29,45 @@ class overlap_tile(torch.nn.Module):
         # If not already computed, compute the output patch size.
         # HACK: this uses a forward pass.
         if self.output_patch_size is None:
-            _in = Variable(torch.zeros(*tuple(self.input_patch_size)).float())
+            input_size = (1,1)+tuple(self.input_patch_size)
+            _in = Variable(torch.zeros(*input_size).float())
             if self._use_gpu:
-                _in.cuda()
+                _in = _in.cuda(self._device)
             _out = self.model(_in)
-            self.output_patch_size = tuple(_out.size())
+            self.output_patch_size = tuple(_out.size()[2:])
     
         # Compute the required size of the padded input image.
-        lost = np.subtract(self.output_patch_size, self.input_patch_size)
-        new_shape = list(input.size()[:2]) + list([input.size()[i+2]+lost[i]
-                                                  for i in range(ndim-2)])
-        for i in range(ndim):
-            # Pytorch is very picky about which kinds of integers are used to
-            # define a shape.
-            new_shape[i] = int(new_shape[i])
+        lost = np.subtract(self.input_patch_size, self.output_patch_size)
+        new_shape = list(input.size()[:2])
+        for i in range(ndim-2):
+            pad0 = lost[i]//2
+            pad1 = self.input_patch_size[i] \
+                   - (input.size()[i+2]+pad0)%self.output_patch_size[i]
+            padded_length = pad0 + input.size()[i+2] + pad1
+            new_shape.append(int(padded_length))
                             
         # Create and fill padded input image.
         indices = [slice(None, None)]*ndim
         spatial_dims = range(2, ndim)
         for dim in spatial_dims:
-            pad = lost[dim-2]//2
-            indices[dim] = slice(pad, input.size()[dim]+pad)
+            pad0 = lost[dim-2]//2
+            indices[dim] = slice(pad0, input.size()[dim]+pad0)
         input_padded = Variable(torch.zeros(*new_shape).float())
         if self._use_gpu:
-            input_padded.cuda()
+            input_padded = input_padded.cuda()
         input_padded[indices] = input
         
         # Create output image buffer.
         output = Variable(torch.zeros(*tuple(input.size())).float())
         if self._use_gpu:
-            output.cuda()
+            output = output.cuda()
         
         # Iterator over indices in an image, for sourcing or placing patches.
-        def index_iterator(image_size):
+        def index_iterator(offset=None):
+            if offset is None:
+                offset = [0]*(ndim-2)
             def recursive_idx(dim, idx):
-                for i in range(0, image_size[dim],
+                for i in range(0, input.size()[dim]+offset[dim-2],
                                   self.output_patch_size[dim-2]):
                     idx[dim] = i
                     if dim < ndim-1:
@@ -83,14 +88,20 @@ class overlap_tile(torch.nn.Module):
             return indices
             
         # Process input patch-wise.
-        iter_input = index_iterator(input_padded.size())
-        iter_output = index_iterator(output.size())
+        iter_input = index_iterator(offset=lost//2)
+        iter_output = index_iterator()
         for idx_i, idx_o in zip(iter_input, iter_output):
             sl_i = get_patch_slices(idx_i, self.input_patch_size)
             sl_o = get_patch_slices(idx_o, self.output_patch_size)
             input_patch = input_padded[sl_i]
+            
             output_patch = self.model(input_patch)
-            output[sl_o] = output_patch
+            sl_p = [slice(None, None)]*2
+            for dim in range(2, ndim):
+                stop = min(output.size()[dim] - sl_o[dim].start,
+                           output_patch.size()[dim])
+                sl_p.append(slice(0, stop))
+            output[sl_o] = output_patch[sl_p]
             
         return output
  
