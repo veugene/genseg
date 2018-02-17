@@ -509,15 +509,88 @@ class PixelDiscriminator(nn.Module):
         else:
             return self.net(input)
 
-def num_params(net):
-    return np.sum([ np.prod(np.asarray(elem.size())) for elem in net.parameters() ])
+class DilatedResnetBlock(nn.Module):
+    def __init__(self, dim_in, dim_out, dilation, padding_type, norm_layer, use_dropout, use_bias):
+        super(DilatedResnetBlock, self).__init__()
+        self.conv_block = self.build_conv_block(dim_in, dim_out, dilation, padding_type, norm_layer, use_dropout, use_bias)
+        if dim_in != dim_out:
+            self.shortcut = nn.Conv2d(in_channels=dim_in, out_channels=dim_out, kernel_size=1)
 
+    def build_conv_block(self, dim_in, dim_out, dilation, padding_type, norm_layer, use_dropout, use_bias):
+        conv_block = []
+        if padding_type == 'reflect':
+            conv_block += [nn.ReflectionPad2d(dilation)]
+        conv_block += [nn.Conv2d(dim_in, dim_out, kernel_size=3,
+                                 padding=0 if padding_type=='reflect' else dilation, bias=use_bias, dilation=dilation),
+                       norm_layer(dim_out),
+                       nn.ReLU(True)]
+        if use_dropout:
+            conv_block += [nn.Dropout(0.5)]
+        if padding_type == 'reflect':
+            conv_block += [nn.ReflectionPad2d(dilation)]
+        conv_block += [nn.Conv2d(dim_out, dim_out, kernel_size=3,
+                                 padding=0 if padding_type=='reflect' else dilation, bias=use_bias, dilation=dilation),
+                       norm_layer(dim_out)]
+        return nn.Sequential(*conv_block)
 
-if __name__ == '__main__':
-    fcn = DilatedFCN(C=3)
-    xfake = Variable( torch.randn((1,3,256,256)) )
-    out = fcn(xfake)
-    print(fcn)
-    print ( out.size() )
-    import pdb
-    pdb.set_trace()
+    def forward(self, x):
+        if hasattr(self, 'shortcut'):
+            out = self.shortcut(x) + self.conv_block(x)
+        else:
+            out = x + self.conv_block(x)
+        return out
+
+class DilatedFCN(nn.Module):
+    def __init__(self, C,
+                 mult=[2,2,4,8,16,32,32,1],
+                 dilations=[1,1,2,4,8,16,1,1],
+                 norm_layer=nn.BatchNorm2d,
+                 padding_type='reflect',
+                 nonlinearity='tanh'):
+        """
+        Parameters
+        ----------
+        C: number of filters for the preprocessor (first) conv layer.
+        mult: a list of multipliers s.t. the i'th layer has the number of
+          channels C*mult[i]. Note that this argument implicitly defines the
+          # of layers of the FCN.
+        dilations: a list of dilation factors for the layers. The length of
+          this is the same as that of `mult`.
+        norm_layer: layer to use for normalisation. Default is batch norm.
+        padding_type: the type of padding to use. Can be either 'reflect'
+          for reflection padding or 'zero' for zero padding.
+        nonlinearity: the nonlinearity used at the last layer of the network.
+          At the moment this can be set to either 'tanh' or 'none'.
+        """
+        assert len(mult) == len(dilations)
+        assert nonlinearity in ['tanh', 'none'] # TODO
+        assert padding_type in ['reflect', 'zero']
+        super(DilatedFCN, self).__init__()
+        if type(norm_layer) == functools.partial:
+            use_bias = norm_layer.func == nn.InstanceNorm2d
+        else:
+            use_bias = norm_layer == nn.InstanceNorm2d
+        if padding_type == 'reflect':
+            model = [ nn.ReflectionPad2d(3) ]
+        else:
+            model = []
+        model += [nn.Conv2d(C, C*mult[0], kernel_size=7,
+                            padding=0 if padding_type == 'reflect' else 3, bias=use_bias),
+                 norm_layer(C*mult[0]),
+                 nn.ReLU(True)]
+        for i in range(len(mult)-1):
+            resblock = DilatedResnetBlock(
+                C*mult[i],
+                C*mult[i+1],
+                dilation=dilations[i+1],
+                padding_type=padding_type,
+                norm_layer=norm_layer,
+                use_dropout=False,
+                use_bias=use_bias
+            )
+            model += [resblock]
+        if nonlinearity == 'tanh':
+            model += [ nn.Tanh() ]
+        self.model = nn.Sequential(*model)
+    def forward(self, x):
+        return self.model(x)

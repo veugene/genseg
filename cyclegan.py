@@ -24,6 +24,46 @@ import itertools
 from skimage.io import imsave
 from skimage.transform import rescale
 
+def get_kaggle_folder_iterators(batch_size, labels_file, labels=(0,4), postfix='.jpeg'):
+    """Get iterators corresponding to sick and healthy images of the 256px Kaggle images"""
+    fnames0, fnames1 = [], []
+    with open(labels_file) as f:
+        f.readline()
+        for line in f:
+            line = line.rstrip().split(",")
+            fname, cls = "%s%s" % (line[0], postfix), int(line[1])
+            if cls == labels[0]:
+                fnames0.append(fname)
+            elif cls == labels[1]:
+                fnames1.append(fname)
+    rnd_state = np.random.RandomState(0)
+    rnd_state.shuffle(fnames0)
+    rnd_state.shuffle(fnames1)
+    fnames0_train = fnames0[0:int(0.9*len(fnames0))]
+    fnames0_valid = fnames0[int(0.9*len(fnames0))::]
+    fnames1_train = fnames1[0:int(0.9*len(fnames1))]
+    fnames1_valid = fnames1[int(0.9*len(fnames1))::]
+    # prepare the iterators
+    trs = transforms.Compose([
+        transforms.ToTensor(), transforms.Normalize(mean=(0.5,0.5,0.5), std=(0.5,0.5,0.5))
+    ])
+    # training images
+    ds_train_a = util.DatasetFromFolder(os.environ["DR_256"], images=fnames0_train, resize_scale=286,
+                                        crop_size=256, fliplr=True, transform=trs)
+    ds_train_b = util.DatasetFromFolder(os.environ["DR_256"], images=fnames1_train, resize_scale=286,
+                                        crop_size=256, fliplr=True, transform=trs)
+    ds_train_both = util.MultipleDataset(ds_train_a, ds_train_b)
+    train_loader = DataLoader(ds_train_both, batch_size=batch_size, shuffle=True)
+    # validation images
+    ds_valid_a = util.DatasetFromFolder(os.environ["DR_256"], images=fnames0_valid, resize_scale=286,
+                                        crop_size=256, fliplr=True, transform=trs)
+    ds_valid_b = util.DatasetFromFolder(os.environ["DR_256"], images=fnames1_valid, resize_scale=286,
+                                        crop_size=256, fliplr=True, transform=trs)
+    ds_valid_both = util.MultipleDataset(ds_valid_a, ds_valid_b)
+    valid_loader = DataLoader(ds_valid_both, batch_size=batch_size, shuffle=True)
+    return train_loader, valid_loader
+
+
 def get_idrid_seg_folder_iterators(batch_size, img_size=256):
     """Read from `no_apparent_retinopathy` and `apparant_retinopathy` folders."""
     if "DR_FOLDERS" not in os.environ:
@@ -80,23 +120,26 @@ def get_log_all_losses_handler(logger, prefix=""):
                (prefix, loss_bufs[0], loss_bufs[1], loss_bufs[2], loss_bufs[3], loss_bufs[4], loss_bufs[5]))
     return log_all_losses
 
-logger = print
-
-gen_params = {'input_nc':3, 'ngf':64, 'output_nc':3, 'norm':'instance', 'which_model_netG':'resnet_9blocks'}
-disc_params = {'input_nc':3, 'ndf':64, 'n_layers_D':3, 'norm':'instance', 'which_model_netD':'n_layers'}
-g_atob = image2image.define_G(**gen_params)
-g_btoa = image2image.define_G(**gen_params)
-d_a = image2image.define_D(**disc_params)
-d_b = image2image.define_D(**disc_params)
-print("g_atob")
-print(g_atob)
-print("d_a")
-print(d_a)
 
 def run():
 
-    train_loader = get_idrid_seg_folder_iterators(1)
-    val_loader = get_idrid_seg_folder_iterators(1)
+    logger = print
+    gen_params = {'input_nc':3, 'ngf':64, 'output_nc':3, 'norm':'instance', 'which_model_netG':'resnet_9blocks'}
+    disc_params = {'input_nc':3, 'ndf':64, 'n_layers_D':3, 'norm':'instance', 'which_model_netD':'n_layers'}
+    g_atob = image2image.define_G(**gen_params)
+    g_btoa = image2image.define_G(**gen_params)
+    d_a = image2image.define_D(**disc_params)
+    d_b = image2image.define_D(**disc_params)
+    print("g_atob")
+    print(g_atob)
+    print("# params: %i" % util.count_params(g_atob))
+    print("d_a")
+    print(d_a)
+    print("# params: %i" % util.count_params(d_a))    
+    
+    train_loader, val_loader = get_kaggle_folder_iterators(batch_size=1, labels_file=os.environ["DR_FOLDERS"] + "/trainLabels.csv")
+    #import pdb
+    #pdb.set_trace()
 
     opt_args = { 'lr':0.0002, 'betas':(0.5, 0.999) }
     optim_g = Adam( itertools.chain(g_atob.parameters(), g_btoa.parameters()), **opt_args)
@@ -231,10 +274,10 @@ def run():
         return _fn
 
     trainer = Trainer(
-        training_update_function(results_dir="tmp", save_images_every=10)
+        training_update_function(results_dir="tmp", save_images_every=5000)
     )
     evaluator = Evaluator(
-        validation_function(results_dir="tmp", save_images_every=10)
+        validation_function(results_dir="tmp", save_images_every=5000)
     )
 
     trainer.add_event_handler(Events.EPOCH_COMPLETED, Evaluate(evaluator, val_loader, epoch_interval=1))

@@ -30,6 +30,10 @@ def convert_to_rgb(img, is_grayscale=False):
         imgp /= 255.
     return np.clip(imgp.transpose((1, 2, 0)), 0, 1)
 
+def count_params(net):
+    """Count the number of parameters for a PyTorch network"""
+    return np.sum([ np.prod(np.asarray(elem.size())) for elem in net.parameters() ])
+
 class MultipleDataset(torch.utils.data.Dataset):
     """
     (Not be confused with ConcatDataset) This lets us concatenate >1
