@@ -1,3 +1,8 @@
+##
+## Code adapted from https://github.com/tbung/pytorch-revnet
+## commit : 7cfcd34fb07866338f5364058b424009e67fbd20
+##
+
 from datetime import datetime
 
 import os
