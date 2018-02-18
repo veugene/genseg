@@ -8,8 +8,10 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from torch.autograd import Function, Variable
+
+from fcn_maker.blocks import (get_initializer,
+                              convolution)
 
 
 def _unpack_modules(module_stack):
@@ -28,18 +30,23 @@ def _to_cuda(x, device=None):
     return x
 
 
-def _possible_downsample(x, in_channels, out_channels, subsample=False,
-                         use_gpu=False, device=None):
+def _adjust_tensor_size(x, in_channels, out_channels, subsample=False,
+                        ndim=2, use_gpu=False, device=None):
     out = x
     if subsample:
-        out = F.avg_pool2d(out, 2, 2)
+        assert ndim in (1,2,3)
+        if ndim==1:
+            out = F.avg_pool1d(out, 2)
+        elif ndim==2:
+            out = F.avg_pool2d(out, 2, 2)
+        else:
+            out = F.avg_pool3d(out, 2, 2, 2)
+            
     if in_channels < out_channels:
         # Pad with empty channels
-        pad = Variable(torch.zeros(out.size(0),
-                                   (out_channels-in_channels)//2,
-                                   out.size(2),
-                                   out.size(3)),
-                       requires_grad=True)
+        padded_size = list(out.size())
+        padded_size[1] = (out_channels-in_channels)//2
+        pad = Variable(torch.zeros(padded_size), requires_grad=True)
         if use_gpu:
             pad = _to_cuda(pad, device)
         temp = torch.cat([pad, out], dim=1)
@@ -49,16 +56,7 @@ def _possible_downsample(x, in_channels, out_channels, subsample=False,
 
 class _rev_block_function(Function):
     @staticmethod
-    def residual(x, modules):
-        """
-        Compute a pre-activation residual function.
-
-        Args:
-            x (Variable) : The input variable.
-
-        Returns:
-            out (Variable) : The result of the computation.
-        """
+    def _apply_modules(x, modules):
         out = x
         for m in modules:
             out = m(out)
@@ -66,29 +64,29 @@ class _rev_block_function(Function):
 
     @staticmethod
     def _forward(x, in_channels, out_channels, f_modules, g_modules,
-                 subsample=False, use_gpu=False, device=None):
+                 subsample=False, ndim=2, use_gpu=False, device=None):
 
         x1, x2 = torch.chunk(x, 2, dim=1)
 
         with torch.no_grad():
-            x1 = Variable(x1.contiguous())
-            x2 = Variable(x2.contiguous())
+            x1 = Variable(x1.data.contiguous())
+            x2 = Variable(x2.data.contiguous())
             if use_gpu:
                 x1 = _to_cuda(x1, device)
                 x2 = _to_cuda(x2, device)
 
-            x1_ = _possible_downsample(x1, in_channels, out_channels,
-                                       subsample, use_gpu, device)
-            x2_ = _possible_downsample(x2, in_channels, out_channels,
-                                       subsample, use_gpu, device)
+            x1_ = _adjust_tensor_size(x1, in_channels, out_channels,
+                                      subsample, ndim, use_gpu, device)
+            x2_ = _adjust_tensor_size(x2, in_channels, out_channels,
+                                      subsample, ndim, use_gpu, device)
 
             # in_channels, out_channels
-            f_x2 = _rev_block_function.residual(x2, f_modules)
+            f_x2 = _rev_block_function._apply_modules(x2, f_modules)
             
             y1 = f_x2 + x1_
             
             # out_channels, out_channels
-            g_y1 = _rev_block_function.residual(y1, g_modules)
+            g_y1 = _rev_block_function._apply_modules(y1, g_modules)
 
             y2 = g_y1 + x2_
             
@@ -104,64 +102,63 @@ class _rev_block_function(Function):
 
         y1, y2 = torch.chunk(output, 2, dim=1)
         with torch.no_grad():
-            y1 = Variable(y1.contiguous())
-            y2 = Variable(y2.contiguous())
+            y1 = Variable(y1.data.contiguous())
+            y2 = Variable(y2.data.contiguous())
             if use_gpu:
                 y1 = _to_cuda(y1, device)
                 y2 = _to_cuda(y2, device)
 
             # out_channels, out_channels
-            x2 = y2 - _rev_block_function.residual(y1, g_modules)
+            x2 = y2 - _rev_block_function._apply_modules(y1, g_modules)
 
             # in_channels, out_channels
-            x1 = y1 - _rev_block_function.residual(x2, f_modules)
+            x1 = y1 - _rev_block_function._apply_modules(x2, f_modules)
 
             del y1, y2
-            x1, x2 = x1.data, x2.data
 
             x = torch.cat((x1, x2), 1)
         return x
 
     @staticmethod
     def _grad(x, dy, in_channels, out_channels, f_modules, g_modules,
-              activations, subsample=False, use_gpu=False, device=None):
-        dy1, dy2 = Variable.chunk(dy, 2, dim=1)
-
+              activations, subsample=False, ndim=2, use_gpu=False,
+              device=None):
+        dy1, dy2 = torch.chunk(dy, 2, dim=1)
         x1, x2 = torch.chunk(x, 2, dim=1)
 
         with torch.enable_grad():
-            x1 = Variable(x1.contiguous(), requires_grad=True)
-            x2 = Variable(x2.contiguous(), requires_grad=True)
+            x1 = Variable(x1.data.contiguous(), requires_grad=True)
+            x2 = Variable(x2.data.contiguous(), requires_grad=True)
             x1.retain_grad()
             x2.retain_grad()
             if use_gpu:
                 x1 = _to_cuda(x1, device)
                 x2 = _to_cuda(x2, device)
 
-            x1_ = _possible_downsample(x1, in_channels, out_channels,
-                                       subsample, use_gpu, device)
-            x2_ = _possible_downsample(x2, in_channels, out_channels,
-                                       subsample, use_gpu, device)
+            x1_ = _adjust_tensor_size(x1, in_channels, out_channels,
+                                      subsample, ndim, use_gpu, device)
+            x2_ = _adjust_tensor_size(x2, in_channels, out_channels,
+                                      subsample, ndim, use_gpu, device)
 
             # in_channels, out_channels
-            f_x2 = _rev_block_function.residual(x2, f_modules)
+            f_x2 = _rev_block_function._apply_modules(x2, f_modules)
 
             y1_ = f_x2 + x1_
 
             # in_channels, out_channels
-            g_y1 = _rev_block_function.residual(y1_, g_modules)
+            g_y1 = _rev_block_function._apply_modules(y1_, g_modules)
 
             y2_ = g_y1 + x2_
             
             f_params, f_buffs = _unpack_modules(f_modules)
             g_params, g_buffs = _unpack_modules(g_modules)
 
-            dd1 = torch.autograd.grad(y2_, (y1_,) + tuple(g_params), dy2,
+            dd1 = torch.autograd.grad(y2_, (y1_,)+tuple(g_params), dy2,
                                       retain_graph=True)
             dy2_y1 = dd1[0]
             dgw = dd1[1:]
             dy1_plus = dy2_y1 + dy1
-            dd2 = torch.autograd.grad(y1_, (x1, x2) + tuple(f_params), dy1_plus,
+            dd2 = torch.autograd.grad(y1_, (x1, x2)+tuple(f_params), dy1_plus,
                                       retain_graph=True)
             dfw = dd2[2:]
 
@@ -180,8 +177,8 @@ class _rev_block_function(Function):
 
     @staticmethod
     def forward(ctx, x, in_channels, out_channels, f_modules, g_modules,
-                activations, subsample=False, use_gpu=False, device=None,
-                *args):
+                activations, subsample=False, ndim=2, use_gpu=False,
+                device=None, *args):
         """
         Compute forward pass including boilerplate code.
 
@@ -189,13 +186,14 @@ class _rev_block_function(Function):
 
         Args:
             ctx (Context) : Context object, see PyTorch docs.
-            x (Tensor) : 4D input tensor.
+            x (Variable) : 4D input Variable.
             in_channels (int) : Number of channels on input.
             out_channels (int) : Number of channels on output.
             f_modules (List) : Sequence of modules for F function.
             g_modules (List) : Sequence of modules for G function.
             activations (List) : Activation stack.
             subsample (bool) : Whether to do 2x spatial pooling.
+            ndim (int) : The number of spatial dimensions (1, 2 or 3).
             use_gpu (bool) : Whether to use gpu.
             device (int) : GPU to use.
             *args: Should contain all the parameters of the module.
@@ -214,6 +212,7 @@ class _rev_block_function(Function):
         ctx.f_modules = f_modules
         ctx.g_modules = g_modules
         ctx.subsample = subsample
+        ctx.ndim = ndim
         ctx.use_gpu = use_gpu
         ctx.device = device
 
@@ -223,10 +222,11 @@ class _rev_block_function(Function):
                                          f_modules,
                                          g_modules,
                                          subsample,
+                                         ndim,
                                          use_gpu,
                                          device)
 
-        return y.data
+        return y
 
     @staticmethod
     def backward(ctx, grad_out):
@@ -250,10 +250,11 @@ class _rev_block_function(Function):
                                                  ctx.g_modules,
                                                  ctx.activations,
                                                  ctx.subsample,
+                                                 ctx.ndim,
                                                  ctx.use_gpu,
                                                  ctx.device)
 
-        return (dx,) + (None,)*8 + tuple(dfw) + tuple(dgw)
+        return (dx,) + (None,)*9 + tuple(dfw) + tuple(dgw)
 
 
 class rev_block(nn.Module):
@@ -278,6 +279,7 @@ class rev_block(nn.Module):
         g_modules (list) : A list of modules implemetning the g() path of a
             reversible block.
         subsample (bool) : Whether to perform 2x spatial subsampling.
+        ndim (int) : The number of spatial dimensions (1, 2 or 3).
         use_gpu (bool) : Whether to move compute and memory to GPU.
         device (int) : The GPU device ID to use if using GPU.
 
@@ -286,15 +288,16 @@ class rev_block(nn.Module):
     """
     def __init__(self, in_channels, out_channels, activations,
                  f_modules=None, g_modules=None, subsample=False,
-                 use_gpu=False, device=None):
+                 ndim=2, use_gpu=False, device=None):
         super(rev_block, self).__init__()
-        # NOTE: channels are only counted for _possible_downsample()
+        # NOTE: channels are only counted for _adjust_tensor_size()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.activations = activations
         self.f_modules = f_modules if f_modules is not None else []
         self.g_modules = g_modules if g_modules is not None else []
         self.subsample = subsample
+        self.ndim = ndim
         self.use_gpu = use_gpu
         self.device = device
         
@@ -374,6 +377,7 @@ class rev_block(nn.Module):
                                          self.g_modules,
                                          self.activations,
                                          self.subsample,
+                                         self.ndim,
                                          self.use_gpu,
                                          self.device,
                                          *f_params,
@@ -420,8 +424,45 @@ class batch_normalization(nn.Module):
     def forward(self, x):
         return self.norm(x)
     
+    
+"""
+Return AlphaDropout if nonlinearity is 'SELU', else Dropout.
+"""
+def get_dropout(nonlin=None):
+    if nonlin=='SELU':
+        return torch.nn.AlphaDropout
+    return torch.nn.Dropout
 
-class basic_block(rev_block):
+
+"""
+Return a nonlinearity from the core library or return the provided function.
+"""
+def get_nonlinearity(nonlin):
+    if nonlin is None:
+        class identity_activation(torch.nn.Module):
+            def __init__(self):
+                super(identity_activation, self).__init__()
+            def forward(self, input):
+                return input
+        return identity_activation()
+        
+    # Identify function.
+    func = None
+    if isinstance(nonlin, str):
+        # Find the nonlinearity by name.
+        try:
+            func = getattr(torch.nn.modules.activation, nonlin)
+        except AttributeError:
+            raise ValueError("Specified nonlinearity ({}) not found."
+                             "".format(nonlin))
+    else:
+        # Not a name; assume a module is passed instead.
+        func = nonlin
+        
+    return func
+    
+
+class reversible_basic_block(rev_block):
     """
     Implements the standard ResNet "basic block" as a reversible block.
     
@@ -430,32 +471,55 @@ class basic_block(rev_block):
         out_channels (int) : The number of output channels.
         activations (list) : List to track activations, as in rev_block.
         subsample (bool) : Whether to perform 2x spatial subsampling.
+        dilation (int) : The dilation of the first convolution.
+        dropout (float) : Dropout probability.
+        init (string or function) : Convolutional kernel initializer.
+        nonlinearity (string or function) : Nonlinearity.
+        ndim (int) : Number of spatial dimensions (1, 2 or 3).
         
     Returns:
         out (Variable): The result of the computation.
     """
     def __init__(self, in_channels, out_channels, activations,
-                 subsample=False):
-        super(basic_block, self).__init__(in_channels=in_channels,
-                                          out_channels=out_channels,
-                                          activations=activations,
-                                          subsample=subsample)
+                 subsample=False, dilation=1, dropout=0.,
+                 init='kaiming_normal', nonlinearity='ReLU', ndim=2):
+        super(reversible_basic_block, self).__init__(in_channels=in_channels,
+                                                     out_channels=out_channels,
+                                                     activations=activations,
+                                                     subsample=subsample)
+        self.dilation = dilation
+        self.dropout = dropout
+        self.init = init
+        self.nonlinearity = nonlinearity
+        self.ndim = ndim
+        
+        # Build block.
         self.add_module(batch_normalization,
+                        ndim=ndim,
                         in_channels=in_channels//2,
                         out_channels=out_channels//2)
-        self.add_module(nn.ReLU)
-        self.add_module(nn.Conv2d,
+        self.add_module(get_nonlinearity(nonlinearity))
+        self.add_module(convolution,
+                        ndim=ndim,
+                        init=init,
+                        kernel_size=3,
+                        padding=dilation,
+                        stride=2 if subsample else 1,
+                        dilation=dilation,
                         in_channels=in_channels//2,
-                        out_channels=out_channels//2,
+                        out_channels=out_channels//2)
+        if dropout > 0:
+            self.add_module(get_dropout(nonlinearity),
+                            p=dropout)
+        self.add_module(batch_normalization,
+                        ndim=ndim,
+                        in_channels=out_channels//2,
+                        out_channels=out_channels//2)
+        self.add_module(get_nonlinearity(nonlinearity))
+        self.add_module(convolution,
+                        ndim=ndim,
+                        init=init,
                         kernel_size=3,
                         padding=1,
-                        stride=2 if subsample else 1)
-        self.add_module(batch_normalization,
                         in_channels=out_channels//2,
                         out_channels=out_channels//2)
-        self.add_module(nn.ReLU)
-        self.add_module(nn.Conv2d,
-                        in_channels=out_channels//2,
-                        out_channels=out_channels//2,
-                        kernel_size=3,
-                        padding=1)

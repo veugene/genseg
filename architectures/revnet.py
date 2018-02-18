@@ -7,9 +7,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
+from fcn_maker.blocks import convolution
 from .blocks import (batch_normalization,
                      rev_block,
-                     basic_block)
+                     reversible_basic_block)
 
 
 class base_model(nn.Module):
@@ -49,25 +50,27 @@ class base_model(nn.Module):
 
 
 class revnet(base_model):
-    def __init__(self, units, filters, subsample, classes):
+    def __init__(self, in_channels, units, filters, subsample, classes=None,
+                 block_type=reversible_basic_block):
         """
         Implements a reversible ResNet.
         
         Args:
+            in_channels (int) : The number of input channels.
             units (list) : Number of residual units in each group
-            filters (list) Number of filters in each unit including the
+            filters (list) : Number of filters in each unit including the
                 inputlayer, so it is one item longer than units.
-            subsample (list) List of boolean values for each block,
+            subsample (list) : List of boolean values for each block,
                 specifying whether it should do 2x spatial subsampling.
+            block_type (Module) : The block type to use.
             classes (int) : The number of classes to predict over.
         """
         super(revnet, self).__init__()
-        self.name = self.__class__.__name__
-        self.block = basic_block
+        self.block = block_type
         self.layers = nn.ModuleList()
 
         # Input layers
-        self.layers.append(nn.Conv2d(3, filters[0], 3, padding=1))
+        self.layers.append(nn.Conv2d(in_channels, filters[0], 3, padding=1))
         self.layers.append(nn.BatchNorm2d(filters[0]))
         self.layers.append(nn.ReLU())
 
@@ -85,7 +88,7 @@ class revnet(base_model):
     def forward(self, x):
         for layer in self.layers:
             x = layer(x)
-        self.activations.append(x.data)
+        self.activations.append(x)
         x = F.relu(self.bn_last(x))
         x = F.avg_pool2d(x, x.size(2))
         x = x.view(x.size(0), -1)
