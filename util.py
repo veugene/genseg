@@ -30,9 +30,15 @@ def convert_to_rgb(img, is_grayscale=False):
         imgp /= 255.
     return np.clip(imgp.transpose((1, 2, 0)), 0, 1)
 
-def count_params(net):
-    """Count the number of parameters for a PyTorch network"""
-    return np.sum([ np.prod(np.asarray(elem.size())) for elem in net.parameters() ])
+def count_params(module, trainable_only=True):
+    """
+    Count the number of parameters in a module.
+    """
+    parameters = module.parameters()
+    if trainable_only:
+        parameters = filter(lambda p: p.requires_grad, parameters)
+    num = sum([np.prod(p.size()) for p in parameters])
+    return num
 
 class MultipleDataset(torch.utils.data.Dataset):
     """
