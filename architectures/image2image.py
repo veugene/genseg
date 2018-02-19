@@ -541,7 +541,7 @@ class DilatedResnetBlock(nn.Module):
         return out
 
 class DilatedFCN(nn.Module):
-    def __init__(self, C,
+    def __init__(self, in_channels, C, classes=None,
                  mult=[2,2,4,8,16,32,32,1],
                  dilations=[1,1,2,4,8,16,1,1],
                  norm_layer=nn.BatchNorm2d,
@@ -550,7 +550,9 @@ class DilatedFCN(nn.Module):
         """
         Parameters
         ----------
+        in_channels : number of input channels.
         C: number of filters for the preprocessor (first) conv layer.
+        classes : number of output classes; if `None`, no classifier is used.
         mult: a list of multipliers s.t. the i'th layer has the number of
           channels C*mult[i]. Note that this argument implicitly defines the
           # of layers of the FCN.
@@ -574,7 +576,7 @@ class DilatedFCN(nn.Module):
             model = [ nn.ReflectionPad2d(3) ]
         else:
             model = []
-        model += [nn.Conv2d(C, C*mult[0], kernel_size=7,
+        model += [nn.Conv2d(in_channels, C*mult[0], kernel_size=7,
                             padding=0 if padding_type == 'reflect' else 3, bias=use_bias),
                  norm_layer(C*mult[0]),
                  nn.ReLU(True)]
@@ -591,6 +593,16 @@ class DilatedFCN(nn.Module):
             model += [resblock]
         if nonlinearity == 'tanh':
             model += [ nn.Tanh() ]
+        if classes is not None:
+            classifier = nn.Conv2d(in_channels=C*mult[i+1],
+                                   out_channels=classes,
+                                   kernel_size=1)
+            model += [classifier]
         self.model = nn.Sequential(*model)
     def forward(self, x):
-        return self.model(x)
+        x = self.model(x)
+        if classes is not None:
+            e = torch.exp(x - torch.max(x, dim=1, keepdim=True)[0])
+            s = torch.sum(e, dim=1, keepdim=True)
+            x = e / s
+        return x
