@@ -86,6 +86,7 @@ class revnet(base_model):
         self.fc = nn.Linear(filters[-1], classes)
 
     def forward(self, x):
+        self.free()
         for layer in self.layers:
             x = layer(x)
         self.activations.append(x)
