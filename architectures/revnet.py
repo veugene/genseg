@@ -114,3 +114,90 @@ def revnet110():
                    classes=10)
     model.name = "revnet110"
     return model
+
+
+class dilated_fcn(base_model):
+    def __init__(self, in_channels, num_blocks, filters, dilation,
+                 dropout=0., init='kaiming_normal', nonlinearity='ReLU',
+                 block_type=reversible_basic_block, classes=None, ndim=2):
+        """
+        Implements a reversible dilated fully convolutional network..
+        
+        Args:
+            
+            in_channels (int) : The number of input channels.
+            num_blocks (int) : The number of blocks to stack.
+            filters (list or int) : Number of convolution filters per block.
+            dilation (list or int) : Convolutional kernel dilation per block.
+            dropout (float) : Probability of dropout.
+            init (string or function) : Convolutional kernel initializer.
+            nonlinearity (string or function) : Nonlinearity.
+            block_type (Module) : The block type to use.
+            classes (int) : The number of classes to predict over. If set to
+                `None`, no classifier will be used.
+            ndim : Number of spatial dimensions (1, 2 or 3).
+        """
+        super(dilated_fcn, self).__init__()
+        self.num_blocks = num_blocks
+        self.in_channels = in_channels
+        if hasattr(filters, '__len__'):
+            self.filters = [i for i in filters]
+        else:
+            self.filters = [filters]*(num_blocks+1)
+        if hasattr(dilation, '__len__'):
+            self.dilation = [i for i in dilation]
+        else:
+            self.dilation = [dilation]*(num_blocks+1)
+        self.dropout = dropout
+        self.init = init
+        self.nonlinearity = nonlinearity
+        self.block_type = block_type
+        self.ndim = ndim
+        self.classes = classes
+        
+        # Build network
+        self.layers = nn.ModuleList()
+        preprocessor = convolution(in_channels=in_channels,
+                                   out_channels=(filters[0]*2+1)//2,
+                                   kernel_size=3,
+                                   padding=1,
+                                   init=init,
+                                   ndim=ndim)
+        prev_channels = (filters[0]*2+1)//2
+        self.layers.append(preprocessor)
+        for i in range(num_blocks):
+            block = block_type(in_channels=prev_channels,
+                               out_channels=filters[i],
+                               nonlinearity=nonlinearity,
+                               dropout=dropout,
+                               dilation=dilation[i],
+                               init=init,
+                               ndim=ndim,
+                               activations=self.activations)
+            prev_channels = filters[i]
+            self.layers.append(block)
+        self.classifier = None
+        if classes is not None:
+            self.classifier = convolution(in_channels=filters[-1],
+                                          out_channels=classes,
+                                          kernel_size=1,
+                                          ndim=ndim)
+        
+    def forward(self, x):
+        self.free()
+        for layer in self.layers:
+            x = layer(x)
+        self.activations.append(x)
+        
+        # Output
+        if self.classifier is not None:
+            x = self.classifier(x)
+            if self.classes==1:
+                x = F.sigmoid(x)
+            else:
+                # Softmax that works on ND inputs.
+                e = torch.exp(x - torch.max(x, dim=1, keepdim=True)[0])
+                s = torch.sum(e, dim=1, keepdim=True)
+                x = e / s
+                
+        return x
