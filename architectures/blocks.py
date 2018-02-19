@@ -41,9 +41,9 @@ def _adjust_tensor_size(x, in_channels, out_channels, subsample=False,
             out = F.avg_pool2d(out, 2, 2)
         else:
             out = F.avg_pool3d(out, 2, 2, 2)
-            
+    
     if in_channels < out_channels:
-        # Pad with empty channels
+        # Pad with empty channels.
         padded_size = list(out.size())
         padded_size[1] = (out_channels-in_channels)//2
         pad = Variable(torch.zeros(padded_size), requires_grad=True)
@@ -51,7 +51,20 @@ def _adjust_tensor_size(x, in_channels, out_channels, subsample=False,
             pad = _to_cuda(pad, device)
         temp = torch.cat([pad, out], dim=1)
         out = torch.cat([temp, pad], dim=1)
+        
     return out
+
+
+def _unpad(x, in_channels, out_channels, use_gpu=False, device=None):
+    # Extract half the channels, assuming the tensor was padded.
+    # (backward pass)
+    if in_channels < out_channels:
+        pad_channels = in_channels//2
+        x = x[:,pad_channels:-pad_channels]
+        x = Variable(x.data.contiguous())
+        if use_gpu:
+            x = _to_cuda(x, device)
+    return x
 
 
 class _rev_block_function(Function):
@@ -98,7 +111,8 @@ class _rev_block_function(Function):
         return y
 
     @staticmethod
-    def _backward(output, f_modules, g_modules, use_gpu=False, device=None):
+    def _backward(output, in_channels, out_channels, f_modules, g_modules,
+                  use_gpu=False, device=None):
 
         y1, y2 = torch.chunk(output, 2, dim=1)
         with torch.no_grad():
@@ -109,10 +123,12 @@ class _rev_block_function(Function):
                 y2 = _to_cuda(y2, device)
 
             # out_channels, out_channels
-            x2 = y2 - _rev_block_function._apply_modules(y1, g_modules)
+            x2_ = y2 - _rev_block_function._apply_modules(y1, g_modules)   
+            x2 = _unpad(x2_, in_channels, out_channels, use_gpu, device)
 
             # in_channels, out_channels
-            x1 = y1 - _rev_block_function._apply_modules(x2, f_modules)
+            x1_ = y1 - _rev_block_function._apply_modules(x2, f_modules)
+            x1 = _unpad(x1_, in_channels, out_channels, use_gpu, device)
 
             del y1, y2
 
@@ -237,6 +253,8 @@ class _rev_block_function(Function):
         else:
             output = ctx.activations.pop()
             x = _rev_block_function._backward(output,
+                                              ctx.in_channels,
+                                              ctx.out_channels,
                                               ctx.f_modules,
                                               ctx.g_modules,
                                               ctx.use_gpu,
