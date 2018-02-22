@@ -11,7 +11,50 @@ import torch.nn.functional as F
 from torch.autograd import Function, Variable
 
 from fcn_maker.blocks import (get_initializer,
-                              convolution)
+                              convolution,
+                              max_pooling,
+                              do_upsample,
+                              batch_normalization,
+                              block_abstract,
+                              shortcut)
+from .modules import overlap_tile
+
+
+"""
+Return AlphaDropout if nonlinearity is 'SELU', else Dropout.
+"""
+def get_dropout(nonlin=None):
+    if nonlin=='SELU':
+        return torch.nn.AlphaDropout
+    return torch.nn.Dropout
+
+
+"""
+Return a nonlinearity from the core library or return the provided function.
+"""
+def get_nonlinearity(nonlin):
+    if nonlin is None:
+        class identity_activation(torch.nn.Module):
+            def __init__(self):
+                super(identity_activation, self).__init__()
+            def forward(self, input):
+                return input
+        return identity_activation
+        
+    # Identify function.
+    func = None
+    if isinstance(nonlin, str):
+        # Find the nonlinearity by name.
+        try:
+            func = getattr(torch.nn.modules.activation, nonlin)
+        except AttributeError:
+            raise ValueError("Specified nonlinearity ({}) not found."
+                             "".format(nonlin))
+    else:
+        # Not a name; assume a module is passed instead.
+        func = nonlin
+        
+    return func
 
 
 def _unpack_modules(module_stack):
@@ -31,7 +74,7 @@ def _to_cuda(x, device=None):
 
 
 def _adjust_tensor_size(x, in_channels, out_channels, subsample=False,
-                        ndim=2, use_gpu=False, device=None):
+                        ndim=2):
     out = x
     if subsample:
         assert ndim in (1,2,3)
@@ -47,24 +90,25 @@ def _adjust_tensor_size(x, in_channels, out_channels, subsample=False,
         padded_size = list(out.size())
         padded_size[1] = (out_channels-in_channels)//2
         pad = Variable(torch.zeros(padded_size), requires_grad=True)
-        if use_gpu:
-            pad = _to_cuda(pad, device)
+        if x.is_cuda:
+            pad = _to_cuda(pad, x.get_device())
         temp = torch.cat([pad, out], dim=1)
         out = torch.cat([temp, pad], dim=1)
         
     return out
 
 
-def _unpad(x, in_channels, out_channels, use_gpu=False, device=None):
+def _unpad(x, in_channels, out_channels):
     # Extract half the channels, assuming the tensor was padded.
     # (backward pass)
+    out = x
     if in_channels < out_channels:
         pad_channels = in_channels//2
-        x = x[:,pad_channels:-pad_channels]
-        x = Variable(x.data.contiguous())
-        if use_gpu:
-            x = _to_cuda(x, device)
-    return x
+        out = x[:,pad_channels:-pad_channels]
+        out = Variable(out.data.contiguous())
+        if x.is_cuda:
+            out = _to_cuda(out, out.get_device())
+    return out
 
 
 class _rev_block_function(Function):
@@ -77,21 +121,21 @@ class _rev_block_function(Function):
 
     @staticmethod
     def _forward(x, in_channels, out_channels, f_modules, g_modules,
-                 subsample=False, ndim=2, use_gpu=False, device=None):
-
+                 subsample=False, ndim=2):
+        
         x1, x2 = torch.chunk(x, 2, dim=1)
 
         with torch.no_grad():
             x1 = Variable(x1.data.contiguous())
             x2 = Variable(x2.data.contiguous())
-            if use_gpu:
-                x1 = _to_cuda(x1, device)
-                x2 = _to_cuda(x2, device)
+            if x.is_cuda:
+                x1 = _to_cuda(x1, x.get_device())
+                x2 = _to_cuda(x2, x.get_device())
 
             x1_ = _adjust_tensor_size(x1, in_channels, out_channels,
-                                      subsample, ndim, use_gpu, device)
+                                      subsample, ndim)
             x2_ = _adjust_tensor_size(x2, in_channels, out_channels,
-                                      subsample, ndim, use_gpu, device)
+                                      subsample, ndim)
 
             # in_channels, out_channels
             f_x2 = _rev_block_function._apply_modules(x2, f_modules)
@@ -111,24 +155,23 @@ class _rev_block_function(Function):
         return y
 
     @staticmethod
-    def _backward(output, in_channels, out_channels, f_modules, g_modules,
-                  use_gpu=False, device=None):
+    def _backward(output, in_channels, out_channels, f_modules, g_modules):
 
         y1, y2 = torch.chunk(output, 2, dim=1)
         with torch.no_grad():
             y1 = Variable(y1.data.contiguous())
             y2 = Variable(y2.data.contiguous())
-            if use_gpu:
-                y1 = _to_cuda(y1, device)
-                y2 = _to_cuda(y2, device)
+            if output.is_cuda:
+                y1 = _to_cuda(y1, output.get_device())
+                y2 = _to_cuda(y2, output.get_device())
 
             # out_channels, out_channels
             x2_ = y2 - _rev_block_function._apply_modules(y1, g_modules)   
-            x2 = _unpad(x2_, in_channels, out_channels, use_gpu, device)
+            x2 = _unpad(x2_, in_channels, out_channels)
 
             # in_channels, out_channels
             x1_ = y1 - _rev_block_function._apply_modules(x2, f_modules)
-            x1 = _unpad(x1_, in_channels, out_channels, use_gpu, device)
+            x1 = _unpad(x1_, in_channels, out_channels)
 
             del y1, y2
 
@@ -137,8 +180,7 @@ class _rev_block_function(Function):
 
     @staticmethod
     def _grad(x, dy, in_channels, out_channels, f_modules, g_modules,
-              activations, subsample=False, ndim=2, use_gpu=False,
-              device=None):
+              activations, subsample=False, ndim=2):
         dy1, dy2 = torch.chunk(dy, 2, dim=1)
         x1, x2 = torch.chunk(x, 2, dim=1)
 
@@ -147,14 +189,14 @@ class _rev_block_function(Function):
             x2 = Variable(x2.data.contiguous(), requires_grad=True)
             x1.retain_grad()
             x2.retain_grad()
-            if use_gpu:
-                x1 = _to_cuda(x1, device)
-                x2 = _to_cuda(x2, device)
+            if x.is_cuda:
+                x1 = _to_cuda(x1, x.get_device())
+                x2 = _to_cuda(x2, x.get_device())
 
             x1_ = _adjust_tensor_size(x1, in_channels, out_channels,
-                                      subsample, ndim, use_gpu, device)
+                                      subsample, ndim)
             x2_ = _adjust_tensor_size(x2, in_channels, out_channels,
-                                      subsample, ndim, use_gpu, device)
+                                      subsample, ndim)
 
             # in_channels, out_channels
             f_x2 = _rev_block_function._apply_modules(x2, f_modules)
@@ -193,8 +235,7 @@ class _rev_block_function(Function):
 
     @staticmethod
     def forward(ctx, x, in_channels, out_channels, f_modules, g_modules,
-                activations, subsample=False, ndim=2, use_gpu=False,
-                device=None, *args):
+                activations, subsample=False, ndim=2, *args):
         """
         Compute forward pass including boilerplate code.
 
@@ -210,8 +251,6 @@ class _rev_block_function(Function):
             activations (List) : Activation stack.
             subsample (bool) : Whether to do 2x spatial pooling.
             ndim (int) : The number of spatial dimensions (1, 2 or 3).
-            use_gpu (bool) : Whether to use gpu.
-            device (int) : GPU to use.
             *args: Should contain all the parameters of the module.
         """
         
@@ -229,8 +268,6 @@ class _rev_block_function(Function):
         ctx.g_modules = g_modules
         ctx.subsample = subsample
         ctx.ndim = ndim
-        ctx.use_gpu = use_gpu
-        ctx.device = device
 
         y = _rev_block_function._forward(x,
                                          in_channels,
@@ -238,9 +275,7 @@ class _rev_block_function(Function):
                                          f_modules,
                                          g_modules,
                                          subsample,
-                                         ndim,
-                                         use_gpu,
-                                         device)
+                                         ndim)
 
         return y
 
@@ -256,9 +291,7 @@ class _rev_block_function(Function):
                                               ctx.in_channels,
                                               ctx.out_channels,
                                               ctx.f_modules,
-                                              ctx.g_modules,
-                                              ctx.use_gpu,
-                                              ctx.device)
+                                              ctx.g_modules)
 
         dx, dfw, dgw = _rev_block_function._grad(x,
                                                  grad_out,
@@ -268,11 +301,9 @@ class _rev_block_function(Function):
                                                  ctx.g_modules,
                                                  ctx.activations,
                                                  ctx.subsample,
-                                                 ctx.ndim,
-                                                 ctx.use_gpu,
-                                                 ctx.device)
+                                                 ctx.ndim)
 
-        return (dx,) + (None,)*9 + tuple(dfw) + tuple(dgw)
+        return (dx,) + (None,)*7 + tuple(dfw) + tuple(dgw)
 
 
 class rev_block(nn.Module):
@@ -298,43 +329,22 @@ class rev_block(nn.Module):
             reversible block.
         subsample (bool) : Whether to perform 2x spatial subsampling.
         ndim (int) : The number of spatial dimensions (1, 2 or 3).
-        use_gpu (bool) : Whether to move compute and memory to GPU.
-        device (int) : The GPU device ID to use if using GPU.
 
     Returns:
         out (Variable): The result of the computation
     """
     def __init__(self, in_channels, out_channels, activations,
                  f_modules=None, g_modules=None, subsample=False,
-                 ndim=2, use_gpu=False, device=None):
+                 ndim=2):
         super(rev_block, self).__init__()
         # NOTE: channels are only counted for _adjust_tensor_size()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.activations = activations
-        self.f_modules = f_modules if f_modules is not None else []
-        self.g_modules = g_modules if g_modules is not None else []
+        self.f_modules = nn.ModuleList(f_modules)
+        self.g_modules = nn.ModuleList(g_modules)
         self.subsample = subsample
         self.ndim = ndim
-        self.use_gpu = use_gpu
-        self.device = device
-        
-    def cuda(self, device=None):
-        self.use_gpu = True
-        self.device = device
-        for m in self.f_modules:
-            m.cuda(device)
-        for m in self.g_modules:
-            m.cuda(device)
-        return self
-        
-    def cpu(self):
-        self.use_gpu = False
-        for m in self.f_modules:
-            m.cpu()
-        for m in self.g_modules:
-            m.cpu()
-        return self
 
     def add_module(self, module, in_channels=None, out_channels=None,
                    stride=None, **kwargs):
@@ -396,13 +406,11 @@ class rev_block(nn.Module):
                                          self.activations,
                                          self.subsample,
                                          self.ndim,
-                                         self.use_gpu,
-                                         self.device,
                                          *f_params,
                                          *g_params)
 
 
-class batch_normalization(nn.Module):
+class rn_batch_normalization(nn.Module):
     """
     A wrapper for BatchNorm that can be used in rev_block. Since in_channels
     needs to be sometimes different on the f() and g() paths of a rev_block,
@@ -420,7 +428,7 @@ class batch_normalization(nn.Module):
         out (Variable): The result of the computation.
     """
     def __init__(self, in_channels, out_channels, ndim=2, *args, **kwargs):
-        super(batch_normalization, self).__init__()
+        super(rn_batch_normalization, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.ndim = ndim
@@ -442,43 +450,6 @@ class batch_normalization(nn.Module):
     def forward(self, x):
         return self.norm(x)
     
-    
-"""
-Return AlphaDropout if nonlinearity is 'SELU', else Dropout.
-"""
-def get_dropout(nonlin=None):
-    if nonlin=='SELU':
-        return torch.nn.AlphaDropout
-    return torch.nn.Dropout
-
-
-"""
-Return a nonlinearity from the core library or return the provided function.
-"""
-def get_nonlinearity(nonlin):
-    if nonlin is None:
-        class identity_activation(torch.nn.Module):
-            def __init__(self):
-                super(identity_activation, self).__init__()
-            def forward(self, input):
-                return input
-        return identity_activation()
-        
-    # Identify function.
-    func = None
-    if isinstance(nonlin, str):
-        # Find the nonlinearity by name.
-        try:
-            func = getattr(torch.nn.modules.activation, nonlin)
-        except AttributeError:
-            raise ValueError("Specified nonlinearity ({}) not found."
-                             "".format(nonlin))
-    else:
-        # Not a name; assume a module is passed instead.
-        func = nonlin
-        
-    return func
-    
 
 class reversible_basic_block(rev_block):
     """
@@ -491,6 +462,7 @@ class reversible_basic_block(rev_block):
         subsample (bool) : Whether to perform 2x spatial subsampling.
         dilation (int) : The dilation of the first convolution.
         dropout (float) : Dropout probability.
+        norm_kwargs (dict): Keyword arguments to pass to batch norm layers.
         init (string or function) : Convolutional kernel initializer.
         nonlinearity (string or function) : Nonlinearity.
         ndim (int) : Number of spatial dimensions (1, 2 or 3).
@@ -499,7 +471,7 @@ class reversible_basic_block(rev_block):
         out (Variable): The result of the computation.
     """
     def __init__(self, in_channels, out_channels, activations,
-                 subsample=False, dilation=1, dropout=0.,
+                 subsample=False, dilation=1, dropout=0., norm_kwargs=None, 
                  init='kaiming_normal', nonlinearity='ReLU', ndim=2):
         super(reversible_basic_block, self).__init__(in_channels=in_channels,
                                                      out_channels=out_channels,
@@ -507,15 +479,17 @@ class reversible_basic_block(rev_block):
                                                      subsample=subsample)
         self.dilation = dilation
         self.dropout = dropout
+        self.norm_kwargs = norm_kwargs
         self.init = init
         self.nonlinearity = nonlinearity
         self.ndim = ndim
         
         # Build block.
-        self.add_module(batch_normalization,
+        self.add_module(rn_batch_normalization,
                         ndim=ndim,
                         in_channels=in_channels//2,
-                        out_channels=out_channels//2)
+                        out_channels=out_channels//2,
+                        **norm_kwargs)
         self.add_module(get_nonlinearity(nonlinearity))
         self.add_module(convolution,
                         ndim=ndim,
@@ -529,10 +503,11 @@ class reversible_basic_block(rev_block):
         if dropout > 0:
             self.add_module(get_dropout(nonlinearity),
                             p=dropout)
-        self.add_module(batch_normalization,
+        self.add_module(rn_batch_normalization,
                         ndim=ndim,
                         in_channels=out_channels//2,
-                        out_channels=out_channels//2)
+                        out_channels=out_channels//2,
+                        **norm_kwargs)
         self.add_module(get_nonlinearity(nonlinearity))
         self.add_module(convolution,
                         ndim=ndim,
@@ -541,3 +516,161 @@ class reversible_basic_block(rev_block):
                         padding=1,
                         in_channels=out_channels//2,
                         out_channels=out_channels//2)
+
+
+class dilated_rev_block(block_abstract):
+    def __init__(self, in_channels, num_blocks, num_filters, dilation,
+                 subsample=False, upsample=False, upsample_mode='repeat',
+                 dropout=0., norm_kwargs=None, init='kaiming_normal',
+                 nonlinearity='ReLU', block_type=reversible_basic_block,
+                 ndim=2):
+        """
+        Implements a reversible dilated fully convolutional sequence of 
+        blocks.
+        
+        Args:
+            in_channels (int) : The number of input channels.
+            num_blocks (int) : The number of blocks to stack.
+            num_filters (list or int) : Number of convolution filters per
+                block.
+            dilation (list or int) : Convolutional kernel dilation per block.
+            subsample (bool) : Subsample at input.
+            upsample (bool) : Upsample at output.
+            upsample_mode (string) : Either 'conv' or 'repeat'. If 'conv',
+                does transposed convolution. If repeat, repeats rows and
+                columns (nearest neighbour interpolation).
+            dropout (float) : Probability of dropout.
+            norm_kwargs (dict): Keyword arguments to pass to batch norm layers.
+            init (string or function) : Convolutional kernel initializer.
+            nonlinearity (string or function) : Nonlinearity.
+            block_type (Module) : The block type to use.
+            ndim : Number of spatial dimensions (1, 2 or 3).
+        """
+        super(dilated_rev_block, self).__init__(in_channels, num_filters,
+                                                subsample, upsample)
+        self.activations = []
+        self.out_channels = num_filters[-1]
+        self.num_blocks = num_blocks
+        if hasattr(num_filters, '__len__'):
+            self.num_filters = [i for i in num_filters]
+        else:
+            self.num_filters = [num_filters]*num_blocks
+        if hasattr(dilation, '__len__'):
+            self.dilation = [i for i in dilation]
+        else:
+            self.dilation = [dilation]*num_blocks
+        self.upsample_mode = upsample_mode
+        self.dropout = dropout
+        self.norm_kwargs = norm_kwargs
+        self.init = init
+        self.nonlinearity = nonlinearity
+        self.block_type = block_type
+        self.ndim = ndim
+        assert len(num_filters)==num_blocks
+        assert len(dilation)==num_blocks
+        
+        if subsample:
+            self.subsample_op = max_pooling(kernel_size=2, ndim=ndim)
+        self.layers = nn.ModuleList()
+        prev_channels = in_channels
+        for i in range(num_blocks):
+            block = block_type(in_channels=prev_channels,
+                               out_channels=num_filters[i],
+                               nonlinearity=nonlinearity,
+                               dropout=dropout,
+                               norm_kwargs=norm_kwargs,
+                               dilation=dilation[i],
+                               init=init,
+                               ndim=ndim,
+                               activations=self.activations)
+            self.layers.append(block)
+            prev_channels = num_filters[i]
+        if upsample:
+            self.upsample_op = do_upsample(mode=upsample_mode,
+                                           ndim=ndim,
+                                           in_channels=num_filters[-1],
+                                           out_channels=num_filters[-1],
+                                           kernel_size=2,
+                                           init=init)
+            
+    def forward(self, x):
+        self.free()
+        if self.subsample:
+            x = self.subsample_op(x)
+        for layer in self.layers:
+            x = layer(x)
+        self.activations.append(x)
+        if self.upsample:
+            x = self.upsample_op(x)
+        return x
+    
+    def free(self):
+        del self.activations[:]
+    
+    
+class tiny_block_ot(block_abstract):
+    def __init__(self, in_channels, num_filters, input_patch_size,
+                 subsample=False, upsample=False, upsample_mode='repeat',
+                 skip=True, dropout=0., normalization=batch_normalization,
+                 norm_kwargs=None, init='kaiming_normal', nonlinearity='ReLU',
+                 ndim=2):
+        super(tiny_block_ot, self).__init__(in_channels, num_filters,
+                                            subsample, upsample)
+        if norm_kwargs is None:
+            norm_kwargs = {}
+        self.out_channels = num_filters
+        self.input_patch_size = input_patch_size
+        self.upsample_mode = upsample_mode
+        self.skip = skip
+        self.dropout = dropout
+        self.normalization = normalization
+        self.norm_kwargs = norm_kwargs
+        self.init = init
+        self.nonlinearity = nonlinearity
+        self.ndim = ndim
+        self.op = []
+        if normalization is not None:
+            self.op += [normalization(ndim=ndim,
+                                      num_features=in_channels,
+                                      **norm_kwargs)]
+        self.op += [get_nonlinearity(nonlinearity)()]
+        if subsample:
+            self.op += [max_pooling(kernel_size=2, ndim=ndim)]
+        conv = convolution(in_channels=in_channels,
+                           out_channels=num_filters,
+                           kernel_size=3, 
+                           ndim=ndim,
+                           init=init,
+                           padding=0)
+        self.op += [overlap_tile(input_patch_size,
+                                 model=conv,
+                                 in_channels=conv.in_channels,
+                                 out_channels=conv.out_channels)]
+        if dropout > 0:
+            self.op += [get_dropout(nonlinearity)(dropout)]
+        if upsample:
+            self.op += [do_upsample(mode=upsample_mode,
+                                    ndim=ndim,
+                                    in_channels=num_filters,
+                                    out_channels=num_filters,
+                                    kernel_size=2,
+                                    init=init)]
+        self._register_modules(self.op)
+        self.op_shortcut = None
+        if skip:
+            self.op_shortcut = shortcut(in_channels=in_channels,
+                                        out_channels=num_filters,
+                                        subsample=subsample,
+                                        upsample=upsample,
+                                        upsample_mode=upsample_mode,
+                                        init=init,
+                                        ndim=ndim)
+            self._register_modules({'shortcut': self.op_shortcut})
+
+    def forward(self, input):
+        out = input
+        for op in self.op:
+            out = op(out)
+        if self.skip:
+            out = self.op_shortcut(input, out)
+        return out

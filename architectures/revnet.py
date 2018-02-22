@@ -7,53 +7,15 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
-from fcn_maker.blocks import (convolution,
-                              max_pooling,
-                              batch_normalization,
-                              get_nonlinearity)
+from fcn_maker.model import fcn
+from fcn_maker.blocks import tiny_block
 from .blocks import (rev_block,
-                     reversible_basic_block)
-from .blocks import batch_normalization as revnet_batch_normalization
-from .modules import overlap_tile
+                     reversible_basic_block,
+                     dilated_rev_block,
+                     tiny_block_ot)
 
 
-class base_model(nn.Module):
-    """
-    The base model for implementing a reversible network. This can be
-    subclassed to create a custom model.
-    
-    Note the special care required in the forward() method when using
-    rev_block objects: final rev_block activation must be stored in the 
-    self.activations list.
-    """
-    def __init__(self):
-        super(base_model, self).__init__()
-        self.activations = []
-        
-    def forward(self):
-        '''
-        NOTE: The activation of the final call to a rev_block should be
-              appended to self.activations, so that activations of all
-              rev_block objects could be reconstructed from it druing
-              backprop.
-        '''
-        raise NotImplementedError
-        
-    def cuda(self, device=None):
-        for m in self.layers:
-            m.cuda()
-        return self._apply(lambda t: t.cuda(device))
-    
-    def cpu(self):
-        for m in self.layers:
-            m.cpu()
-        return self._apply(lambda t: t.cpu())
-    
-    def free(self):
-        del self.activations[:]
-
-
-class revnet(base_model):
+class revnet(nn.Module):
     def __init__(self, in_channels, units, filters, subsample, classes=None,
                  block_type=reversible_basic_block):
         """
@@ -70,6 +32,7 @@ class revnet(base_model):
             classes (int) : The number of classes to predict over.
         """
         super(revnet, self).__init__()
+        self.activations = []
         self.block = block_type
         self.layers = nn.ModuleList()
 
@@ -100,6 +63,9 @@ class revnet(base_model):
         x = self.fc(x)
 
         return x
+    
+    def free(self):
+        del self.activations[:]
         
         
 def revnet38():
@@ -118,191 +84,179 @@ def revnet110():
                    classes=10)
     model.name = "revnet110"
     return model
-
-
-class dilated_fcn(base_model):
-    def __init__(self, in_channels, num_blocks, filters, dilation,
-                 num_downscale=0, overlap_tile_patch_size=None, dropout=0.,
-                 init='kaiming_normal', nonlinearity='ReLU',
-                 block_type=reversible_basic_block, classes=None, ndim=2):
-        """
-        Implements a reversible dilated fully convolutional network..
-        
-        Args:
-            
-            in_channels (int) : The number of input channels.
-            num_blocks (int) : The number of blocks to stack.
-            filters (list or int) : Number of convolution filters per block.
-                Also for each down/up-scaling operation.
-            dilation (list or int) : Convolutional kernel dilation per block.
-            num_downscale (int) : The number of times to downscale the input
-                (and upscale the output), with each scaling operation being
-                done using a convolution, each applied with the overlap-tile
-                method. On downscaling, strided convolution is used. On
-                upscaling, columns and rows are repeated (nearest neighbour
-                interpolation) and the result is cleaned up with a regular
-                convolution. Output tile size is set to the resolution that is
-                achieved after all downscale operations.
-            overlap_tile_patch_size (tuple of int) : The input patch size to
-                use with the overlap-tile strategy. If set to `None`, the
-                overlap-tile strategy is not used.
-            dropout (float) : Probability of dropout.
-            init (string or function) : Convolutional kernel initializer.
-            nonlinearity (string or function) : Nonlinearity.
-            block_type (Module) : The block type to use.
-            classes (int) : The number of classes to predict over. If set to
-                `None`, no classifier will be used.
-            ndim : Number of spatial dimensions (1, 2 or 3).
-        """
-        super(dilated_fcn, self).__init__()
-        self.num_blocks = num_blocks
-        self.in_channels = in_channels
-        if hasattr(filters, '__len__'):
-            self.filters = [i for i in filters]
-        else:
-            self.filters = [filters]*(num_blocks+1 + 2*num_downscale)
-        if hasattr(dilation, '__len__'):
-            self.dilation = [i for i in dilation]
-        else:
-            self.dilation = [dilation]*num_blocks
-        self.num_downscale = num_downscale
-        self.overlap_tile_patch_size = overlap_tile_patch_size
-        self.dropout = dropout
-        self.init = init
-        self.nonlinearity = nonlinearity
-        self.block_type = block_type
-        self.ndim = ndim
-        self.classes = classes
-        
-        if len(filters) != num_blocks+1 + 2*num_downscale:
-            raise ValueError("`filters` must be passed as an integer or a "
-                             "list with {} elements when `num_blocks` is {} "
-                             "and num_downscale is {}. Instead, it was passed "
-                             "as a list with {} elements."
-                             "".format(num_blocks+1 + 2*num_downscale, 
-                                       num_blocks,
-                                       num_downscale,
-                                       len(filters)))
-        if len(dilation) != num_blocks:
-            raise ValueError("`dilation` must be passed as an integer or a "
-                             "list with {} elements when `num_blocks` is {}. "
-                             "Instead, it was passed as a list with {} "
-                             "elements."
-                             "".format(num_blocks, num_blocks, len(dilation)))
                              
-        # Build network
-        self.layers_down = []
-        self.layers_across = []
-        self.layers_up = []
-        padding = 1
-        if overlap_tile_patch_size is not None:
-            padding = 0
-        preprocessor = convolution(in_channels=in_channels,
-                                   out_channels=filters[0],
-                                   kernel_size=3,
-                                   padding=padding,
-                                   init=init,
-                                   ndim=ndim)
-        if overlap_tile_patch_size is not None:
-            preprocessor = overlap_tile(overlap_tile_patch_size,
-                                        model=preprocessor,
-                                        in_channels=preprocessor.in_channels,
-                                        out_channels=preprocessor.out_channels)
-        prev_channels = filters[0]
-        self.layers_down.append(preprocessor)
-        for i in range(num_downscale):
-            padding = 1
-            if overlap_tile_patch_size is not None:
-                padding = 0
-            conv_down = convolution(in_channels=prev_channels,
-                                    out_channels=filters[i+1],
-                                    kernel_size=3,
-                                    padding=padding,
-                                    init=init,
-                                    ndim=ndim)
-            if overlap_tile_patch_size is not None:
-                conv_down = overlap_tile(overlap_tile_patch_size,
-                                         model=conv_down,
-                                         in_channels=conv_down.in_channels,
-                                         out_channels=conv_down.out_channels)
-            self.layers_down.append(batch_normalization(ndim=ndim,
-                                                  num_features=prev_channels))
-            self.layers_down.append(get_nonlinearity(nonlinearity))
-            self.layers_down.append(max_pooling(kernel_size=2, ndim=ndim))
-            self.layers_down.append(conv_down)
-            prev_channels = filters[i+1]
-        for i in range(num_blocks):
-            block = block_type(in_channels=prev_channels,
-                               out_channels=filters[i+num_downscale+1],
-                               nonlinearity=nonlinearity,
-                               dropout=dropout,
-                               dilation=dilation[i],
-                               init=init,
-                               ndim=ndim,
-                               activations=self.activations)
-            self.layers_across.append(block)
-            prev_channels = filters[i+num_downscale+1]
-        for i in range(num_downscale):
-            filters_i = filters[i+num_blocks+num_downscale+1]
-            padding = 1
-            if overlap_tile_patch_size is not None:
-                padding = 0
-            conv_up = convolution(in_channels=prev_channels,
-                                  out_channels=filters_i,
-                                  kernel_size=3,
-                                  padding=padding,
-                                  stride=1,
-                                  init=init,
-                                  ndim=ndim)
-            if overlap_tile_patch_size is not None:
-                conv_up = overlap_tile(overlap_tile_patch_size,
-                                       model=conv_up,
-                                       in_channels=conv_up.in_channels,
-                                       out_channels=conv_up.out_channels)
-                ## TODO: Memorize the output_size on the downscaling path
-                ##       and crop outputs to that size since they may become
-                ##       larger with some input sizes.
-            self.layers_up.append(batch_normalization(ndim=ndim,
-                                                  num_features=prev_channels))
-            self.layers_up.append(get_nonlinearity(nonlinearity))
-            self.layers_up.append(torch.nn.Upsample(scale_factor=ndim))
-            self.layers_up.append(conv_up)
-            prev_channels = filters_i
-        self.classifier = None
-        if classes is not None:
-            self.classifier = convolution(in_channels=filters[-1],
-                                          out_channels=classes,
-                                          kernel_size=1,
-                                          ndim=ndim)
+
+def dilated_fcn_hybrid(in_channels, num_blocks, filters, dilation,
+                       num_downscale=0, patch_size=None, short_skip=True,
+                       long_skip=True, long_skip_merge_mode='sum',
+                       upsample_mode='repeat', dropout=0.,
+                       norm_kwargs=None, init='kaiming_normal',
+                       nonlinearity='ReLU', block_type=reversible_basic_block,
+                       num_classes=None, ndim=2, verbose=False):
+    """
+    Implements an FCN with a bottleneck containing a reversible dilated
+    fully convolutional network, with arbitrary dilations. Blocks on the
+    downscaling and upscaling paths use the overlap-tile method on
+    convolutions to reduce memory usage.
+    
+    Args:
+        in_channels (int) : The number of input channels.
+        num_blocks (int) : The number of blocks to stack.
+        filters (list or int) : Number of convolution filters per block. Also 
+            for each down/up-scaling operation and the pre/post-processors.
+        dilation (list or int) : Convolutional kernel dilation per block.
+        num_downscale (int) : The number of times to downscale the input
+            (and upscale the output), with each scaling operation being done
+            using a convolution, each applied with the overlap-tile method. 
+            On downscaling, strided convolution is used. On upscaling, columns
+            and rows are repeated (nearest neighbour interpolation) and the
+            result is cleaned up with a regular convolution. Output tile size
+            is set to the resolution that is achieved after all downscale
+            operations.
+        patch_size (tuple of int) : The input patch size to use with the
+            overlap-tile strategy. If set to `None`, the overlap-tile strategy
+            is not used.
+        short_skip (bool) : Whether to use ResNet-like shortcut connections
+            from the input of each block to its output. The inputs are summed
+            with the outputs.
+        long_skip (bool) : Whether to use long skip connections from the
+            downward path to the upward path. These can either concatenate or 
+            sum features across.
+        long_skip_merge_mode (string) : Either 'sum' or 'concat' features
+            across skip.
+        upsample_mode (string) : Either 'repeat' or 'conv'. With 'repeat',
+            rows and colums are repeated as in nearest neighbour interpolation.
+            With 'conv', upscaling is done via transposed convolution.
+        dropout (float) : Probability of dropout.
+        norm_kwargs (dict): Keyword arguments to pass to batch norm layers.
+            For batch normalization, default momentum is 0.9.
+        init (string or function) : Convolutional kernel initializer.
+        nonlinearity (string or function) : Nonlinearity.
+        block_type (Module) : The block type to use.
+        num_classes (int) : The number of classes to predict over. If set
+            to `None`, no classifier will be used.
+        ndim (int) : Number of spatial dimensions (1, 2 or 3).
+        verbose (bool) : Whether to print messages about model structure 
+            during construction.
+    """
+    if not hasattr(filters, '__len__'):
+        filters = [filters]*(num_blocks+2 + 2*num_downscale)
+    if not hasattr(dilation, '__len__'):
+        dilation = [dilation]*num_blocks
+        
+    '''
+    Make sure each block has a filters and dilation setting.
+    '''
+    if len(filters) != num_blocks+2 + 2*num_downscale:
+        raise ValueError("`filters` must be passed as an integer or a "
+                         "list with {} elements when `num_blocks` is {} "
+                         "and num_downscale is {}. Instead, it was passed "
+                         "as a list with {} elements."
+                         "".format(num_blocks+2 + 2*num_downscale, 
+                                   num_blocks,
+                                   num_downscale,
+                                   len(filters)))
+    if len(dilation) != num_blocks:
+        raise ValueError("`dilation` must be passed as an integer or a "
+                         "list with {} elements when `num_blocks` is {}. "
+                         "Instead, it was passed as a list with {} "
+                         "elements."
+                         "".format(num_blocks, num_blocks, len(dilation)))
+                            
+    '''
+    ndim must be only 2 or 3.
+    '''
+    if ndim not in [2, 3]:
+        raise ValueError("ndim must be either 2 or 3")
             
-        # Coalesce layer list.
-        self.layers = nn.ModuleList()
-        for l in self.layers_down:
-            self.layers.append(l)
-        for l in self.layers_across:
-            self.layers.append(l)
-        for l in self.layers_up:
-            self.layers.append(l)
+    '''
+    If batch_normalization is used and norm_kwargs is not set, set default
+    kwargs.
+    '''
+    if norm_kwargs is None:
+        norm_kwargs = {'momentum': 0.1,
+                       'affine': True}
+    
+    '''
+    Constant kwargs passed to the init and main blocks.
+    '''
+    block_kwargs = {'dropout': dropout,
+                    'norm_kwargs': norm_kwargs,
+                    'upsample_mode': upsample_mode,
+                    'nonlinearity': nonlinearity,
+                    'init': init,
+                    'ndim': ndim}
+    non_rev_block = tiny_block if patch_size is None else tiny_block_ot
+    
+    '''
+    Assemble all necessary blocks.
+    '''
+    blocks_down = []
+    blocks_across = []
+    blocks_up = []
+    
+    # The first block is just a convolution.
+    # No normalization or nonlinearity on input.
+    kwargs = {'num_filters': filters[0],
+              'skip': False,
+              'normalization': None,
+              'nonlinearity': None,
+              'dropout': dropout,
+              'init': init,
+              'ndim': ndim}
+    if patch_size is not None:
+        kwargs['input_patch_size'] = patch_size
+    blocks_down.append((non_rev_block, kwargs))
+
+    # Down
+    for i in range(num_downscale):
+        kwargs = {'num_filters': filters[i+1],
+                  'skip': short_skip}
+        if patch_size is not None:
+            kwargs['input_patch_size'] = patch_size
+        kwargs.update(block_kwargs)
+        blocks_down.append((non_rev_block, kwargs))
         
-    def forward(self, x):
-        self.free()
-        for layer in self.layers_down:
-            x = layer(x)
-        for layer in self.layers_across:
-            x = layer(x)
-        self.activations.append(x)
-        for layer in self.layers_up:
-            x = layer(x)
+    # Bottleneck, dilated revnet
+    kwargs = {'num_filters': filters[num_downscale+1:-num_downscale-1],
+              'dilation': dilation,
+              'block_type': block_type,
+              'num_blocks': len(dilation)}
+    kwargs.update(block_kwargs)
+    blocks_across.append((dilated_rev_block, kwargs))
+    
+    # Up
+    for i in range(num_downscale):
+        kwargs = {'num_filters': filters[-num_downscale-1+i],
+                  'skip': short_skip}
+        if patch_size is not None:
+            kwargs['input_patch_size'] = patch_size
+        kwargs.update(block_kwargs)
+        blocks_down.append((non_rev_block, kwargs))
         
-        # Output
-        if self.classifier is not None:
-            x = self.classifier(x)
-            if self.classes==1:
-                x = F.sigmoid(x)
-            else:
-                # Softmax that works on ND inputs.
-                e = torch.exp(x - torch.max(x, dim=1, keepdim=True)[0])
-                s = torch.sum(e, dim=1, keepdim=True)
-                x = e / s
-                
-        return x
+    # The last block is just a convolution.
+    # As requested, normalization and nonlinearity applied on input.
+    kwargs = {'num_filters': filters[-1],
+              'skip': False,
+              'norm_kwargs': norm_kwargs,
+              'nonlinearity': nonlinearity,
+              'dropout': dropout,
+              'init': init,
+              'ndim': ndim}
+    if patch_size is not None:
+        kwargs['input_patch_size'] = patch_size
+    blocks_up.append((tiny_block_ot, kwargs))
+        
+    blocks = blocks_down + blocks_across + blocks_up
+        
+    '''
+    Assemble model.
+    '''
+    model = fcn(in_channels=in_channels,
+                num_classes=num_classes,
+                blocks=blocks,
+                long_skip=long_skip,
+                long_skip_merge_mode=long_skip_merge_mode,
+                ndim=ndim,
+                verbose=verbose)
+    return model

@@ -82,9 +82,11 @@ class _overlap_tile_function(torch.autograd.Function):
     
     @staticmethod
     def forward(ctx, input, model, input_patch_size, output_patch_size,
-                out_channels, use_gpu=False, device=None, *args):
+                out_channels, *args):
         ndim = len(input_patch_size)+2
         input_size = input.size()
+        use_gpu = True if input.is_cuda else False
+        device = None if not input.is_cuda else input.get_device()
         
         # Create and fill padded input image.
         input_padded, indices = _overlap_tile_function._create_padded_buffer(\
@@ -180,9 +182,8 @@ class _overlap_tile_function(torch.autograd.Function):
                         
             # Trim padded input grad to remove padding.
             input_grad = input_grad_padded[indices]
-        #print(input_grad.std().data[0], [p.std().data[0] for p in params_grad])
         
-        return (input_grad,) + (None,)*6 + tuple(params_grad)
+        return (input_grad,) + (None,)*4 + tuple(params_grad)
 
 
 class overlap_tile(torch.nn.Module):
@@ -200,28 +201,24 @@ class overlap_tile(torch.nn.Module):
             overlap-tile is assumed to have the same spatial size as the input.
         in_channels (int) : The number of input channels.
         out_channels (int) : The number of output channels.
-        use_gpu (bool) : Whether to use the GPU for memory and compute.
-        device (int) : If using the GPU, which device to use.
         verbose (bool) : Whether to print the autodetermined output patch
             size.
     """
     def __init__(self, input_patch_size, model, in_channels, out_channels,
-                 use_gpu=False, device=None, verbose=True):
+                 verbose=True):
         super(overlap_tile, self).__init__()
         self.input_patch_size = input_patch_size
         self.model = model
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.output_patch_size = None
-        self.use_gpu = use_gpu
-        self.device = device
-        self._modules['model'] = model
         self.verbose = verbose
         
-    def cuda(self, device=None):
-        self.use_gpu = True
-        self.device = device
-        return self._apply(lambda t: t.cuda(device))
+    def parameters(self):
+        return self.model.parameters()
+    
+    def named_parameters(self, memo=None, prefix=''):
+        return self.model.named_parameters()
         
     def forward(self, input):
         ndim = len(self.input_patch_size)+2
@@ -236,8 +233,8 @@ class overlap_tile(torch.nn.Module):
         if self.output_patch_size is None:
             input_size = (1,self.in_channels)+tuple(self.input_patch_size)
             _in = Variable(torch.zeros(*input_size).float())
-            if self.use_gpu:
-                _in = _to_cuda(_in, self.device)
+            if input.is_cuda:
+                _in = _to_cuda(_in, input.get_device())
             _out = self.model(_in)
             self.output_patch_size = tuple(_out.size()[2:])
             if self.verbose:
@@ -251,8 +248,6 @@ class overlap_tile(torch.nn.Module):
                                               self.input_patch_size,
                                               self.output_patch_size,
                                               self.out_channels,
-                                              self.use_gpu,
-                                              self.device,
                                               *self.model.parameters())
             
         return output
@@ -277,7 +272,7 @@ if __name__=='__main__':
         print("Test PASSED")
     else:
         print("Test FAILED")
-    print(im_input.size(), im_output.size())
+    #print(im_input.size(), im_output.size())
         
     #loss = im_output.mean()-1
     #loss.backward()

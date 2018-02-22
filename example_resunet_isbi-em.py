@@ -15,7 +15,7 @@ from ignite.handlers import Evaluate
 from torch.autograd import Variable
 from tqdm import tqdm
 
-from architectures.revnet import dilated_fcn
+from architectures.revnet import dilated_fcn_hybrid
 from architectures.blocks import reversible_basic_block
 from fcn_maker.loss import dice_loss
 from data_tools.io import data_flow
@@ -27,16 +27,21 @@ Settings.
 model_kwargs = OrderedDict((
     ('in_channels', 1),
     ('num_blocks', 6),
-    ('filters', [8,8,8,8,16,32,64,128,128,8,8]),
+    ('filters', [8,8,8,8,16,32,64,128,128,8,8,8]),
     ('dilation', [1,2,4,8,16,1]),
     ('num_downscale', 2),
-    ('overlap_tile_patch_size', (130, 130)),
+    ('patch_size', (100, 100)),
+    ('short_skip', True),
+    ('long_skip', True),
+    ('long_skip_merge_mode', 'sum'),
+    ('upsample_mode', 'repeat'),
     ('dropout', 0.1),
     ('init', 'kaiming_normal'),
     ('nonlinearity', 'ReLU'),
     ('block_type', reversible_basic_block),
-    ('classes', 1),
+    ('num_classes', 1),
     ('ndim', 2),
+    ('verbose', True),
     ))
 batch_size = 4
 
@@ -172,7 +177,7 @@ if __name__=='__main__':
     Prepare model.
     '''
     torch.backends.cudnn.benchmark = True
-    model = dilated_fcn(**model_kwargs)
+    model = dilated_fcn_hybrid(**model_kwargs)
     model.cuda()
     optimizer = torch.optim.RMSprop(params=model.parameters(),
                                     lr=0.001, alpha=0.9,
