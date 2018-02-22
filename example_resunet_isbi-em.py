@@ -26,9 +26,11 @@ Settings.
 '''
 model_kwargs = OrderedDict((
     ('in_channels', 1),
-    ('num_blocks', 7),
-    ('filters', [8,8,16,32,64,128,128]),
-    ('dilation', [1,1,2,4,8,16,1]),
+    ('num_blocks', 6),
+    ('filters', [8,8,8,8,16,32,64,128,128,8,8]),
+    ('dilation', [1,2,4,8,16,1]),
+    ('num_downscale', 2),
+    ('overlap_tile_patch_size', (130, 130)),
     ('dropout', 0.1),
     ('init', 'kaiming_normal'),
     ('nonlinearity', 'ReLU'),

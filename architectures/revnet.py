@@ -11,6 +11,7 @@ from fcn_maker.blocks import convolution
 from .blocks import (batch_normalization,
                      rev_block,
                      reversible_basic_block)
+from .modules import overlap_tile
 
 
 class base_model(nn.Module):
@@ -118,7 +119,8 @@ def revnet110():
 
 class dilated_fcn(base_model):
     def __init__(self, in_channels, num_blocks, filters, dilation,
-                 dropout=0., init='kaiming_normal', nonlinearity='ReLU',
+                 num_downscale=0, overlap_tile_patch_size=None, dropout=0.,
+                 init='kaiming_normal', nonlinearity='ReLU',
                  block_type=reversible_basic_block, classes=None, ndim=2):
         """
         Implements a reversible dilated fully convolutional network..
@@ -128,7 +130,19 @@ class dilated_fcn(base_model):
             in_channels (int) : The number of input channels.
             num_blocks (int) : The number of blocks to stack.
             filters (list or int) : Number of convolution filters per block.
+                Also for each down/up-scaling operation.
             dilation (list or int) : Convolutional kernel dilation per block.
+            num_downscale (int) : The number of times to downscale the input
+                (and upscale the output), with each scaling operation being
+                done using a convolution, each applied with the overlap-tile
+                method. On downscaling, strided convolution is used. On
+                upscaling, columns and rows are repeated (nearest neighbour
+                interpolation) and the result is cleaned up with a regular
+                convolution. Output tile size is set to the resolution that is
+                achieved after all downscale operations.
+            overlap_tile_patch_size (tuple of int) : The input patch size to
+                use with the overlap-tile strategy. If set to `None`, the
+                overlap-tile strategy is not used.
             dropout (float) : Probability of dropout.
             init (string or function) : Convolutional kernel initializer.
             nonlinearity (string or function) : Nonlinearity.
@@ -143,11 +157,13 @@ class dilated_fcn(base_model):
         if hasattr(filters, '__len__'):
             self.filters = [i for i in filters]
         else:
-            self.filters = [filters]*(num_blocks+1)
+            self.filters = [filters]*(num_blocks+1 + 2*num_downscale)
         if hasattr(dilation, '__len__'):
             self.dilation = [i for i in dilation]
         else:
-            self.dilation = [dilation]*(num_blocks+1)
+            self.dilation = [dilation]*num_blocks
+        self.num_downscale = num_downscale
+        self.overlap_tile_patch_size = overlap_tile_patch_size
         self.dropout = dropout
         self.init = init
         self.nonlinearity = nonlinearity
@@ -155,39 +171,119 @@ class dilated_fcn(base_model):
         self.ndim = ndim
         self.classes = classes
         
+        if len(filters) != num_blocks+1 + 2*num_downscale:
+            raise ValueError("`filters` must be passed as an integer or a "
+                             "list with {} elements when `num_blocks` is {} "
+                             "and num_downscale is {}. Instead, it was passed "
+                             "as a list with {} elements."
+                             "".format(num_blocks+1 + 2*num_downscale, 
+                                       num_blocks,
+                                       num_downscale,
+                                       len(filters)))
+        if len(dilation) != num_blocks:
+            raise ValueError("`dilation` must be passed as an integer or a "
+                             "list with {} elements when `num_blocks` is {}. "
+                             "Instead, it was passed as a list with {} "
+                             "elements."
+                             "".format(num_blocks, num_blocks, len(dilation)))
+                             
         # Build network
-        self.layers = nn.ModuleList()
+        self.layers_down = []
+        self.layers_across = []
+        self.layers_up = []
         preprocessor = convolution(in_channels=in_channels,
-                                   out_channels=(filters[0]*2+1)//2,
+                                   out_channels=filters[0],
                                    kernel_size=3,
                                    padding=1,
                                    init=init,
                                    ndim=ndim)
-        prev_channels = (filters[0]*2+1)//2
-        self.layers.append(preprocessor)
+        if overlap_tile_patch_size is not None:
+            preprocessor = overlap_tile(overlap_tile_patch_size,
+                                        model=preprocessor,
+                                        in_channels=preprocessor.in_channels,
+                                        out_channels=preprocessor.out_channels)
+        prev_channels = filters[0]
+        self.layers_down.append(preprocessor)
+        for i in range(num_downscale):
+            padding = 1
+            if overlap_tile_patch_size is not None:
+                padding = 0
+            conv_down = convolution(in_channels=prev_channels,
+                                    out_channels=filters[i+1],
+                                    kernel_size=3,
+                                    padding=padding,
+                                    stride=2,
+                                    init=init,
+                                    ndim=ndim)
+            if overlap_tile_patch_size is not None:
+                def output_size(input_size):
+                    return tuple([s//2 for s in input_size])
+                conv_down = overlap_tile(overlap_tile_patch_size,
+                                         model=conv_down,
+                                         in_channels=conv_down.in_channels,
+                                         out_channels=conv_down.out_channels,
+                                         output_size=output_size)
+            prev_channels = filters[i+1]
+            self.layers_down.append(conv_down)
         for i in range(num_blocks):
             block = block_type(in_channels=prev_channels,
-                               out_channels=filters[i],
+                               out_channels=filters[i+num_downscale+1],
                                nonlinearity=nonlinearity,
                                dropout=dropout,
                                dilation=dilation[i],
                                init=init,
                                ndim=ndim,
                                activations=self.activations)
-            prev_channels = filters[i]
-            self.layers.append(block)
+            prev_channels = filters[i+num_downscale+1]
+            self.layers_across.append(block)
+        for i in range(num_downscale):
+            filters_i = filters[i+num_blocks+num_downscale+1]
+            padding = 1
+            if overlap_tile_patch_size is not None:
+                padding = 0
+            conv_up = convolution(in_channels=prev_channels,
+                                  out_channels=filters_i,
+                                  kernel_size=3,
+                                  padding=padding,
+                                  stride=1,
+                                  init=init,
+                                  ndim=ndim)
+            if overlap_tile_patch_size is not None:
+                conv_up = overlap_tile(overlap_tile_patch_size,
+                                       model=conv_up,
+                                       in_channels=conv_up.in_channels,
+                                       out_channels=conv_up.out_channels)
+                # TODO: Memorize the output_size on the downscaling path
+                #       and crop outputs to that size since they may become
+                #       larger with some input sizes.
+            prev_channels = filters_i
+            self.layers_up.append(torch.nn.Upsample(scale_factor=2))
+            self.layers_up.append(conv_up)
         self.classifier = None
         if classes is not None:
             self.classifier = convolution(in_channels=filters[-1],
                                           out_channels=classes,
                                           kernel_size=1,
                                           ndim=ndim)
+            
+        # Coalesce layer list.
+        self.layers = nn.ModuleList()
+        for l in self.layers_down:
+            self.layers.append(l)
+        for l in self.layers_across:
+            self.layers.append(l)
+        for l in self.layers_up:
+            self.layers.append(l)
         
     def forward(self, x):
         self.free()
-        for layer in self.layers:
+        for layer in self.layers_down:
+            x = layer(x)
+        for layer in self.layers_across:
             x = layer(x)
         self.activations.append(x)
+        for layer in self.layers_up:
+            x = layer(x)
         
         # Output
         if self.classifier is not None:
