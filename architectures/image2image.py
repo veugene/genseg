@@ -601,7 +601,8 @@ class DilatedFCN(nn.Module):
         self.model = nn.Sequential(*model)
     def forward(self, x):
         x = self.model(x)
-        e = torch.exp(x - torch.max(x, dim=1, keepdim=True)[0])
-        s = torch.sum(e, dim=1, keepdim=True)
-        x = e / s
+        if classes is not None:
+            e = torch.exp(x - torch.max(x, dim=1, keepdim=True)[0])
+            s = torch.sum(e, dim=1, keepdim=True)
+            x = e / s
         return x
