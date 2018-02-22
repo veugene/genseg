@@ -245,7 +245,7 @@ def dilated_fcn_hybrid(in_channels, num_blocks, filters, dilation,
               'ndim': ndim}
     if patch_size is not None:
         kwargs['input_patch_size'] = patch_size
-    blocks_up.append((tiny_block_ot, kwargs))
+    blocks_up.append((non_rev_block, kwargs))
         
     blocks = blocks_down + blocks_across + blocks_up
         
