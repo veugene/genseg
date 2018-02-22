@@ -15,16 +15,16 @@ def _to_cuda(x, device=None):
 class _overlap_tile_function(torch.autograd.Function):
     @staticmethod
     def _patch_slice_iterator(input_patch_size, output_patch_size,
-                              input_size):
+                              input_size, output_size):
         lost = np.subtract(input_patch_size, output_patch_size)
         ndim = len(input_patch_size)+2
         
         #Iterator over indices in an image, for sourcing or placing patches.
-        def index_iterator(offset=None):
+        def index_iterator(size, offset=None):
             if offset is None:
                 offset = [0]*(ndim-2)
             def recursive_idx(dim, idx):
-                for i in range(0, input_size[dim]+offset[dim-2],
+                for i in range(0, size[dim]+offset[dim-2],
                                output_patch_size[dim-2]):
                     idx[dim] = i
                     if dim < ndim-1:
@@ -45,8 +45,8 @@ class _overlap_tile_function(torch.autograd.Function):
             return indices
     
         # Process input patch-wise.
-        iter_input = index_iterator(offset=lost//2)
-        iter_output = index_iterator()
+        iter_input = index_iterator(size=input_size, offset=lost//2)
+        iter_output = index_iterator(size=output_size)
         for idx_i, idx_o in zip(iter_input, iter_output):
             sl_i = get_patch_slices(idx_i, input_patch_size)
             sl_o = get_patch_slices(idx_o, output_patch_size)
@@ -83,7 +83,8 @@ class _overlap_tile_function(torch.autograd.Function):
     
     @staticmethod
     def forward(ctx, input, model, input_patch_size, output_patch_size,
-                use_gpu=False, device=None, *args):
+                out_channels, output_size=None, use_gpu=False, device=None,
+                *args):
         ndim = len(input_patch_size)+2
         input_size = input.size()
         
@@ -95,13 +96,19 @@ class _overlap_tile_function(torch.autograd.Function):
                                                         use_gpu=use_gpu,
                                                         device=device)
         
-        input = Variable(input.data, requires_grad=True)
+        input = Variable(input.data)
         if use_gpu:
             input = _to_cuda(input, device)
         input_padded[indices] = input
         
         # Create output image buffer.
-        output = Variable(torch.zeros(*tuple(input_size)).float(),
+        if output_size is None:
+            output_size = list(input_size)
+            output_size[1] = out_channels
+        elif callable(output_size):
+            output_size = (input_size[0], out_channels) \
+                          + output_size(input_size[2:])
+        output = Variable(torch.zeros(*tuple(output_size)).float(),
                           requires_grad=True)
         if use_gpu:
             output = _to_cuda(output, device)
@@ -110,9 +117,8 @@ class _overlap_tile_function(torch.autograd.Function):
         input_patch_list = []
         output_patch_list = []
         iter_type = _overlap_tile_function._patch_slice_iterator
-        for sl_i, sl_o in iter_type(input_patch_size,
-                                    output_patch_size,
-                                    input_size):
+        for sl_i, sl_o in iter_type(input_patch_size, output_patch_size,
+                                    input_size, output_size):
             input_patch = Variable(input_padded[sl_i].data,
                                    requires_grad=True)
             with torch.enable_grad():
@@ -138,6 +144,7 @@ class _overlap_tile_function(torch.autograd.Function):
         ctx.use_gpu = use_gpu
         ctx.device = device
         ctx.input_size = input_size
+        ctx.output_size = output_size
 
         return output
     
@@ -160,7 +167,8 @@ class _overlap_tile_function(torch.autograd.Function):
         iter_type = _overlap_tile_function._patch_slice_iterator
         for i, (sl_i, sl_o) in enumerate(iter_type(ctx.input_patch_size,
                                                    ctx.output_patch_size,
-                                                   ctx.input_size)):
+                                                   ctx.input_size,
+                                                   ctx.output_size)):
             input_patch = ctx.input_patch_list[i]
             output_patch = ctx.output_patch_list[i]
             output_grad_patch = output_grad[sl_o]
@@ -191,7 +199,7 @@ class _overlap_tile_function(torch.autograd.Function):
             # Trim padded input grad to remove padding.
             input_grad = input_grad_padded[indices]
         
-        return (input_grad,) + (None,)*5 + tuple(params_grad)
+        return (input_grad,) + (None,)*7 + tuple(params_grad)
 
 
 class overlap_tile(torch.nn.Module):
@@ -199,6 +207,9 @@ class overlap_tile(torch.nn.Module):
         super(overlap_tile, self).__init__()
         self.input_patch_size = input_patch_size
         self.model = model
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.output_size = output_size
         self.output_patch_size = None
         self.use_gpu = use_gpu
         self.device = device
@@ -220,7 +231,7 @@ class overlap_tile(torch.nn.Module):
         # If not already computed, compute the output patch size.
         # HACK: this uses a forward pass.
         if self.output_patch_size is None:
-            input_size = (1,1)+tuple(self.input_patch_size)
+            input_size = (1,self.in_channels)+tuple(self.input_patch_size)
             _in = Variable(torch.zeros(*input_size).float())
             if self.use_gpu:
                 _in = _to_cuda(_in, self.device)
@@ -232,6 +243,8 @@ class overlap_tile(torch.nn.Module):
                                               self.model,
                                               self.input_patch_size,
                                               self.output_patch_size,
+                                              self.out_channels,
+                                              self.output_size,
                                               self.use_gpu,
                                               self.device,
                                               *self.model.parameters())
