@@ -8,10 +8,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 from fcn_maker.blocks import (convolution,
-                              max_pooling)
-from .blocks import (batch_normalization,
-                     rev_block,
+                              max_pooling,
+                              batch_normalization,
+                              get_nonlinearity)
+from .blocks import (rev_block,
                      reversible_basic_block)
+from .blocks import batch_normalization as revnet_batch_normalization
 from .modules import overlap_tile
 
 
@@ -223,9 +225,12 @@ class dilated_fcn(base_model):
                                          model=conv_down,
                                          in_channels=conv_down.in_channels,
                                          out_channels=conv_down.out_channels)
-            prev_channels = filters[i+1]
+            self.layers_down.append(batch_normalization(ndim=ndim,
+                                                  num_features=prev_channels))
+            self.layers_down.append(get_nonlinearity(nonlinearity))
             self.layers_down.append(max_pooling(kernel_size=2, ndim=ndim))
             self.layers_down.append(conv_down)
+            prev_channels = filters[i+1]
         for i in range(num_blocks):
             block = block_type(in_channels=prev_channels,
                                out_channels=filters[i+num_downscale+1],
@@ -235,8 +240,8 @@ class dilated_fcn(base_model):
                                init=init,
                                ndim=ndim,
                                activations=self.activations)
-            prev_channels = filters[i+num_downscale+1]
             self.layers_across.append(block)
+            prev_channels = filters[i+num_downscale+1]
         for i in range(num_downscale):
             filters_i = filters[i+num_blocks+num_downscale+1]
             padding = 1
@@ -257,9 +262,12 @@ class dilated_fcn(base_model):
                 ## TODO: Memorize the output_size on the downscaling path
                 ##       and crop outputs to that size since they may become
                 ##       larger with some input sizes.
-            prev_channels = filters_i
+            self.layers_up.append(batch_normalization(ndim=ndim,
+                                                  num_features=prev_channels))
+            self.layers_up.append(get_nonlinearity(nonlinearity))
             self.layers_up.append(torch.nn.Upsample(scale_factor=ndim))
             self.layers_up.append(conv_up)
+            prev_channels = filters_i
         self.classifier = None
         if classes is not None:
             self.classifier = convolution(in_channels=filters[-1],
