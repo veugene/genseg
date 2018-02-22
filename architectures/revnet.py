@@ -7,7 +7,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
-from fcn_maker.blocks import convolution
+from fcn_maker.blocks import (convolution,
+                              max_pooling)
 from .blocks import (batch_normalization,
                      rev_block,
                      reversible_basic_block)
@@ -191,10 +192,13 @@ class dilated_fcn(base_model):
         self.layers_down = []
         self.layers_across = []
         self.layers_up = []
+        padding = 1
+        if overlap_tile_patch_size is not None:
+            padding = 0
         preprocessor = convolution(in_channels=in_channels,
                                    out_channels=filters[0],
                                    kernel_size=3,
-                                   padding=1,
+                                   padding=padding,
                                    init=init,
                                    ndim=ndim)
         if overlap_tile_patch_size is not None:
@@ -212,18 +216,15 @@ class dilated_fcn(base_model):
                                     out_channels=filters[i+1],
                                     kernel_size=3,
                                     padding=padding,
-                                    stride=2,
                                     init=init,
                                     ndim=ndim)
             if overlap_tile_patch_size is not None:
-                def output_size(input_size):
-                    return tuple([s//2 for s in input_size])
                 conv_down = overlap_tile(overlap_tile_patch_size,
                                          model=conv_down,
                                          in_channels=conv_down.in_channels,
-                                         out_channels=conv_down.out_channels,
-                                         output_size=output_size)
+                                         out_channels=conv_down.out_channels)
             prev_channels = filters[i+1]
+            self.layers_down.append(max_pooling(kernel_size=2, ndim=ndim))
             self.layers_down.append(conv_down)
         for i in range(num_blocks):
             block = block_type(in_channels=prev_channels,
@@ -253,11 +254,11 @@ class dilated_fcn(base_model):
                                        model=conv_up,
                                        in_channels=conv_up.in_channels,
                                        out_channels=conv_up.out_channels)
-                # TODO: Memorize the output_size on the downscaling path
-                #       and crop outputs to that size since they may become
-                #       larger with some input sizes.
+                ## TODO: Memorize the output_size on the downscaling path
+                ##       and crop outputs to that size since they may become
+                ##       larger with some input sizes.
             prev_channels = filters_i
-            self.layers_up.append(torch.nn.Upsample(scale_factor=2))
+            self.layers_up.append(torch.nn.Upsample(scale_factor=ndim))
             self.layers_up.append(conv_up)
         self.classifier = None
         if classes is not None:
