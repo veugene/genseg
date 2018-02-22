@@ -208,7 +208,30 @@ class _overlap_tile_function(torch.autograd.Function):
 
 
 class overlap_tile(torch.nn.Module):
-    def __init__(self, input_patch_size, model, use_gpu=False, device=None):
+    """
+    Implements the overlap-tile strategy to save memory at the cost of extra
+    compute time (both training and inference).
+    
+    Args:
+        input_patch_size (tuple of int) : The spatial size of the overlapping
+            tiles to take from the input. The output tile size is determined
+            automatically.
+        model (Module) : A pytorch module implementing the model/layer to
+            do overlap-tile with.
+        in_channels (int) : The number of input channels.
+        out_channels (int) : The number of output channels.
+        output_size (tuple of int OR function) : The complete output size of
+            the model. If left as `None`, the output size is assumed to be the
+            same as the input size, but with `out_channels` channels.
+            Alternatively, a function can be passed that computes the output
+            size given an input size. The function must take only the spatial
+            size of the input and return the spatial size of the output,
+            leaving out the batch and channel dimensions.
+        use_gpu (bool) : Whether to use the GPU for memory and compute.
+        device (int) : If using the GPU, which device to use.
+    """
+    def __init__(self, input_patch_size, model, in_channels, out_channels,
+                 output_size=None, use_gpu=False, device=None):
         super(overlap_tile, self).__init__()
         self.input_patch_size = input_patch_size
         self.model = model
