@@ -103,7 +103,7 @@ def _unpad(x, in_channels, out_channels):
     # (backward pass)
     out = x
     if in_channels < out_channels:
-        pad_channels = in_channels//2
+        pad_channels = (out_channels-in_channels)//2
         out = x[:,pad_channels:-pad_channels]
         out = Variable(out.data.contiguous())
         if x.is_cuda:
