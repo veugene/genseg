@@ -121,6 +121,8 @@ class _overlap_tile_function(torch.autograd.Function):
                                     input_size, output_size):
             input_patch = Variable(input_padded[sl_i].data,
                                    requires_grad=True)
+            if use_gpu:
+                input_patch = _to_cuda(input_patch, device)
             with torch.enable_grad():
                 output_patch = model(input_patch)
             sl_p = [slice(None, None)]*2
@@ -178,6 +180,9 @@ class _overlap_tile_function(torch.autograd.Function):
             limits = [slice(0, s) for s in output_grad_patch.size()]
             size = output_grad_patch.size()[:2]+ctx.output_patch_size
             output_grad_patch_padded = Variable(torch.zeros(*size).float())
+            if ctx.use_gpu:
+                output_grad_patch_padded = _to_cuda(output_grad_patch_padded,
+                                                    ctx.device)
             output_grad_patch_padded[limits] = output_grad_patch
 
             # Get gradients
