@@ -173,7 +173,7 @@ class _rev_block_function(Function):
 
     @staticmethod
     def _grad(x, dy, in_channels, out_channels, f_modules, g_modules,
-              activations, subsample=False, ndim=2):
+              backprop_buffer, subsample=False, ndim=2):
         dy1, dy2 = _split(dy)
         x1, x2 = _split(x)
         
@@ -192,7 +192,7 @@ class _rev_block_function(Function):
                                       subsample, ndim)
 
             # in_channels, out_channels
-            f_x2 = _rev_block_function._apply_modules(x2, f_modules)
+            f_x2 = _rev_block_function._apply_modules(x2, f_modules,)
 
             y1_ = f_x2 + x1_
 
@@ -215,7 +215,7 @@ class _rev_block_function(Function):
             dx2 += torch.autograd.grad(x2_, x2, dy2)[0]
             dx1 = dd2[0]
 
-        activations.append(x)
+        backprop_buffer['activations'].append(x)
 
         y1_.detach_()
         y2_.detach_()
@@ -226,7 +226,7 @@ class _rev_block_function(Function):
 
     @staticmethod
     def forward(ctx, x, in_channels, out_channels, f_modules, g_modules,
-                activations, subsample=False, ndim=2, *args):
+                backprop_buffer, subsample=False, ndim=2, *args):
         """
         Compute forward pass including boilerplate code.
 
@@ -239,7 +239,8 @@ class _rev_block_function(Function):
             out_channels (int) : Number of channels on output.
             f_modules (List) : Sequence of modules for F function.
             g_modules (List) : Sequence of modules for G function.
-            activations (List) : Activation stack.
+            backprop_buffer (dict) : Must contain 'activations' list and
+                'forward_passes' list for memory book-keeping.
             subsample (bool) : Whether to do 2x spatial pooling.
             ndim (int) : The number of spatial dimensions (1, 2 or 3).
             *args: Should contain all the parameters of the module.
@@ -247,12 +248,12 @@ class _rev_block_function(Function):
         
         # if subsampling, information is lost and we need to save the input
         if subsample:
-            activations.append(x)
+            backprop_buffer['activations'].append(x)
             ctx.load_input = True
         else:
             ctx.load_input = False
 
-        ctx.activations = activations
+        ctx.backprop_buffer = backprop_buffer
         ctx.in_channels = in_channels
         ctx.out_channels = out_channels
         ctx.f_modules = f_modules
@@ -267,6 +268,8 @@ class _rev_block_function(Function):
                                          g_modules,
                                          subsample,
                                          ndim)
+        
+        backprop_buffer['forward_passes'][-1] += 1
 
         return y
 
@@ -274,10 +277,10 @@ class _rev_block_function(Function):
     def backward(ctx, grad_out):
         # Load or reconstruct input
         if ctx.load_input:
-            ctx.activations.pop()
-            x = ctx.activations.pop()
+            ctx.backprop_buffer['activations'].pop()
+            x = ctx.backprop_buffer['activations'].pop()
         else:
-            output = ctx.activations.pop()
+            output = ctx.backprop_buffer['activations'].pop()
             x = _rev_block_function._backward(output,
                                               ctx.in_channels,
                                               ctx.out_channels,
@@ -290,9 +293,15 @@ class _rev_block_function(Function):
                                                  ctx.out_channels,
                                                  ctx.f_modules,
                                                  ctx.g_modules,
-                                                 ctx.activations,
+                                                 ctx.backprop_buffer,
                                                  ctx.subsample,
                                                  ctx.ndim)
+        
+        ctx.backprop_buffer['forward_passes'][-1] -= 1
+        if ctx.backprop_buffer['forward_passes'][-1] == 0:
+            # No more backprop in this chain.
+            ctx.backprop_buffer['forward_passes'].pop()
+            ctx.backprop_buffer['activations'].pop()
 
         return (dx,) + (None,)*7 + tuple(dfw) + tuple(dgw)
 
@@ -311,9 +320,8 @@ class rev_block(nn.Module):
     Args:
         in_channels (int) : The number of input channels.
         out_channels (int) : The number of output channels.
-        activations (list) : A list must be created in the model that uses
-            rev_block objects in order to store activations, as needed. Blocks
-            such as this one pass around activations through this list.
+        backprop_buffer (dict) : Must contain 'activations' list and
+            'forward_passes' list for memory book-keeping.
         f_modules (list) : A list of modules implementing the f() path of a
             reversible block.
         g_modules (list) : A list of modules implemetning the g() path of a
@@ -324,14 +332,14 @@ class rev_block(nn.Module):
     Returns:
         out (Variable): The result of the computation
     """
-    def __init__(self, in_channels, out_channels, activations,
+    def __init__(self, in_channels, out_channels, backprop_buffer,
                  f_modules=None, g_modules=None, subsample=False,
                  ndim=2):
         super(rev_block, self).__init__()
         # NOTE: channels are only counted for _adjust_tensor_size()
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.activations = activations
+        self.backprop_buffer = backprop_buffer
         self.f_modules = nn.ModuleList(f_modules)
         self.g_modules = nn.ModuleList(g_modules)
         self.subsample = subsample
@@ -394,7 +402,7 @@ class rev_block(nn.Module):
                                          self.out_channels//2,
                                          self.f_modules,
                                          self.g_modules,
-                                         self.activations,
+                                         self.backprop_buffer,
                                          self.subsample,
                                          self.ndim,
                                          *f_params,
@@ -415,7 +423,7 @@ class _make_recompute_on_backward(Function):
     def backward(ctx, grad_out):
         params, buffs = _unpack_modules(ctx.module_list)
         x = ctx.saved_variables[0]
-        out = x
+        out = Variable(x.data, requires_grad=True)
         with torch.enable_grad():
             for i, m in enumerate(ctx.module_list):
                 out = m(out)
@@ -538,7 +546,8 @@ class reversible_basic_block(rev_block):
     Args:
         in_channels (int) : The number of input channels.
         out_channels (int) : The number of output channels.
-        activations (list) : List to track activations, as in rev_block.
+        backprop_buffer (dict) : Must contain 'activations' list and
+                'forward_passes' list for memory book-keeping.
         subsample (bool) : Whether to perform 2x spatial subsampling.
         dilation (int) : The dilation of the first convolution.
         dropout (float) : Dropout probability.
@@ -550,13 +559,14 @@ class reversible_basic_block(rev_block):
     Returns:
         out (Variable): The result of the computation.
     """
-    def __init__(self, in_channels, out_channels, activations,
+    def __init__(self, in_channels, out_channels, backprop_buffer,
                  subsample=False, dilation=1, dropout=0., norm_kwargs=None, 
                  init='kaiming_normal', nonlinearity='ReLU', ndim=2):
-        super(reversible_basic_block, self).__init__(in_channels=in_channels,
-                                                     out_channels=out_channels,
-                                                     activations=activations,
-                                                     subsample=subsample)
+        super(reversible_basic_block, self).__init__( \
+                                            in_channels=in_channels,
+                                            out_channels=out_channels,
+                                            backprop_buffer=backprop_buffer,
+                                            subsample=subsample)
         self.dilation = dilation
         self.dropout = dropout
         self.norm_kwargs = norm_kwargs
@@ -629,7 +639,8 @@ class dilated_rev_block(block_abstract):
         """
         super(dilated_rev_block, self).__init__(in_channels, num_filters,
                                                 subsample, upsample)
-        self.activations = []
+        self._backprop_buffer = {'activations': [],
+                                 'forward_passes': []}
         self.out_channels = num_filters[-1]
         self.num_blocks = num_blocks
         if hasattr(num_filters, '__len__'):
@@ -663,7 +674,7 @@ class dilated_rev_block(block_abstract):
                                dilation=dilation[i],
                                init=init,
                                ndim=ndim,
-                               activations=self.activations)
+                               backprop_buffer=self._backprop_buffer)
             self.layers.append(block)
             prev_channels = num_filters[i]
         if upsample:
@@ -675,18 +686,15 @@ class dilated_rev_block(block_abstract):
                                            init=init)
             
     def forward(self, x):
-        self.free()
         if self.subsample:
             x = self.subsample_op(x)
+        self._backprop_buffer['forward_passes'].append(0)
         for layer in self.layers:
             x = layer(x)
-        self.activations.append(x)
+        self._backprop_buffer['activations'].append(x)
         if self.upsample:
             x = self.upsample_op(x)
-        return x
-    
-    def free(self):
-        del self.activations[:]
+        return x    
     
     
 class tiny_block(block_abstract):

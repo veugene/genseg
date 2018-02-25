@@ -33,7 +33,8 @@ class revnet(nn.Module):
             classes (int) : The number of classes to predict over.
         """
         super(revnet, self).__init__()
-        self.activations = []
+        self._backprop_buffer = {'activations': [],
+                                 'forward_passes': []}
         self.block = block_type
         self.layers = nn.ModuleList()
 
@@ -44,20 +45,20 @@ class revnet(nn.Module):
 
         for i, group in enumerate(units):
             self.layers.append(self.block(filters[i], filters[i + 1],
-                                          self.activations,
+                                          self._backprop_buffer,
                                           subsample=subsample[i]))
             for unit in range(1, group):
                 self.layers.append(self.block(filters[i + 1],
                                               filters[i + 1],
-                                              self.activations))
+                                              self._backprop_buffer))
         self.bn_last = nn.BatchNorm2d(filters[-1])
         self.fc = nn.Linear(filters[-1], classes)
 
     def forward(self, x):
-        self.free()
+        self._backprop_buffer['forward_passes'].append(0)
         for layer in self.layers:
             x = layer(x)
-        self.activations.append(x)
+        self._backprop_buffer['activations'].append(x)
         x = F.relu(self.bn_last(x))
         x = F.avg_pool2d(x, x.size(2))
         x = x.view(x.size(0), -1)
@@ -65,9 +66,6 @@ class revnet(nn.Module):
 
         return x
     
-    def free(self):
-        del self.activations[:]
-        
         
 def revnet38():
     model = revnet(units=[3, 3, 3],
