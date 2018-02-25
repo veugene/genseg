@@ -12,7 +12,8 @@ from fcn_maker.blocks import identity_block
 from .blocks import (rev_block,
                      reversible_basic_block,
                      dilated_rev_block,
-                     tiny_block)
+                     tiny_block,
+                     memoryless_block_wrapper)
 
 
 class revnet(nn.Module):
@@ -209,7 +210,8 @@ def dilated_fcn_hybrid(in_channels, num_blocks, filters, dilation,
     # Down
     for i in range(num_downscale):
         kwargs = {'num_filters': filters[i+1],
-                  'skip': short_skip}
+                  'skip': short_skip,
+                  'subsample': True}
         if patch_size is not None:
             kwargs['input_patch_size'] = patch_size
         kwargs.update(block_kwargs)
@@ -226,7 +228,8 @@ def dilated_fcn_hybrid(in_channels, num_blocks, filters, dilation,
     # Up
     for i in range(num_downscale):
         kwargs = {'num_filters': filters[-num_downscale-1+i],
-                  'skip': short_skip}
+                  'skip': short_skip,
+                  'upsample': True}
         if patch_size is not None:
             kwargs['input_patch_size'] = patch_size
         kwargs.update(block_kwargs)
@@ -244,6 +247,11 @@ def dilated_fcn_hybrid(in_channels, num_blocks, filters, dilation,
     if patch_size is not None:
         kwargs['input_patch_size'] = patch_size
     blocks_up.append((tiny_block, kwargs))
+    
+    # Wrap down and up paths so that activations are recomputed on backprop,
+    # rather than saved during the forward pass.
+    blocks_down = [(memoryless_block_wrapper(blocks_down), {})]
+    blocks_up = [(memoryless_block_wrapper(blocks_up), {})]
         
     '''
     Assemble model.

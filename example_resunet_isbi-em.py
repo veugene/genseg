@@ -27,15 +27,16 @@ Settings.
 model_kwargs = OrderedDict((
     ('in_channels', 1),
     ('num_blocks', 6),
-    ('filters', [8,8,8,8,16,32,64,128,128,8,8,8]),
+    ('filters', [8,16,32,64,64,64,64,64,128,128,64,32,16,8]),
+    ('num_downscale', 3),
     ('dilation', [1,2,4,8,16,1]),
-    ('num_downscale', 2),
-    ('patch_size', (100, 100)),
+    ('patch_size', None),
     ('short_skip', True),
     ('long_skip', True),
     ('long_skip_merge_mode', 'sum'),
     ('upsample_mode', 'repeat'),
-    ('dropout', 0.1),
+    ('dropout', 0.),
+    ('norm_kwargs', None),
     ('init', 'kaiming_normal'),
     ('nonlinearity', 'ReLU'),
     ('block_type', reversible_basic_block),
@@ -43,7 +44,7 @@ model_kwargs = OrderedDict((
     ('ndim', 2),
     ('verbose', True),
     ))
-batch_size = 4
+batch_size = 1
 
 
 '''

@@ -36,8 +36,6 @@ Return a nonlinearity from the core library or return the provided function.
 def get_nonlinearity(nonlin):
     if nonlin is None:
         class identity_activation(torch.nn.Module):
-            def __init__(self):
-                super(identity_activation, self).__init__()
             def forward(self, input):
                 return input
         return identity_activation
@@ -409,6 +407,59 @@ class rev_block(nn.Module):
                                          self.ndim,
                                          *f_params,
                                          *g_params)
+    
+    
+class _make_recompute_on_backward(Function):
+    @staticmethod
+    def forward(ctx, x, module_list, *params):
+        ctx.save_for_backward(x, *params)
+        ctx.module_list = module_list
+        out = x
+        with torch.no_grad():
+            for m in module_list:
+                out = m(out)
+        return out
+        
+    def backward(ctx, grad_out):
+        params, buffs = _unpack_modules(ctx.module_list)
+        x = ctx.saved_variables[0]
+        out = x
+        with torch.enable_grad():
+            for i, m in enumerate(ctx.module_list):
+                out = m(out)
+        if x.requires_grad:
+            grads = torch.autograd.grad(out, (x,)+tuple(params), grad_out)
+            grad_x = grads[0]
+            grad_params = grads[1:]
+        else:
+            grads = torch.autograd.grad(out, tuple(params), grad_out)
+            grad_x = None
+            grad_params = grads
+        return (grad_x, None)+tuple(grad_params)
+    
+    
+class make_recompute_on_backward(nn.Module):
+    def __init__(self, module_list):
+        super(make_recompute_on_backward, self).__init__()
+        self.module_list = nn.ModuleList(module_list)
+        
+    def forward(self, x):
+        params, buffs = _unpack_modules(self.module_list)
+        return _make_recompute_on_backward.apply(x, self.module_list, *params)
+    
+    
+class recomputable_norm_nonlin(nn.Module):
+    def __init__(self, nonlinearity='ReLU', nonlin_kwargs=None,
+                 norm_callable=batch_normalization, **bn_kwargs):
+        super(bn_nonlin, self).__init__()
+        bn = bn_callable(**bn_kwargs)
+        if nonlin_kwargs is None:
+            nonlin_kwargs = {}
+        nonlin = get_nonlinearity(nonlinearity)(**nonlin_kwargs)
+        self.op = recompute_on_backward([bn, nonlin])
+        
+    def forward(self, x):
+        return self.op(x)
 
 
 class rn_batch_normalization(nn.Module):
@@ -716,3 +767,52 @@ class tiny_block(block_abstract):
         if self.skip:
             out = self.op_shortcut(input, out)
         return out
+    
+
+def memoryless_block_wrapper(block_list):
+    def f(**kwargs):
+        # Copy keyword arguments and extract `in_channels` (if it exists) as
+        # settings for the first block. Remove any `subsample` or `upsample`
+        # arguments since these must be passed per block, instead.
+        kwargs_ = dict(kwargs.items())
+        in_channels = None
+        out_channels = None
+        if 'in_channels' in kwargs_:
+            in_channels = kwargs_.pop('in_channels')
+        if 'subsample' in kwargs_:
+            kwargs_.pop('subsample')
+        if 'upsample' in kwargs_:
+            kwargs_.pop('upsample')
+        
+        # Create every block.
+        block_obj_list = []
+        for block_type, block_kwargs in block_list:
+            # Copy keyword arguments specific to this block.
+            block_kwargs_ = dict(block_kwargs.items())
+            
+            # Merge in general keyword arguments.
+            block_kwargs.update(kwargs_)
+            
+            # Set `in_channels` according to the arguments specific to this
+            # block or according to the previous block's output (or the
+            # initial `in_channels` setting, in that order.
+            if 'in_channels' in block_kwargs_:
+                in_channels_ = block_kwargs['in_channels']
+            elif len(block_obj_list) > 0:
+                in_channels_ = block_obj_list[-1].out_channels
+            else:
+                in_channels_ = in_channels
+                
+            # Instantiate the block.
+            block = block_type(in_channels=in_channels_, **block_kwargs_)
+            block_obj_list.append(block)
+            
+        # Wrap block list, forcing pass through all blocks on backprop.
+        block_wrapped = make_recompute_on_backward(block_obj_list)
+        
+        # Record `in_channels`, and `out_channels` attributes for the
+        # resulting object.
+        block_wrapped.in_channels = block_obj_list[0].in_channels
+        block_wrapped.out_channels = block_obj_list[-1].out_channels
+        return block_wrapped
+    return f
