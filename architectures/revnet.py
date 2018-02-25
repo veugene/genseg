@@ -8,11 +8,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 from fcn_maker.model import fcn
-from fcn_maker.blocks import tiny_block
+from fcn_maker.blocks import identity_block
 from .blocks import (rev_block,
                      reversible_basic_block,
                      dilated_rev_block,
-                     tiny_block_ot)
+                     tiny_block)
 
 
 class revnet(nn.Module):
@@ -185,8 +185,7 @@ def dilated_fcn_hybrid(in_channels, num_blocks, filters, dilation,
                     'upsample_mode': upsample_mode,
                     'nonlinearity': nonlinearity,
                     'init': init,
-                    'ndim': ndim}
-    non_rev_block = tiny_block if patch_size is None else tiny_block_ot
+                    'ndim': ndim}    
     
     '''
     Assemble all necessary blocks.
@@ -199,14 +198,13 @@ def dilated_fcn_hybrid(in_channels, num_blocks, filters, dilation,
     # No normalization or nonlinearity on input.
     kwargs = {'num_filters': filters[0],
               'skip': False,
-              'normalization': None,
               'nonlinearity': None,
               'dropout': dropout,
               'init': init,
               'ndim': ndim}
     if patch_size is not None:
         kwargs['input_patch_size'] = patch_size
-    blocks_down.append((non_rev_block, kwargs))
+    blocks_down.append((tiny_block, kwargs))
 
     # Down
     for i in range(num_downscale):
@@ -215,7 +213,7 @@ def dilated_fcn_hybrid(in_channels, num_blocks, filters, dilation,
         if patch_size is not None:
             kwargs['input_patch_size'] = patch_size
         kwargs.update(block_kwargs)
-        blocks_down.append((non_rev_block, kwargs))
+        blocks_down.append((tiny_block, kwargs))
         
     # Bottleneck, dilated revnet
     kwargs = {'num_filters': filters[num_downscale+1:-num_downscale-1],
@@ -232,7 +230,7 @@ def dilated_fcn_hybrid(in_channels, num_blocks, filters, dilation,
         if patch_size is not None:
             kwargs['input_patch_size'] = patch_size
         kwargs.update(block_kwargs)
-        blocks_down.append((non_rev_block, kwargs))
+        blocks_up.append((tiny_block, kwargs))
         
     # The last block is just a convolution.
     # As requested, normalization and nonlinearity applied on input.
@@ -245,13 +243,12 @@ def dilated_fcn_hybrid(in_channels, num_blocks, filters, dilation,
               'ndim': ndim}
     if patch_size is not None:
         kwargs['input_patch_size'] = patch_size
-    blocks_up.append((non_rev_block, kwargs))
-        
-    blocks = blocks_down + blocks_across + blocks_up
+    blocks_up.append((tiny_block, kwargs))
         
     '''
     Assemble model.
     '''
+    blocks = blocks_down + blocks_across + blocks_up
     model = fcn(in_channels=in_channels,
                 num_classes=num_classes,
                 blocks=blocks,

@@ -10,6 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Function, Variable
 
+from inplace_abn.bn import ABN
 from fcn_maker.blocks import (get_initializer,
                               convolution,
                               max_pooling,
@@ -450,6 +451,42 @@ class rn_batch_normalization(nn.Module):
     def forward(self, x):
         return self.norm(x)
     
+    
+class activated_batch_normalization(nn.Module):
+    """
+    A wrapper for ABN that can be used in rev_block. Since in_channels
+    needs to be sometimes different on the f() and g() paths of a rev_block,
+    it is useful to specify in_channels and out_channels arguments when
+    adding a normalization module to a rev_block.
+    
+    Args:
+        in_channels (int) : The number of input channels.
+        out_channels (int) : The number of output channels.
+        *args : Passed to BatchNorm.
+        **kwargs : Passed to BatchNorm.
+    
+    Returns:
+        out (Variable): The result of the computation.
+    """
+    def __init__(self, in_channels, out_channels, *args,
+                 recompute_on_backward=False, **kwargs):
+        super(activated_batch_normalization, self).__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.recompute_on_backward = recompute_on_backward
+        if 'num_features' in kwargs:
+            raise TypeError("must use \'in_channels\' instead of "
+                            "\'num_features\'")
+        norm = ABN(*args,
+                   num_features=in_channels,
+                   **kwargs)
+        if recompute_on_backward:
+            norm = make_recompute_on_backward([norm])
+        self.norm = norm
+        
+    def forward(self, x):
+        return self.norm(x)
+    
 
 class reversible_basic_block(rev_block):
     """
@@ -485,12 +522,14 @@ class reversible_basic_block(rev_block):
         self.ndim = ndim
         
         # Build block.
-        self.add_module(rn_batch_normalization,
-                        ndim=ndim,
+        bn_nonlin = get_nonlinearity(nonlinearity)
+        if bn_nonlin is not None:
+            bn_nonlin = bn_nonlin()
+        self.add_module(activated_batch_normalization,
                         in_channels=in_channels//2,
                         out_channels=out_channels//2,
+                        activation=bn_nonlin,
                         **norm_kwargs)
-        self.add_module(get_nonlinearity(nonlinearity))
         self.add_module(convolution,
                         ndim=ndim,
                         init=init,
@@ -503,12 +542,11 @@ class reversible_basic_block(rev_block):
         if dropout > 0:
             self.add_module(get_dropout(nonlinearity),
                             p=dropout)
-        self.add_module(rn_batch_normalization,
-                        ndim=ndim,
+        self.add_module(activated_batch_normalization,
                         in_channels=out_channels//2,
                         out_channels=out_channels//2,
+                        activation=bn_nonlin,
                         **norm_kwargs)
-        self.add_module(get_nonlinearity(nonlinearity))
         self.add_module(convolution,
                         ndim=ndim,
                         init=init,
@@ -608,14 +646,13 @@ class dilated_rev_block(block_abstract):
         del self.activations[:]
     
     
-class tiny_block_ot(block_abstract):
-    def __init__(self, in_channels, num_filters, input_patch_size,
+class tiny_block(block_abstract):
+    def __init__(self, in_channels, num_filters, input_patch_size=None,
                  subsample=False, upsample=False, upsample_mode='repeat',
-                 skip=True, dropout=0., normalization=batch_normalization,
-                 norm_kwargs=None, init='kaiming_normal', nonlinearity='ReLU',
-                 ndim=2):
-        super(tiny_block_ot, self).__init__(in_channels, num_filters,
-                                            subsample, upsample)
+                 skip=True, dropout=0., norm_kwargs=None,
+                 init='kaiming_normal', nonlinearity='ReLU', ndim=2):
+        super(tiny_block, self).__init__(in_channels, num_filters,
+                                         subsample, upsample)
         if norm_kwargs is None:
             norm_kwargs = {}
         self.out_channels = num_filters
@@ -623,29 +660,34 @@ class tiny_block_ot(block_abstract):
         self.upsample_mode = upsample_mode
         self.skip = skip
         self.dropout = dropout
-        self.normalization = normalization
         self.norm_kwargs = norm_kwargs
         self.init = init
         self.nonlinearity = nonlinearity
         self.ndim = ndim
         self.op = []
-        if normalization is not None:
-            self.op += [normalization(ndim=ndim,
-                                      num_features=in_channels,
-                                      **norm_kwargs)]
-        self.op += [get_nonlinearity(nonlinearity)()]
+        bn_nonlin = get_nonlinearity(nonlinearity)
+        if bn_nonlin is not None:
+            bn_nonlin = bn_nonlin()
+        self.op += [activated_batch_normalization(in_channels=in_channels,
+                                                  out_channels=in_channels,
+                                                  activation=bn_nonlin,
+                                                  **norm_kwargs)]
         if subsample:
             self.op += [max_pooling(kernel_size=2, ndim=ndim)]
+        padding = 0 if self.input_patch_size is not None else 1
         conv = convolution(in_channels=in_channels,
                            out_channels=num_filters,
                            kernel_size=3, 
                            ndim=ndim,
                            init=init,
-                           padding=0)
-        self.op += [overlap_tile(input_patch_size,
-                                 model=conv,
-                                 in_channels=conv.in_channels,
-                                 out_channels=conv.out_channels)]
+                           padding=padding)
+        if self.input_patch_size is not None:
+            self.op += [overlap_tile(input_patch_size,
+                                     model=conv,
+                                     in_channels=conv.in_channels,
+                                     out_channels=conv.out_channels)]
+        else:
+            self.op += [conv]
         if dropout > 0:
             self.op += [get_dropout(nonlinearity)(dropout)]
         if upsample:
