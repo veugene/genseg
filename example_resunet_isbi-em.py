@@ -118,7 +118,7 @@ if __name__=='__main__':
     optimizer = torch.optim.RMSprop(params=model.parameters(),
                                     lr=0.001, alpha=0.9,
                                     weight_decay=1e-4)
-    loss_function = dice_loss()
+    loss_function = dice_loss().cuda()
     
     '''
     Set up metrics.
