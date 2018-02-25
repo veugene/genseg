@@ -66,8 +66,9 @@ def _unpack_modules(module_stack):
 
 
 def _to_cuda(x, device=None):
-    x.data = x.data.cuda(device)
-    if x._grad is not None:
+    if not x.data.is_cuda:
+        x.data = x.data.cuda(device)
+    if x._grad is not None and not x._grad.is_cuda:
         x._grad.data = x._grad.data.cuda(device)
     return x
 
@@ -88,7 +89,7 @@ def _adjust_tensor_size(x, in_channels, out_channels, subsample=False,
         # Pad with empty channels.
         padded_size = list(out.size())
         padded_size[1] = (out_channels-in_channels)//2
-        pad = Variable(torch.zeros(padded_size), requires_grad=True)
+        pad = Variable(torch.zeros(padded_size), requires_grad=x.requires_grad)
         if x.is_cuda:
             pad = _to_cuda(pad, x.get_device())
         temp = torch.cat([pad, out], dim=1)
@@ -104,10 +105,14 @@ def _unpad(x, in_channels, out_channels):
     if in_channels < out_channels:
         pad_channels = (out_channels-in_channels)//2
         out = x[:,pad_channels:-pad_channels]
-        out = Variable(out.data.contiguous())
+        out.data = out.data.contiguous()
         if x.is_cuda:
             out = _to_cuda(out, out.get_device())
     return out
+
+
+def _split(x):
+    return x[:,:x.size(1)//2], x[:,x.size(1)//2:]
 
 
 class _rev_block_function(Function):
@@ -122,15 +127,8 @@ class _rev_block_function(Function):
     def _forward(x, in_channels, out_channels, f_modules, g_modules,
                  subsample=False, ndim=2):
         
-        x1, x2 = torch.chunk(x, 2, dim=1)
-
+        x1, x2 = _split(x)
         with torch.no_grad():
-            x1 = Variable(x1.data.contiguous())
-            x2 = Variable(x2.data.contiguous())
-            if x.is_cuda:
-                x1 = _to_cuda(x1, x.get_device())
-                x2 = _to_cuda(x2, x.get_device())
-
             x1_ = _adjust_tensor_size(x1, in_channels, out_channels,
                                       subsample, ndim)
             x2_ = _adjust_tensor_size(x2, in_channels, out_channels,
@@ -148,22 +146,17 @@ class _rev_block_function(Function):
             
             y = torch.cat([y1, y2], dim=1)
 
-            del y1, y2
-            del x1, x2
+        del y1, y2
+        del x1, x2
 
         return y
 
     @staticmethod
     def _backward(output, in_channels, out_channels, f_modules, g_modules):
 
-        y1, y2 = torch.chunk(output, 2, dim=1)
+        y1, y2 = _split(output)
+            
         with torch.no_grad():
-            y1 = Variable(y1.data.contiguous())
-            y2 = Variable(y2.data.contiguous())
-            if output.is_cuda:
-                y1 = _to_cuda(y1, output.get_device())
-                y2 = _to_cuda(y2, output.get_device())
-
             # out_channels, out_channels
             x2_ = y2 - _rev_block_function._apply_modules(y1, g_modules)   
             x2 = _unpad(x2_, in_channels, out_channels)
@@ -172,26 +165,27 @@ class _rev_block_function(Function):
             x1_ = y1 - _rev_block_function._apply_modules(x2, f_modules)
             x1 = _unpad(x1_, in_channels, out_channels)
 
-            del y1, y2
+        del y1, y2
 
-            x = torch.cat((x1, x2), 1)
+        x = torch.cat((x1, x2), 1)
+        
         return x
 
     @staticmethod
     def _grad(x, dy, in_channels, out_channels, f_modules, g_modules,
               activations, subsample=False, ndim=2):
-        dy1, dy2 = torch.chunk(dy, 2, dim=1)
-        x1, x2 = torch.chunk(x, 2, dim=1)
+        dy1, dy2 = _split(dy)
+        x1, x2 = _split(x)
+        
+        x1.data = x1.data.contiguous()
+        x2.data = x2.data.contiguous()
+        x1.requires_grad = True
+        x2.requires_grad = True
+        if x.is_cuda:
+            x1 = _to_cuda(x1, x.get_device())
+            x2 = _to_cuda(x2, x.get_device())
 
         with torch.enable_grad():
-            x1 = Variable(x1.data.contiguous(), requires_grad=True)
-            x2 = Variable(x2.data.contiguous(), requires_grad=True)
-            x1.retain_grad()
-            x2.retain_grad()
-            if x.is_cuda:
-                x1 = _to_cuda(x1, x.get_device())
-                x2 = _to_cuda(x2, x.get_device())
-
             x1_ = _adjust_tensor_size(x1, in_channels, out_channels,
                                       subsample, ndim)
             x2_ = _adjust_tensor_size(x2, in_channels, out_channels,
@@ -210,25 +204,23 @@ class _rev_block_function(Function):
             f_params, f_buffs = _unpack_modules(f_modules)
             g_params, g_buffs = _unpack_modules(g_modules)
 
-            dd1 = torch.autograd.grad(y2_, (y1_,)+tuple(g_params), dy2,
-                                      retain_graph=True)
+            dd1 = torch.autograd.grad(y2_, (y1_,)+tuple(g_params), dy2)
             dy2_y1 = dd1[0]
             dgw = dd1[1:]
             dy1_plus = dy2_y1 + dy1
-            dd2 = torch.autograd.grad(y1_, (x1, x2)+tuple(f_params), dy1_plus,
-                                      retain_graph=True)
+            dd2 = torch.autograd.grad(y1_, (x1, x2)+tuple(f_params), dy1_plus)
             dfw = dd2[2:]
 
             dx2 = dd2[1]
-            dx2 += torch.autograd.grad(x2_, x2, dy2, retain_graph=True)[0]
+            dx2 += torch.autograd.grad(x2_, x2, dy2)[0]
             dx1 = dd2[0]
 
-            activations.append(x)
+        activations.append(x)
 
-            y1_.detach_()
-            y2_.detach_()
-            del y1_, y2_
-            dx = torch.cat((dx1, dx2), 1)
+        y1_.detach_()
+        y2_.detach_()
+        del y1_, y2_
+        dx = torch.cat((dx1, dx2), 1)
 
         return dx, dfw, dgw
 
