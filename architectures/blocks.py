@@ -119,6 +119,7 @@ class _rev_block_function(Function):
     @staticmethod
     def _apply_modules(x, modules):
         out = x
+        out.data = out.data.contiguous()
         for m in modules:
             out = m(out)
         return out
