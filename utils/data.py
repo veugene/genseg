@@ -41,7 +41,7 @@ class data_flow_sampler(data_flow):
         min_length = min(len(d) for d in data)
         _data = []
         self.reshuffle_indicator = []
-        for d in data:self.reshuffle_indicator
+        for d in data:
             if len(d) > min_length:
                 d = delayed_view(d, shuffle=True)
                 d = delayed_view(d, idx_min=0, idx_max=min_length)
@@ -55,5 +55,5 @@ class data_flow_sampler(data_flow):
     def flow(self):
         for i, reshuffle in enumerate(self.reshuffle_indicator):
             if reshuffle:
-                self.data[i].arr.shuffle()
+                self.data[i].arr.re_shuffle()
         return super(data_flow_sampler, self).flow()
