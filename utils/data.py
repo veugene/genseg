@@ -2,7 +2,7 @@ from PIL import Image
 from data_tools.wrap import (delayed_view,
                              multi_source_array)
 from data_tools.io import data_flow
-
+import os
 
 class folder_indexer(object):
     """
@@ -13,10 +13,11 @@ class folder_indexer(object):
         self.convert_rgb = convert_rgb
         self.fn_list = sorted(os.listdir(path))
         self.shape = (len(self.fn_list),)
+        self.dtype = 'strings'
       
     def __getitem__(self, index):
         fn = self.fn_list[index]
-        img = Image.open(img_fn)
+        img = Image.open("%s/%s" % (self.path,fn))
         if self.convert_rgb:
             img = img.convert('RGB')
         return img
@@ -37,7 +38,7 @@ class data_flow_sampler(data_flow):
     NOTE: this means that these sources are shuffled, regardless of which
           sampling arguments are passed.
     """
-    def __init__(self, data, reshuffle_indicator, *args, **kwargs):
+    def __init__(self, data, *args, **kwargs):
         min_length = min(len(d) for d in data)
         _data = []
         self.reshuffle_indicator = []
@@ -50,7 +51,7 @@ class data_flow_sampler(data_flow):
                 self.reshuffle_indicator.append(False)
             _data.append(d)
             
-        super(reshuffle_flow, self).__init__(data=_data, *args, **kwargs)
+        super(data_flow_sampler, self).__init__(data=_data, *args, **kwargs)
         
     def flow(self):
         for i, reshuffle in enumerate(self.reshuffle_indicator):
