@@ -1,14 +1,35 @@
-from PIL import Image
+from __future__ import (print_function,
+                        division)
+import os
+import imageio
+import numpy as np
+from skimage import transform
 from data_tools.wrap import (delayed_view,
                              multi_source_array)
 from data_tools.io import data_flow
-import os
+
+
+def resize_stack(arr, size, interp='bilinear'):
+    """
+    Resize each slice of a tensor, assuming the last two dimensions span the
+    slice.
+    """
+    out = np.zeros(arr.shape[:-2]+size, dtype=arr.dtype)
+    for idx in np.ndindex(arr.shape[:-2]):
+        out[idx] = transform.resize(arr[idx],
+                                    output_shape=size,
+                                    mode='constant',
+                                    cval=0,
+                                    clip=True,
+                                    preserve_range=True)
+    return out
+
 
 class folder_indexer(object):
     """
     Single-value index interface for loading images from a folder.
     """
-    def __init__(self, path, convert_rgb=True):
+    def __init__(self, path):
         self.path = path
         self.convert_rgb = convert_rgb
         self.fn_list = sorted(os.listdir(path))
@@ -17,10 +38,7 @@ class folder_indexer(object):
       
     def __getitem__(self, index):
         fn = self.fn_list[index]
-        img = Image.open("%s/%s" % (self.path,fn))
-        if self.convert_rgb:
-            img = img.convert('RGB')
-        return img
+        return imageio.imread(os.path.join(path, img_fn))
     
     def __len__(self):
         return len(self.fn_list)
