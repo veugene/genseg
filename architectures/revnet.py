@@ -248,8 +248,15 @@ def dilated_fcn_hybrid(in_channels, num_blocks, filters, dilation,
     
     # Wrap down and up paths so that activations are recomputed on backprop,
     # rather than saved during the forward pass.
-    blocks_down = [(memoryless_block_wrapper(blocks_down), {})]
-    blocks_up = [(memoryless_block_wrapper(blocks_up), {})]
+    output_sizes = []   # HACK: track output sizes on down, match them on up
+    if len(blocks_down) > 1:
+        blocks_down = [blocks_down[0],
+                       (memoryless_block_wrapper(blocks_down[1:],
+                                                 output_sizes), {})]
+    if len(blocks_up) > 1:
+        blocks_up = [(memoryless_block_wrapper(blocks_up[:-1],
+                                               output_sizes), {}),
+                     blocks_up[-1]]
         
     '''
     Assemble model.

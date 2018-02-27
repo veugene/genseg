@@ -17,8 +17,18 @@ from fcn_maker.blocks import (get_initializer,
                               do_upsample,
                               batch_normalization,
                               block_abstract,
-                              shortcut)
+                              shortcut,
+                              adjust_to_size)
 from .modules import overlap_tile
+
+
+def avg_pooling(ndim=2, *args, **kwargs):
+    if ndim==2:
+        return torch.nn.AvgPool2d(*args, **kwargs)
+    elif ndim==3:
+        return torch.nn.AvgPool3d(*args, **kwargs)
+    else:
+        raise ValueError("ndim must be 2 or 3")
 
 
 """
@@ -412,22 +422,41 @@ class rev_block(nn.Module):
     
 class _make_recompute_on_backward(Function):
     @staticmethod
-    def forward(ctx, x, module_list, *params):
+    def _apply_modules(x, module_list, output_sizes):
+        out = x
+        send = True if len(output_sizes)==0 else False  # HACK
+        for m in module_list:
+            _out = m(out)
+            
+            # HACK: pass or receive output size.
+            if send:
+                output_sizes.append(out.size()[2:])
+            else:   # receive
+                _out = adjust_to_size(_out, size=output_sizes.pop())
+            out = _out
+                    
+        return out
+    
+    @staticmethod
+    def forward(ctx, x, module_list, output_sizes, *params):
         ctx.save_for_backward(x, *params)
         ctx.module_list = module_list
-        out = x
+        ctx.output_sizes = [s for s in output_sizes]    # HACK: copy
         with torch.no_grad():
-            for m in module_list:
-                out = m(out)
+            out = _make_recompute_on_backward._apply_modules(x,
+                                                             module_list,
+                                                             output_sizes)
         return out
-        
+    
+    @staticmethod
     def backward(ctx, grad_out):
         params, buffs = _unpack_modules(ctx.module_list)
         x = ctx.saved_variables[0]
         out = Variable(x.data, requires_grad=True)
         with torch.enable_grad():
-            for i, m in enumerate(ctx.module_list):
-                out = m(out)
+            out = _make_recompute_on_backward._apply_modules(out,
+                                                             ctx.module_list,
+                                                             ctx.output_sizes)
         if x.requires_grad:
             grads = torch.autograd.grad(out, (x,)+tuple(params), grad_out)
             grad_x = grads[0]
@@ -436,17 +465,19 @@ class _make_recompute_on_backward(Function):
             grads = torch.autograd.grad(out, tuple(params), grad_out)
             grad_x = None
             grad_params = grads
-        return (grad_x, None)+tuple(grad_params)
+        return (grad_x, None, None)+tuple(grad_params)
     
     
 class make_recompute_on_backward(nn.Module):
-    def __init__(self, module_list):
+    def __init__(self, module_list, output_sizes=None):
         super(make_recompute_on_backward, self).__init__()
         self.module_list = nn.ModuleList(module_list)
+        self.output_sizes = output_sizes if output_sizes is not None else []
         
     def forward(self, x):
         params, buffs = _unpack_modules(self.module_list)
-        return _make_recompute_on_backward.apply(x, self.module_list, *params)
+        return _make_recompute_on_backward.apply(x, self.module_list,
+                                                 self.output_sizes, *params)
     
     
 class recomputable_norm_nonlin(nn.Module):
@@ -725,7 +756,7 @@ class tiny_block(block_abstract):
                                                   activation=bn_nonlin,
                                                   **norm_kwargs)]
         if subsample:
-            self.op += [max_pooling(kernel_size=2, ndim=ndim)]
+            self.op += [avg_pooling(kernel_size=2, ndim=ndim)]
         padding = 0 if self.input_patch_size is not None else 1
         conv = convolution(in_channels=in_channels,
                            out_channels=num_filters,
@@ -770,7 +801,7 @@ class tiny_block(block_abstract):
         return out
     
 
-def memoryless_block_wrapper(block_list):
+def memoryless_block_wrapper(block_list, output_sizes=None):
     def f(**kwargs):
         # Copy keyword arguments and extract `in_channels` (if it exists) as
         # settings for the first block. Remove any `subsample` or `upsample`
@@ -809,7 +840,8 @@ def memoryless_block_wrapper(block_list):
             block_obj_list.append(block)
             
         # Wrap block list, forcing pass through all blocks on backprop.
-        block_wrapped = make_recompute_on_backward(block_obj_list)
+        block_wrapped = make_recompute_on_backward(block_obj_list,
+                                                   output_sizes=output_sizes)
         
         # Record `in_channels`, and `out_channels` attributes for the
         # resulting object.
