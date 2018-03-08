@@ -8,11 +8,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 from fcn_maker.model import fcn
-from fcn_maker.blocks import tiny_block
+from fcn_maker.blocks import identity_block
 from .blocks import (rev_block,
                      reversible_basic_block,
                      dilated_rev_block,
-                     tiny_block_ot)
+                     tiny_block,
+                     memoryless_block_wrapper)
 
 
 class revnet(nn.Module):
@@ -32,7 +33,8 @@ class revnet(nn.Module):
             classes (int) : The number of classes to predict over.
         """
         super(revnet, self).__init__()
-        self.activations = []
+        self._backprop_buffer = {'activations': [],
+                                 'forward_passes': []}
         self.block = block_type
         self.layers = nn.ModuleList()
 
@@ -43,20 +45,20 @@ class revnet(nn.Module):
 
         for i, group in enumerate(units):
             self.layers.append(self.block(filters[i], filters[i + 1],
-                                          self.activations,
+                                          self._backprop_buffer,
                                           subsample=subsample[i]))
             for unit in range(1, group):
                 self.layers.append(self.block(filters[i + 1],
                                               filters[i + 1],
-                                              self.activations))
+                                              self._backprop_buffer))
         self.bn_last = nn.BatchNorm2d(filters[-1])
         self.fc = nn.Linear(filters[-1], classes)
 
     def forward(self, x):
-        self.free()
+        self._backprop_buffer['forward_passes'].append(0)
         for layer in self.layers:
             x = layer(x)
-        self.activations.append(x)
+        self._backprop_buffer['activations'].append(x)
         x = F.relu(self.bn_last(x))
         x = F.avg_pool2d(x, x.size(2))
         x = x.view(x.size(0), -1)
@@ -64,9 +66,6 @@ class revnet(nn.Module):
 
         return x
     
-    def free(self):
-        del self.activations[:]
-        
         
 def revnet38():
     model = revnet(units=[3, 3, 3],
@@ -185,8 +184,7 @@ def dilated_fcn_hybrid(in_channels, num_blocks, filters, dilation,
                     'upsample_mode': upsample_mode,
                     'nonlinearity': nonlinearity,
                     'init': init,
-                    'ndim': ndim}
-    non_rev_block = tiny_block if patch_size is None else tiny_block_ot
+                    'ndim': ndim}    
     
     '''
     Assemble all necessary blocks.
@@ -199,23 +197,23 @@ def dilated_fcn_hybrid(in_channels, num_blocks, filters, dilation,
     # No normalization or nonlinearity on input.
     kwargs = {'num_filters': filters[0],
               'skip': False,
-              'normalization': None,
               'nonlinearity': None,
               'dropout': dropout,
               'init': init,
               'ndim': ndim}
     if patch_size is not None:
         kwargs['input_patch_size'] = patch_size
-    blocks_down.append((non_rev_block, kwargs))
+    blocks_down.append((tiny_block, kwargs))
 
     # Down
     for i in range(num_downscale):
         kwargs = {'num_filters': filters[i+1],
-                  'skip': short_skip}
+                  'skip': short_skip,
+                  'subsample': True}
         if patch_size is not None:
             kwargs['input_patch_size'] = patch_size
         kwargs.update(block_kwargs)
-        blocks_down.append((non_rev_block, kwargs))
+        blocks_down.append((tiny_block, kwargs))
         
     # Bottleneck, dilated revnet
     kwargs = {'num_filters': filters[num_downscale+1:-num_downscale-1],
@@ -228,11 +226,12 @@ def dilated_fcn_hybrid(in_channels, num_blocks, filters, dilation,
     # Up
     for i in range(num_downscale):
         kwargs = {'num_filters': filters[-num_downscale-1+i],
-                  'skip': short_skip}
+                  'skip': short_skip,
+                  'upsample': True}
         if patch_size is not None:
             kwargs['input_patch_size'] = patch_size
         kwargs.update(block_kwargs)
-        blocks_down.append((non_rev_block, kwargs))
+        blocks_up.append((tiny_block, kwargs))
         
     # The last block is just a convolution.
     # As requested, normalization and nonlinearity applied on input.
@@ -245,13 +244,24 @@ def dilated_fcn_hybrid(in_channels, num_blocks, filters, dilation,
               'ndim': ndim}
     if patch_size is not None:
         kwargs['input_patch_size'] = patch_size
-    blocks_up.append((non_rev_block, kwargs))
-        
-    blocks = blocks_down + blocks_across + blocks_up
+    blocks_up.append((tiny_block, kwargs))
+    
+    # Wrap down and up paths so that activations are recomputed on backprop,
+    # rather than saved during the forward pass.
+    output_sizes = []   # HACK: track output sizes on down, match them on up
+    if len(blocks_down) > 1:
+        blocks_down = [blocks_down[0],
+                       (memoryless_block_wrapper(blocks_down[1:],
+                                                 output_sizes), {})]
+    if len(blocks_up) > 1:
+        blocks_up = [(memoryless_block_wrapper(blocks_up[:-1],
+                                               output_sizes), {}),
+                     blocks_up[-1]]
         
     '''
     Assemble model.
     '''
+    blocks = blocks_down + blocks_across + blocks_up
     model = fcn(in_channels=in_channels,
                 num_classes=num_classes,
                 blocks=blocks,
