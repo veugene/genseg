@@ -3,7 +3,7 @@ from __future__ import (print_function,
 import os
 from collections import OrderedDict
 
-import zarr
+import h5py
 import imageio
 import numpy as np
 from skimage import transform
@@ -88,8 +88,8 @@ def prepare_data_brats(path_hgg, path_lgg):
     Convenience function to prepare brats data as multi_source_array objects,
     split into training and validation subsets.
     
-    path_hgg (string) : Path of the zarr directory containing the HGG data.
-    path_lgg (string) : Path of the zarr directory containing the LGG data.
+    path_hgg (string) : Path of the h5py file containing the HGG data.
+    path_lgg (string) : Path of the h5py file containing the LGG data.
     
     Returns six arrays: healthy slices, sick slices, and segmentations for 
     the training and validation subsets.
@@ -105,9 +105,9 @@ def prepare_data_brats(path_hgg, path_lgg):
     
     
     def _prepare(path, axis, validation_indices):
-        # Open zarr file.
+        # Open h5py file.
         try:
-            zgroup = zarr.open_group(path, mode='r')
+            h5py_file = h5py.File(path, mode='r')
         except:
             print("Failed to open data: {}".format(path))
             raise
@@ -116,8 +116,8 @@ def prepare_data_brats(path_hgg, path_lgg):
         volumes_h = []
         volumes_s = []
         segmentations = []
-        for key in zgroup.keys():   # Per patient.
-            group_p = zgroup[key]
+        for key in h5py_file.keys():   # Per patient.
+            group_p = h5py_file[key]
             volumes_h.append(group_p['healthy/axis_{}'.format(str(axis))])
             volumes_s.append(group_p['sick/axis_{}'.format(str(axis))])
             segmentations.append(\
