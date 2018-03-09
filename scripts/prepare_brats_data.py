@@ -11,12 +11,12 @@ except ImportError:
 import numpy as np
 from scipy import ndimage
 import SimpleITK as sitk
-import zarr
+import h5py
 
 
 def parse():
     parser = argparse.ArgumentParser(description="Prepare BRATS data. Loads "
-        "BRATS 2017 data and stores volume slices in a zarr archive. "
+        "BRATS 2017 data and stores volume slices in an HDF5 archive. "
         "Slices are organized as a group per patient, containing three "
         "groups: \'sick\', \'healthy\', and \'segmentations\'. Sick cases "
         "contain any anomolous class, healthy cases contain no anomalies, and "
@@ -31,7 +31,7 @@ def parse():
                              "Either HGG or LGG.",
                         required=True, type=str)
     parser.add_argument('--save_to',
-                        help="Path to save the zarr archive to.",
+                        help="Path to save the HDF5 file to.",
                         required=True, type=str)
     parser.add_argument('--skip_bias_correction',
                         help="Whether to skip N4 bias correction.",
@@ -133,23 +133,22 @@ def preprocess(volume, segmentation, skip_bias_correction=False):
     return volume_out
 
 
-def process_case(case_num, zarr_storage, volume, segmentation, fn,
+def process_case(case_num, h5py_file, volume, segmentation, fn,
                  skip_bias_correction=False):
     print("Processing case {}: {}".format(case_num, fn))
-    group_p = zarr_storage.create_group(str(case_num))
+    group_p = h5py_file.create_group(str(case_num))
     # TODO: set attribute containing fn.
     for axis in [1,2,3]:
         volume = preprocess(volume, segmentation, skip_bias_correction)
         slices = get_slices(volume, segmentation, axis=axis)
         for key in slices.keys():
             group_k = group_p.require_group(key)
-            compressor = zarr.Blosc(cname='lz4', clevel=5, shuffle=1)
             group_k.create_dataset('axis_{}'.format(axis),
                                    shape=slices[key].shape,
                                    data=slices[key],
                                    dtype=slices[key].dtype,
-                                   chunks=slices[key].shape[1:],
-                                   compressor=compressor)
+                                   chunks=(1,)+slices[key].shape[1:],
+                                   compression='lzf')
                                        
                                        
 class thread_pool_executor(object):
@@ -216,15 +215,14 @@ if __name__=='__main__':
     args = parse()
     #if os.path.exists(args.save_to):
         #raise ValueError("Path to save data already exists. Aborting.")
-    zarr_storage = zarr.open_group(store=args.save_to, mode='w', path="/")
-        
+    h5py_file = h5py.File(args.save_to, mode='w')
     try:
         num_threads = args.num_threads
         if num_threads is None:
             num_threads = os.cpu_count()
         executor = thread_pool_executor(max_workers=num_threads, block=True)
         for i, (vol, seg, fn) in enumerate(data_loader(args.data_dir)):
-            executor.submit(process_case, i, zarr_storage, vol, seg, fn,
+            executor.submit(process_case, i, h5py_file, vol, seg, fn,
                             args.skip_bias_correction)
         executor.shutdown(wait=True)
     except KeyboardInterrupt:
