@@ -18,7 +18,7 @@ class progress_report(object):
         idx_epoch_start = engine.current_iteration - iteration_in_epoch
         for iter_history in engine.history[idx_epoch_start:]:
             loss = iter_history[0]
-            metrics[prefix+'loss'] += loss.item()
+            metrics[prefix+'loss'] += loss
             for name, val in iter_history[-1].items():
                 name = prefix+name
                 if name not in metrics:

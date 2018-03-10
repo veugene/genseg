@@ -580,28 +580,29 @@ class DilatedFCN(nn.Module):
                             padding=0 if padding_type == 'reflect' else 3, bias=use_bias),
                  norm_layer(C*mult[0]),
                  nn.ReLU(True)]
-        #for i in range(len(mult)-1):
-            #resblock = DilatedResnetBlock(
-                #C*mult[i],
-                #C*mult[i+1],
-                #dilation=dilations[i+1],
-                #padding_type=padding_type,
-                #norm_layer=norm_layer,
-                #use_dropout=False,
-                #use_bias=use_bias
-            #)
-            #model += [resblock]
-        if nonlinearity == 'tanh':
-            model += [ nn.Tanh() ]
+        for i in range(len(mult)-1):
+            resblock = DilatedResnetBlock(
+                C*mult[i],
+                C*mult[i+1],
+                dilation=dilations[i+1],
+                padding_type=padding_type,
+                norm_layer=norm_layer,
+                use_dropout=False,
+                use_bias=use_bias
+            )
+            model += [resblock]
         if classes is not None:
             classifier = nn.Conv2d(in_channels=C*mult[i+1],
                                    out_channels=classes,
                                    kernel_size=1)
             model += [classifier]
+        else:
+            model += [nn.Conv2d(in_channels=C*mult[-1], out_channels=3, kernel_size=1), nn.Tanh()]
         self.model = nn.Sequential(*model)
+        self.classes = classes
     def forward(self, x):
         x = self.model(x)
-        if classes is not None:
+        if self.classes is not None:
             e = torch.exp(x - torch.max(x, dim=1, keepdim=True)[0])
             s = torch.sum(e, dim=1, keepdim=True)
             x = e / s
