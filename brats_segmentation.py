@@ -186,10 +186,10 @@ if __name__ == '__main__':
     Set up experiment directory.
     '''
     exp_id = "brats_seg_{0:%Y-%m-%d}_{0:%H-%M-%S}".format(datetime.now())
-    path = os.path.join(args.save_path, exp_id, "cmd.sh")
-    if not os.path.exists(os.path.dirname(path)):
-        os.makedirs(os.path.dirname(path))
-    with open(path, 'w') as f:
+    path = os.path.join(args.save_path, exp_id)
+    if not os.path.exists(path):
+        os.makedirs(path)
+    with open(os.path.join(path, "cmd.sh"), 'w') as f:
         f.write(' '.join(sys.argv))
     if args.model_from is not None:
         model_fn = os.path.basename(args.model_from)
