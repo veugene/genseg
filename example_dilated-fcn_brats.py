@@ -31,49 +31,46 @@ from fcn_maker.blocks import (tiny_block,
 '''
 Process arguments.
 '''
-parser = argparse.ArgumentParser(
-    description='Minimal-ish example code for doing segmentation on BRATS17.')
-parser.add_argument('--arch', type=str, default='fcn_maker')
-parser.add_argument('--data_dir', type=str, default='/home/eugene/data/')
-parser.add_argument('--batch_size', type=int, default=80)
-args = parser.parse_args()
-assert args.arch in ['vanilla_dilated_fcn', 'fcn_maker']
+def parse_args():
+    parser = argparse.ArgumentParser(description="Segmentation on BRATS 2017.")
+    parser.add_argument('--arch', type=str, default='resunet')
+    parser.add_argument('--data_dir', type=str, default='/home/eugene/data/')
+    parser.add_argument('--batch_size', type=int, default=80)
+    args = parser.parse_args()
+    return args
 
 '''
 Settings.
 '''
-if args.arch == 'vanilla_dilated_fcn':
-    model_kwargs = {'in_channels':4, 'C':24, 'classes':3}
-else:
-    model_kwargs = OrderedDict((
-       ('in_channels', 4),
-       ('num_classes', 4),
-       ('num_init_blocks', 1), # 2
-       ('num_main_blocks', 2), # 3
-       ('main_block_depth', 1),
-       ('init_num_filters', 32),
-       ('dropout', 0.05),
-       ('main_block', basic_block),
-       ('init_block', tiny_block),
-       ('norm_kwargs', {'momentum': 0.1}),
-       ('nonlinearity', 'ReLU'),
-       ('ndim', 2)
-    ))
-batch_size = args.batch_size
+model_kwargs_dilated = {'in_channels': 4, 'C': 24, 'classes': 3}
+model_kwargs = OrderedDict((
+    ('in_channels', 4),
+    ('num_classes', 4),
+    ('num_init_blocks', 1),
+    ('num_main_blocks', 2),
+    ('main_block_depth', 1),
+    ('init_num_filters', 32),
+    ('dropout', 0.05),
+    ('main_block', basic_block),
+    ('init_block', tiny_block),
+    ('norm_kwargs', {'momentum': 0.1}),
+    ('nonlinearity', 'ReLU'),
+    ('ndim', 2)
+))
 
-'''
-Set paths.
-'''
-hgg_path = "%s/hgg.h5" % args.data_dir
-lgg_path = "%s/lgg.h5" % args.data_dir
-model_dir = "models"
 
 if __name__ == '__main__':
+    args = parse_args()
+    assert args.arch in ['vanilla_dilated_fcn', 'resunet']
+    if args.arch=='vanilla_dilated_fcn':
+        model_kwargs = model_kwargs_dilated
+    
     '''
     Prepare data -- load, standardize, add channel dim., shuffle, split.
     '''
     # Load
-    data = prepare_data_brats(hgg_path, lgg_path)
+    data = prepare_data_brats(path_hgg=os.path.join(args.data_dir, "hgg.h5"),
+                              path_lgg=os.path.join(args.data_dir, "lgg.h5"))
     data_train = [data['train']['s'], data['train']['m']]
     data_valid = [data['valid']['s'], data['valid']['m']]
     # Prepare data augmentation and data loaders.
@@ -87,7 +84,7 @@ if __name__ == '__main__':
     preprocessor_train = preprocessor_brats(data_augmentation_kwargs=da_kwargs)
     loader_train = data_flow_sampler(data_train,
                                      sample_random=True,
-                                     batch_size=batch_size,
+                                     batch_size=args.batch_size,
                                      preprocessor=preprocessor_train,
                                      nb_io_workers=1,
                                      nb_proc_workers=3,
@@ -95,7 +92,7 @@ if __name__ == '__main__':
     preprocessor_valid = preprocessor_brats(data_augmentation_kwargs=None)
     loader_valid = data_flow_sampler(data_valid,
                                      sample_random=True,
-                                     batch_size=batch_size,
+                                     batch_size=args.batch_size,
                                      preprocessor=preprocessor_valid,
                                      nb_io_workers=1,
                                      nb_proc_workers=0,
