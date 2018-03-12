@@ -30,6 +30,7 @@ from fcn_maker.model import assemble_resunet
 from fcn_maker.blocks import (tiny_block,
                               basic_block)
 
+
 '''
 Process arguments.
 '''
@@ -50,6 +51,7 @@ def parse_args():
     args = parser.parse_args()
     return args
 
+
 '''
 Settings.
 '''
@@ -68,6 +70,70 @@ model_kwargs = OrderedDict((
     ('nonlinearity', 'ReLU'),
     ('ndim', 2)
 ))
+
+
+'''
+Save images on validation.
+'''
+class image_saver(object):
+    def __init__(self, save_path, epoch_length):
+        self.save_path = save_path
+        self.epoch_length = epoch_length
+        self._current_batch_num = 0
+        self._current_epoch = 0
+        
+    def __call__(self, inputs, target, prediction):
+        # Current batch size.
+        this_batch_size = len(target)
+        
+        # Current batch_num, epoch.
+        self._current_batch_num += 1
+        if self._current_batch_num==self.epoch_length:
+            self._current_epoch += 1
+            self._current_batch_num = 0
+            
+        # Make directory.
+        save_dir = os.path.join(self.save_path, str(self._current_epoch))
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+            
+        # Variables to numpy.
+        inputs = inputs.cpu().numpy()
+        target = target.cpu().numpy()
+        prediction = prediction.detach().cpu().numpy()
+        
+        # Visualize.
+        for i in range(this_batch_size):
+            
+            # inputs
+            im_i = []
+            for x in inputs[i]:
+                im_i.append(self._process_slice((x+2)/4.))
+                
+            # target
+            im_t = [self._process_slice(target[i]/4.)]
+            
+            # prediction
+            p = prediction[i]
+            p[0] = 0
+            p[1] *= 1
+            p[2] *= 2
+            p[3] *= 4
+            p = p.max(axis=0)
+            im_p = [self._process_slice(p/4.)]
+            
+            out_image = np.concatenate(im_i+im_t+im_p, axis=1)
+            imsave(os.path.join(save_dir,
+                                "{}_{}.png"
+                                "".format(self._current_batch_num, i)),
+                   out_image)
+        
+    def _process_slice(self, s):
+        s = np.squeeze(s)
+        s = np.clip(s, 0, 1)
+        s[0,0]=1
+        s[0,1]=0
+        return s
 
 
 if __name__ == '__main__':
@@ -134,6 +200,19 @@ if __name__ == '__main__':
         else:
             raise NotImplemented("Optimizer {} not supported."
                                 "".format(args.optimizer))
+        
+    '''
+    Set up experiment directory.
+    '''
+    exp_id = "brats_seg_{0:%Y-%m-%d}_{0:%H-%M-%S}".format(datetime.now())
+    path = os.path.join(args.save_path, exp_id)
+    if not os.path.exists(path):
+        os.makedirs(path)
+    with open(os.path.join(path, "cmd.sh"), 'w') as f:
+        f.write(' '.join(sys.argv))
+    if args.model_from is not None:
+        model_fn = os.path.basename(args.model_from)
+        shutil.copyfile(args.model_from, os.path.join(path, model_fn))
 
     '''
     Set up loss functions and metrics. Since this is a multiclass problem,
@@ -147,6 +226,15 @@ if __name__ == '__main__':
         loss_functions.append(dice)
         metrics_dict['dice{}'.format(l)] = dice
     metrics = metrics_handler(metrics_dict)
+    
+    '''
+    Visualize validation outputs.
+    '''
+    bs = args.batch_size
+    epoch_length = lambda ds : len(ds)//bs + int(len(ds)%bs>0)
+    num_batches_valid = epoch_length(data['valid']['s'])
+    image_saver_valid = image_saver(save_path=os.path.join(path, "validation"),
+                                    epoch_length=num_batches_valid)
 
     '''
     Set up training and evaluation functions.
@@ -179,24 +267,12 @@ if __name__ == '__main__':
             loss = 0.
             for i in range(len(loss_functions)):
                 loss += loss_functions[i](output, batch[1])
-            return loss.data.item(), metrics(output, batch[1])
+        image_saver_valid(batch[0], batch[1], output)
+        return loss.data.item(), metrics(output, batch[1])
     evaluator = Evaluator(validation_function)
 
     '''
-    Set up experiment directory.
-    '''
-    exp_id = "brats_seg_{0:%Y-%m-%d}_{0:%H-%M-%S}".format(datetime.now())
-    path = os.path.join(args.save_path, exp_id)
-    if not os.path.exists(path):
-        os.makedirs(path)
-    with open(os.path.join(path, "cmd.sh"), 'w') as f:
-        f.write(' '.join(sys.argv))
-    if args.model_from is not None:
-        model_fn = os.path.basename(args.model_from)
-        shutil.copyfile(args.model_from, os.path.join(path, model_fn))
-
-    '''
-    Set up logging to screen.
+    Set up logging.
     '''
     bs = args.batch_size
     epoch_length = lambda ds : len(ds)//bs + int(len(ds)%bs>0)
