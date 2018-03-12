@@ -50,10 +50,10 @@ class metrics_handler(object):
     def __init__(self, measure_functions_dict=None):
         self.measure_functions = measure_functions_dict
         if measure_functions_dict is None:
-            self.measure_functions = {}
+            self.measure_functions = OrderedDict()
             
     def __call__(self, output, target):
-        measures = {}
+        measures = OrderedDict()
         for m in self.measure_functions:
             measures[m] = self.measure_functions[m](output, target).data.item()
         return measures

@@ -121,7 +121,7 @@ if __name__ == '__main__':
     '''
     labels = [1,2,4] # 3 classes
     loss_functions = []
-    metrics_dict = {}
+    metrics_dict = OrderedDict()
     for idx,l in enumerate(labels):
         dice = dice_loss(l,idx).cuda()
         loss_functions.append(dice)
