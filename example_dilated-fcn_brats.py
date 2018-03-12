@@ -169,10 +169,14 @@ if __name__ == '__main__':
     '''
     def epoch_length(dataset):
         return len(dataset)//batch_size + int(len(dataset)%batch_size>0)
-    progress_train = progress_report(epoch_length=epoch_length(data['train']['s']))
+    progress_train = progress_report(epoch_length=epoch_length(data['train']['s']),
+                                     logfile=os.path.join(path,
+                                                          "log_train.txt"))
     progress_valid = progress_report(epoch_length=epoch_length(data['valid']['s']),
                                      prefix="val",
-                                     progress_bar=True)
+                                     progress_bar=True,
+                                     logfile=os.path.join(path,
+                                                          "log_valid.txt"))
     trainer.add_event_handler(Events.ITERATION_COMPLETED, progress_train)
     trainer.add_event_handler(Events.EPOCH_COMPLETED,
                               Evaluate(evaluator, loader_valid,

@@ -1,11 +1,14 @@
+from __future__ import print_function
 from collections import OrderedDict
 from tqdm import tqdm
 
 class progress_report(object):
-    def __init__(self, epoch_length, prefix=None, progress_bar=True):
+    def __init__(self, epoch_length, prefix=None, progress_bar=True,
+                 logfile=None):
         self.epoch_length = epoch_length
         self.prefix = prefix
         self.progress_bar = progress_bar
+        self.logfile = logfile
         self.pbar = None
         
     def __call__(self, engine):
@@ -29,6 +32,10 @@ class progress_report(object):
                                     
         
         # Print to screen.
+        def log_string(desc, metrics, file=None):
+            mstr = " ".join(["{}={:.3}".format(*x) for x in metrics.items()])
+            desc = "{}: {}".format(desc, mstr) if len(desc) else mstr
+            print(desc, file=file)
         desc = ""
         if hasattr(engine, 'current_epoch'):
             desc += "Epoch {}".format(engine.current_epoch)
@@ -40,10 +47,10 @@ class progress_report(object):
             if (engine.current_iteration)%self.epoch_length==0:
                 self.pbar.close()
                 self.pbar = None
+                if self.logfile is not None:
+                    log_string(desc, metrics, file=self.logfile)
         else:
-            mstr = " ".join(["{}={:.3}".format(*x) for x in metrics.items()])
-            desc = "{}: {}".format(desc, mstr) if len(desc) else mstr
-            print(desc)
+            log_string(desc, metrics)
             
             
 class metrics_handler(object):
