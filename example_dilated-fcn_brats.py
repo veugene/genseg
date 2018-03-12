@@ -84,18 +84,19 @@ if __name__ == '__main__':
                  'spline_warp': True,
                  'warp_sigma': 5,
                  'warp_grid_size': 3}
-    preprocessor = preprocessor_brats(data_augmentation_kwargs=da_kwargs)
+    preprocessor_train = preprocessor_brats(data_augmentation_kwargs=da_kwargs)
     loader_train = data_flow_sampler(data_train,
                                      sample_random=True,
                                      batch_size=batch_size,
-                                     preprocessor=preprocessor,
+                                     preprocessor=preprocessor_train,
                                      rng=np.random.RandomState(42))
+    preprocessor_valid = preprocessor_brats(data_augmentation_kwargs=None)
     loader_valid = data_flow_sampler(data_valid,
                                      sample_random=True,
                                      batch_size=batch_size,
-                                     preprocessor=preprocessor,
                                      #nb_io_workers=2,
                                      #nb_proc_workers=2,
+                                     preprocessor=preprocessor_valid,
                                      rng=np.random.RandomState(42))
 
     '''
