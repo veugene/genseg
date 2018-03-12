@@ -1,11 +1,13 @@
 from __future__ import (print_function,
                         division)
-from builtins import input
 from collections import OrderedDict
 import sys
+import os
+import shutil
 import argparse
-import numpy as np
+from datetime import datetime
 
+import numpy as np
 from scipy.misc import imsave
 import torch
 from torch.autograd import Variable
@@ -35,7 +37,16 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Segmentation on BRATS 2017.")
     parser.add_argument('--arch', type=str, default='resunet')
     parser.add_argument('--data_dir', type=str, default='/home/eugene/data/')
+    parser.add_argument('--save_path', type=str, default='./experiments')
+    g_load = parser.add_mutually_exclusive_group(required=False)
+    g_load.add_argument('--model_from', type=str, default=None)
+    g_load.add_argument('--load', type=str, default=None)
+    parser.add_argument('-e', '--evaluate', action='store_true')
+    parser.add_argument('--weight_decay', type=float, default=1e-4)
     parser.add_argument('--batch_size', type=int, default=80)
+    parser.add_argument('--epochs', type=int, default=200)
+    parser.add_argument('--learning_rate', type=float, default=0.001)
+    parser.add_argument('--optimizer', type=str, default='RMSprop')
     args = parser.parse_args()
     return args
 
@@ -101,22 +112,32 @@ if __name__ == '__main__':
     '''
     Prepare model.
     '''
-    torch.backends.cudnn.benchmark = True
-    if args.arch == 'vanilla_dilated_fcn':
-        model = DilatedFCN(**model_kwargs)
+    if args.model_from is not None:
+        raise NotImplemented("Loading model with \'--model_from\' not "
+                             "implemented.")
+    elif args.load is not None:
+        raise NotImplemented("Loading model with \'--load\' not implemented.")
     else:
-        model = assemble_resunet(**model_kwargs)
-    print(model)
-    print("Number of params: %i" % count_params(model))
-    model.cuda()
-    optimizer = torch.optim.RMSprop(params=model.parameters(),
-                                    lr=0.001, alpha=0.9,
-                                    weight_decay=1e-4)
+        torch.backends.cudnn.benchmark = False   # profiler
+        if args.arch == 'vanilla_dilated_fcn':
+            model = DilatedFCN(**model_kwargs)
+            print(model)
+        else:
+            model = assemble_resunet(**model_kwargs)
+        print("Number of parameters: {}".format(count_params(model)))
+        model.cuda()
+        if args.optimizer=='RMSprop':
+            optimizer = torch.optim.RMSprop(params=model.parameters(),
+                                            lr=args.learning_rate,
+                                            alpha=0.9,
+                                            weight_decay=args.weight_decay)
+        else:
+            raise NotImplemented("Optimizer {} not supported."
+                                "".format(args.optimizer))
 
     '''
-    Set up loss functions and metrics. Since this is
-    a multiclass problem, set up a metrics handler for
-    each output map.
+    Set up loss functions and metrics. Since this is a multiclass problem,
+    set up a metrics handler for each output map.
     '''
     labels = [0,1,2,4] # 4 classes
     loss_functions = []
@@ -162,28 +183,44 @@ if __name__ == '__main__':
     evaluator = Evaluator(validation_function)
 
     '''
+    Set up experiment directory.
+    '''
+    exp_id = "brats_seg_{0:%Y-%m-%d}_{0:%H-%M-%S}".format(datetime.now())
+    path = os.path.join(args.save_path, exp_id, "cmd.sh")
+    if not os.path.exists(os.path.dirname(path)):
+        os.makedirs(os.path.dirname(path))
+    with open(path, 'w') as f:
+        f.write(' '.join(sys.argv))
+    if args.model_from is not None:
+        model_fn = os.path.basename(args.model_from)
+        shutil.copyfile(args.model_from, os.path.join(path, model_fn))
+
+    '''
     Set up logging to screen.
     '''
-    def epoch_length(dataset):
-        return len(dataset)//batch_size + int(len(dataset)%batch_size>0)
-    progress_train = progress_report(epoch_length=epoch_length(data['train']['s']),
+    bs = args.batch_size
+    epoch_length = lambda ds : len(ds)//bs + int(len(ds)%bs>0)
+    num_batches_train = epoch_length(data['train']['s'])
+    num_batches_valid = epoch_length(data['valid']['s'])
+    progress_train = progress_report(epoch_length=num_batches_train,
                                      logfile=os.path.join(path,
                                                           "log_train.txt"))
-    progress_valid = progress_report(epoch_length=epoch_length(data['valid']['s']),
+    progress_valid = progress_report(epoch_length=num_batches_valid,
                                      prefix="val",
                                      progress_bar=True,
                                      logfile=os.path.join(path,
                                                           "log_valid.txt"))
     trainer.add_event_handler(Events.ITERATION_COMPLETED, progress_train)
     trainer.add_event_handler(Events.EPOCH_COMPLETED,
-                              Evaluate(evaluator, loader_valid,
+                              Evaluate(evaluator,
+                                       loader_valid,
                                        epoch_interval=1))
     evaluator.add_event_handler(Events.ITERATION_COMPLETED, progress_valid)
 
     '''
     Train.
     '''
-    trainer.run(loader_train, max_epochs=20)
+    trainer.run(loader_train, max_epochs=args.epochs)
 
     '''
     Predict and save images. Right now, this is just
