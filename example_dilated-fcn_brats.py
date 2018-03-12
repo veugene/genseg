@@ -89,14 +89,16 @@ if __name__ == '__main__':
                                      sample_random=True,
                                      batch_size=batch_size,
                                      preprocessor=preprocessor_train,
+                                     nb_io_workers=1,
+                                     nb_proc_workers=3,
                                      rng=np.random.RandomState(42))
     preprocessor_valid = preprocessor_brats(data_augmentation_kwargs=None)
     loader_valid = data_flow_sampler(data_valid,
                                      sample_random=True,
                                      batch_size=batch_size,
-                                     #nb_io_workers=2,
-                                     #nb_proc_workers=2,
                                      preprocessor=preprocessor_valid,
+                                     nb_io_workers=1,
+                                     nb_proc_workers=0,
                                      rng=np.random.RandomState(42))
 
     '''
