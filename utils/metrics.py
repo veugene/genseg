@@ -24,4 +24,4 @@ class dice_loss(torch.nn.Module):
 
     def forward(self, y_pred, y_true):
         idx = self.target_index
-        return self._dice_loss(y_pred[:,idx:(idx+1)], y_true)
+        return self._dice_loss(y_pred[:,idx:(idx+1)].contiguous(), y_true)
