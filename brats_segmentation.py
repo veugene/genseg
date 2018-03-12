@@ -203,13 +203,13 @@ if __name__ == '__main__':
     num_batches_train = epoch_length(data['train']['s'])
     num_batches_valid = epoch_length(data['valid']['s'])
     progress_train = progress_report(epoch_length=num_batches_train,
-                                     logfile=os.path.join(path,
-                                                          "log_train.txt"))
+                                     log_path=os.path.join(path,
+                                                           "log_train.txt"))
     progress_valid = progress_report(epoch_length=num_batches_valid,
                                      prefix="val",
                                      progress_bar=True,
-                                     logfile=os.path.join(path,
-                                                          "log_valid.txt"))
+                                     log_path=os.path.join(path,
+                                                           "log_valid.txt"))
     trainer.add_event_handler(Events.ITERATION_COMPLETED, progress_train)
     trainer.add_event_handler(Events.EPOCH_COMPLETED,
                               Evaluate(evaluator,
