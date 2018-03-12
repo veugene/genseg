@@ -47,7 +47,7 @@ if args.arch == 'vanilla_dilated_fcn':
 else:
     model_kwargs = OrderedDict((
        ('in_channels', 4),
-       ('num_classes', 3),
+       ('num_classes', 4),
        ('num_init_blocks', 1), # 2
        ('num_main_blocks', 2), # 3
        ('main_block_depth', 1),
@@ -121,7 +121,7 @@ if __name__ == '__main__':
     a multiclass problem, set up a metrics handler for
     each output map.
     '''
-    labels = [1,2,4] # 3 classes
+    labels = [0,1,2,4] # 4 classes
     loss_functions = []
     metrics_dict = OrderedDict()
     for idx,l in enumerate(labels):
