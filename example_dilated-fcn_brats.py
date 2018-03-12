@@ -144,6 +144,7 @@ if __name__ == '__main__':
         loss = 0.
         for i in range(len(loss_functions)):
             loss += loss_functions[i](output, batch[1])
+        loss /= len(loss_functions) # average
         loss.backward()
         optimizer.step()
         return loss.data.item(), metrics(output, batch[1])
