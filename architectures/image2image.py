@@ -545,8 +545,7 @@ class DilatedFCN(nn.Module):
                  mult=[2,2,4,8,16,32,32,1],
                  dilations=[1,1,2,4,8,16,1,1],
                  norm_layer=nn.BatchNorm2d,
-                 padding_type='reflect',
-                 nonlinearity='tanh'):
+                 padding_type='reflect'):
         """
         Parameters
         ----------
@@ -561,11 +560,8 @@ class DilatedFCN(nn.Module):
         norm_layer: layer to use for normalisation. Default is batch norm.
         padding_type: the type of padding to use. Can be either 'reflect'
           for reflection padding or 'zero' for zero padding.
-        nonlinearity: the nonlinearity used at the last layer of the network.
-          At the moment this can be set to either 'tanh' or 'none'.
         """
         assert len(mult) == len(dilations)
-        assert nonlinearity in ['tanh', 'none'] # TODO
         assert padding_type in ['reflect', 'zero']
         super(DilatedFCN, self).__init__()
         if type(norm_layer) == functools.partial:
