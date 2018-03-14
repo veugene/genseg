@@ -5,20 +5,34 @@ from collections import OrderedDict
 from scipy.misc import imsave
 from tqdm import tqdm
 
+
 class progress_report(object):
-    def __init__(self, prefix=None, progress_bar=True,
+    def __init__(self, epoch_length=None, prefix=None, progress_bar=True,
                  log_path=None):
+        self.epoch_length = epoch_length
         self.prefix = prefix
         self.progress_bar = progress_bar
         self.log_path = log_path
         self._pbar = None
         self.metrics = None
 
+    def log_string(self, desc, metrics, file=None):
+        mstr = " ".join(["{}={:.3}".format(*x) for x in metrics.items()])
+        desc = "{}: {}".format(desc, mstr) if len(desc) else mstr
+        print(desc, file=file)
+       
     def __call__(self, engine, state):
+        if self.epoch_length is None:
+            # If no epoch length is defined, see if we can pull it
+            # out of the data loader.
+            if hasattr(state.dataloader, '__len__'):
+                self.epoch_length = len(state.dataloader)
+            else:
+                self.epoch_length = np.inf
         prefix = ""
         if self.prefix is not None:
             prefix = "{}_".format(self.prefix)
-        if (state.iteration-1) % len(state.dataloader) == 0:
+        if (state.iteration-1) % self.epoch_length == 0:
             # Every time we're at the start of the next epoch, reset
             # the statistics.
             self.metrics = OrderedDict(((prefix+'loss', 0),))
@@ -33,28 +47,24 @@ class progress_report(object):
         # Average metrics over the epoch thus far.
         metrics = OrderedDict()
         for name in self.metrics:
-            metrics[name] = self.metrics[name] / float(state.iteration)
+            metrics[name] = self.metrics[name] / ((float(state.iteration) % self.epoch_length)+1)
         # Print to screen.
-        def log_string(desc, metrics, file=None):
-            mstr = " ".join(["{}={:.3}".format(*x) for x in metrics.items()])
-            desc = "{}: {}".format(desc, mstr) if len(desc) else mstr
-            print(desc, file=file)
         desc = ""
         if hasattr(state, 'epoch'):
             desc += "Epoch {}".format(state.epoch)
         if self.progress_bar:
             if self._pbar is None:
-                self._pbar = tqdm(total=len(state.dataloader), desc=desc)
+                self._pbar = tqdm(total=self.epoch_length, desc=desc)
             self._pbar.set_postfix(metrics)
             self._pbar.update(1)
-            if state.iteration % len(state.dataloader) == 0:
+            if state.iteration % self.epoch_length == 0:
                 self._pbar.close()
                 self._pbar = None
                 if self.log_path is not None:
                     with open(self.log_path, 'a') as logfile:
-                        log_string(desc, metrics, file=logfile)
+                        self.log_string(desc, metrics, file=logfile)
         else:
-            log_string(desc, metrics)
+            self.log_string(desc, metrics)
 
 
 class metrics_handler(object):

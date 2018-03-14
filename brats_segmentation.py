@@ -7,6 +7,7 @@ import shutil
 import argparse
 from datetime import datetime
 import warnings
+import imp
 
 import numpy as np
 from scipy.misc import imsave
@@ -20,8 +21,7 @@ from ignite.handlers import ModelCheckpoint
 
 from architectures.image2image import DilatedFCN
 from utils.ignite import (progress_report,
-                          metrics_handler,
-                          image_saver)
+                          metrics_handler)
 from utils.metrics import (dice_loss,
                            accuracy)
 from utils.data import data_flow_sampler
@@ -38,11 +38,11 @@ Process arguments.
 '''
 def parse_args():
     parser = argparse.ArgumentParser(description="Segmentation on BRATS 2017.")
-    parser.add_argument('--name', type=str, default=None)
+    parser.add_argument('--name', type=str, default="brats_seg")
     parser.add_argument('--data_dir', type=str, default='/home/eugene/data/')
     parser.add_argument('--save_path', type=str, default='./experiments')
     g_load = parser.add_mutually_exclusive_group(required=False)
-    g_load.add_argument('--model_from', type=str, default='resunet')
+    g_load.add_argument('--model_from', type=str, default='configs/resunet.py')
     g_load.add_argument('--resume', type=str, default=None)
     parser.add_argument('-e', '--evaluate', action='store_true')
     parser.add_argument('--weight_decay', type=float, default=1e-4)
@@ -50,11 +50,85 @@ def parse_args():
     parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument('--learning_rate', type=float, default=0.001)
     parser.add_argument('--optimizer', type=str, default='RMSprop')
-    parser.add_argument('--cuda', type=bool, default=True)
+    parser.add_argument('--cpu', default=False, action='store_true')
     args = parser.parse_args()
     return args
 
-  
+
+def get_optimizer(name, model, lr):
+    if name == 'RMSprop':
+        optimizer = torch.optim.RMSprop(params=model.parameters(),
+                                        lr=lr,
+                                        alpha=0.9,
+                                        weight_decay=args.weight_decay)
+        return optimizer
+    else:
+        raise NotImplemented("Optimizer {} not supported."
+                            "".format(args.optimizer))
+
+'''
+Save images on validation.
+'''
+class image_saver(object):
+    def __init__(self, save_path, epoch_length):
+        self.save_path = save_path
+        self.epoch_length = epoch_length
+        self._current_batch_num = 0
+        self._current_epoch = 0
+
+    def __call__(self, inputs, target, prediction):
+        # Current batch size.
+        this_batch_size = len(target)
+
+        # Current batch_num, epoch.
+        self._current_batch_num += 1
+        if self._current_batch_num==self.epoch_length:
+            self._current_epoch += 1
+            self._current_batch_num = 0
+
+        # Make directory.
+        save_dir = os.path.join(self.save_path, str(self._current_epoch))
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+
+        # Variables to numpy.
+        inputs = inputs.cpu().numpy()
+        target = target.cpu().numpy()
+        prediction = prediction.detach().cpu().numpy()
+
+        # Visualize.
+        for i in range(this_batch_size):
+
+            # inputs
+            im_i = []
+            for x in inputs[i]:
+                im_i.append(self._process_slice((x+2)/4.))
+
+            # target
+            im_t = [self._process_slice(target[i]/4.)]
+
+            # prediction
+            p = prediction[i]
+            p[0] = 0
+            p[1] *= 1
+            p[2] *= 2
+            p[3] *= 4
+            p = p.max(axis=0)
+            im_p = [self._process_slice(p/4.)]
+
+            out_image = np.concatenate(im_i+im_t+im_p, axis=1)
+            imsave(os.path.join(save_dir,
+                                "{}_{}.png"
+                                "".format(self._current_batch_num, i)),
+                   out_image)
+
+    def _process_slice(self, s):
+        s = np.squeeze(s)
+        s = np.clip(s, 0, 1)
+        s[0,0]=1
+        s[0,1]=0
+        return s
+    
 if __name__ == '__main__':
     args = parse_args()
 
@@ -91,17 +165,6 @@ if __name__ == '__main__':
                                      nb_proc_workers=0,
                                      rng=np.random.RandomState(42))
 
-    def get_optimizer(name, model, lr):
-        if name == 'RMSprop':
-            optimizer = torch.optim.RMSprop(params=model.parameters(),
-                                            lr=lr,
-                                            alpha=0.9,
-                                            weight_decay=args.weight_decay)
-            return optimizer
-        else:
-            raise NotImplemented("Optimizer {} not supported."
-                                "".format(args.optimizer))
-
     '''
     Prepare model. The `resume` arg is able to restore the model,
     its state, and the optimizer's state, whereas `model_from`
@@ -109,19 +172,36 @@ if __name__ == '__main__':
     desired architecture.
     '''
     torch.backends.cudnn.benchmark = False   # profiler
+    exp_id = None
     if args.resume is not None:
         saved_dict = torch.load(args.resume)
-        model = getattr(configs, saved_dict['model_from'])()
-        if args.cuda:
+        exp_id = saved_dict['exp_id']
+        # Extract the module string, then turn it into a module.
+        # From this, we can invoke the model creation function and
+        # load its saved weights.
+        module_as_str = saved_dict['module_as_str']
+        module = imp.new_module('model_from')
+        exec(module_as_str, module.__dict__)
+        model = getattr(module, 'build_model')()
+        if not args.cpu:
             model.cuda()
+        # Load weights and optimizer state.
         model.load_state_dict(saved_dict['weights'])
         optimizer = get_optimizer(args.optimizer, model, args.learning_rate)
-        #import pdb
-        #pdb.set_trace()
         optimizer.load_state_dict(saved_dict['optim'])
     else:
-        model = getattr(configs, args.model_from)()
-        if args.cuda:
+        # If `model_from` is a .py file, then we import that as a module
+        # and load the model. Otherwise, we assume it's a pickle, and
+        # we load it, extract the module contained inside, and load it
+        if args.model_from.endswith(".py"):
+            module = imp.load_source('model_from', args.model_from)
+            module_as_str = open(args.model_from).read()
+        else:
+            module_as_str = torch.load(args.model_from)['module_as_str']
+            module = imp.new_module('model_from')
+            exec(module_as_str, module.__dict__)
+        model = getattr(module, 'build_model')()
+        if not args.cpu:
             model.cuda()
         optimizer = get_optimizer(args.optimizer, model, args.learning_rate)
     print("Number of parameters: {}".format(count_params(model)))
@@ -129,8 +209,8 @@ if __name__ == '__main__':
     '''
     Set up experiment directory.
     '''
-    name = "brats_seg" if args.name is None else args.name
-    exp_id = "%s_{0:%Y-%m-%d}_{0:%H-%M-%S}".format(datetime.now()) % name
+    if exp_id is None:
+        exp_id = "{}_{}".format(args.name, "{0:%Y-%m-%d}_{0:%H-%M-%S}".format(datetime.now()))
     path = os.path.join(args.save_path, exp_id)
     if not os.path.exists(path):
         os.makedirs(path)
@@ -146,7 +226,7 @@ if __name__ == '__main__':
     metrics_dict = OrderedDict()
     for idx,l in enumerate(labels):
         dice = dice_loss(l,idx)
-        if args.cuda:
+        if not args.cpu:
             dice = dice.cuda()
         loss_functions.append(dice)
         metrics_dict['dice{}'.format(l)] = dice
@@ -168,7 +248,7 @@ if __name__ == '__main__':
         b0, b1 = batch
         b0 = Variable(torch.from_numpy(np.array(b0)))
         b1 = Variable(torch.from_numpy(np.array(b1)))
-        if args.cuda:
+        if not args.cpu:
             b0 = b0.cuda()
             b1 = b1.cuda()
         return b0, b1
@@ -195,15 +275,16 @@ if __name__ == '__main__':
             loss = 0.
             for i in range(len(loss_functions)):
                 loss += loss_functions[i](output, batch[1])
-            image_saver_valid(batch[0], batch[1], output)
-            return loss.data.item(), metrics(output, batch[1])
+            loss /= len(loss_functions) # average
+        image_saver_valid(batch[0], batch[1], output)
+        return loss.data.item(), metrics(output, batch[1])
     evaluator = Evaluator(validation_function)
     
     '''
     Set up logging to screen.
     '''
     bs = args.batch_size
-    progress_train = progress_report(prefix="tr",
+    progress_train = progress_report(prefix=None,
                                      log_path=os.path.join(path,
                                                            "log_train.txt"))
     progress_valid = progress_report(prefix="val",
@@ -220,8 +301,9 @@ if __name__ == '__main__':
     trainer.add_event_handler(Events.EPOCH_COMPLETED,
                               cpt_handler,
                               {'model':
-                               {'weights': model.state_dict(),
-                                'model_from': args.model_from,
+                               {'exp_id': exp_id,
+                                'weights': model.state_dict(),
+                                'module_as_str': module_as_str,
                                 'optim': optimizer.state_dict()}
                               })
     trainer.add_event_handler(Events.EPOCH_COMPLETED,
