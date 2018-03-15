@@ -21,7 +21,8 @@ from ignite.handlers import ModelCheckpoint
 
 from architectures.image2image import DilatedFCN
 from utils.ignite import (progress_report,
-                          metrics_handler)
+                          metrics_handler,
+                          scoring_function)
 from utils.metrics import (dice_loss,
                            accuracy)
 from utils.data import data_flow_sampler
@@ -51,6 +52,7 @@ def parse_args():
     parser.add_argument('--learning_rate', type=float, default=0.001)
     parser.add_argument('--optimizer', type=str, default='RMSprop')
     parser.add_argument('--cpu', default=False, action='store_true')
+    parser.add_argument('--gpu_id', type=int, default=0)
     args = parser.parse_args()
     return args
 
@@ -76,7 +78,10 @@ class image_saver(object):
         self._current_batch_num = 0
         self._current_epoch = 0
 
-    def __call__(self, inputs, target, prediction):
+    def __call__(self, engine, state):
+
+        inputs, target, prediction = state.output[1]
+
         # Current batch size.
         this_batch_size = len(target)
 
@@ -97,6 +102,7 @@ class image_saver(object):
         prediction = prediction.detach().cpu().numpy()
 
         # Visualize.
+        all_imgs = []
         for i in range(this_batch_size):
 
             # inputs
@@ -117,10 +123,10 @@ class image_saver(object):
             im_p = [self._process_slice(p/4.)]
 
             out_image = np.concatenate(im_i+im_t+im_p, axis=1)
-            imsave(os.path.join(save_dir,
-                                "{}_{}.png"
-                                "".format(self._current_batch_num, i)),
-                   out_image)
+            all_imgs.append(out_image)
+        imsave(os.path.join(save_dir,
+                            "{}.png".format(self._current_batch_num)),
+                            np.vstack(all_imgs))
 
     def _process_slice(self, s):
         s = np.squeeze(s)
@@ -128,7 +134,7 @@ class image_saver(object):
         s[0,0]=1
         s[0,1]=0
         return s
-    
+
 if __name__ == '__main__':
     args = parse_args()
 
@@ -184,7 +190,7 @@ if __name__ == '__main__':
         exec(module_as_str, module.__dict__)
         model = getattr(module, 'build_model')()
         if not args.cpu:
-            model.cuda()
+            model.cuda(args.gpu_id)
         # Load weights and optimizer state.
         model.load_state_dict(saved_dict['weights'])
         optimizer = get_optimizer(args.optimizer, model, args.learning_rate)
@@ -202,7 +208,7 @@ if __name__ == '__main__':
             exec(module_as_str, module.__dict__)
         model = getattr(module, 'build_model')()
         if not args.cpu:
-            model.cuda()
+            model.cuda(args.gpu_id)
         optimizer = get_optimizer(args.optimizer, model, args.learning_rate)
     print("Number of parameters: {}".format(count_params(model)))
 
@@ -227,7 +233,7 @@ if __name__ == '__main__':
     for idx,l in enumerate(labels):
         dice = dice_loss(l,idx)
         if not args.cpu:
-            dice = dice.cuda()
+            dice = dice.cuda(args.gpu_id)
         loss_functions.append(dice)
         metrics_dict['dice{}'.format(l)] = dice
     metrics = metrics_handler(metrics_dict)
@@ -249,8 +255,8 @@ if __name__ == '__main__':
         b0 = Variable(torch.from_numpy(np.array(b0)))
         b1 = Variable(torch.from_numpy(np.array(b1)))
         if not args.cpu:
-            b0 = b0.cuda()
-            b1 = b1.cuda()
+            b0 = b0.cuda(args.gpu_id)
+            b1 = b1.cuda(args.gpu_id)
         return b0, b1
 
     def training_function(batch):
@@ -276,8 +282,7 @@ if __name__ == '__main__':
             for i in range(len(loss_functions)):
                 loss += loss_functions[i](output, batch[1])
             loss /= len(loss_functions) # average
-        image_saver_valid(batch[0], batch[1], output)
-        return loss.data.item(), metrics(output, batch[1])
+        return loss.data.item(), (batch[0], batch[1], output), metrics(output, batch[1])
     evaluator = Evaluator(validation_function)
     
     '''
@@ -293,8 +298,8 @@ if __name__ == '__main__':
     trainer.add_event_handler(Events.ITERATION_COMPLETED, progress_train)
     cpt_handler = ModelCheckpoint(dirname=path,
                                   filename_prefix='weights',
-                                  save_interval=1,
                                   n_saved=5,
+                                  score_function=scoring_function(),
                                   atomic=False,
                                   exist_ok=True,
                                   create_dir=True)
@@ -309,6 +314,7 @@ if __name__ == '__main__':
     trainer.add_event_handler(Events.EPOCH_COMPLETED,
                               lambda engine, state: evaluator.run(loader_valid))
     evaluator.add_event_handler(Events.ITERATION_COMPLETED, progress_valid)
+    evaluator.add_event_handler(Events.ITERATION_COMPLETED, image_saver_valid)
 
     '''
     Train.

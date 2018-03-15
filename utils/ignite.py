@@ -82,6 +82,31 @@ class metrics_handler(object):
     def add(self, metric_name, function):
         self.measure_functions[metric_name] = function
 
+class scoring_function(object):
+    def __init__(self, loss_name=None, period=1):
+        """
+        loss_name : loss to monitor. This is one of the keys in
+          state.output[-1] of the trainer.
+        period : only consider saving the best model every
+          this many epochs.
+        """
+        self.loss_name = loss_name
+        self.period = period
+        self.epochs_since_last_save = 0
+    def __call__(self, state):
+        self.epochs_since_last_save += 1
+        if self.epochs_since_last_save >= self.period:
+            self.epochs_since_last_save = 0
+            if self.loss_name is not None:
+                quantity = state.output[-1][self.loss_name]
+            else:
+                quantity = state.output[0]
+            # Since we're always trying to minimize things, return
+            # the -ve of whatever that is.
+            return -quantity
+        else:
+            return -np.inf
+
 '''
 Save images on validation.
 '''
