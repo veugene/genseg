@@ -36,6 +36,7 @@ class progress_report(object):
             # Every time we're at the start of the next epoch, reset
             # the statistics.
             self.metrics = OrderedDict(((prefix+'loss', 0),))
+            setattr(state, prefix+"metrics", self.metrics)
         iter_history = state.output # only this iteration's history
         loss = iter_history[0]
         self.metrics[prefix+'loss'] += loss
@@ -46,8 +47,9 @@ class progress_report(object):
             self.metrics[name] += val
         # Average metrics over the epoch thus far.
         metrics = OrderedDict()
+        denom = ((float(state.iteration)-1) % self.epoch_length) + 1
         for name in self.metrics:
-            metrics[name] = self.metrics[name] / ((float(state.iteration) % self.epoch_length)+1)
+            metrics[name] = self.metrics[name] / denom
         # Print to screen.
         desc = ""
         if hasattr(state, 'epoch'):
@@ -83,13 +85,18 @@ class metrics_handler(object):
         self.measure_functions[metric_name] = function
 
 class scoring_function(object):
-    def __init__(self, loss_name=None, period=1):
+    def __init__(self, metrics_name, loss_name=None, period=1):
         """
+        metrics_name : the name of the dictionary in the state
+          object storing the metrics to monitor.
         loss_name : loss to monitor. This is one of the keys in
           state.output[-1] of the trainer.
         period : only consider saving the best model every
           this many epochs.
         """
+        self.metrics_name = metrics_name
+        if loss_name is None:
+            loss_name = 'val_loss'
         self.loss_name = loss_name
         self.period = period
         self.epochs_since_last_save = 0
@@ -97,10 +104,7 @@ class scoring_function(object):
         self.epochs_since_last_save += 1
         if self.epochs_since_last_save >= self.period:
             self.epochs_since_last_save = 0
-            if self.loss_name is not None:
-                quantity = state.output[-1][self.loss_name]
-            else:
-                quantity = state.output[0]
+            quantity = getattr(state, self.metrics_name)[self.loss_name]
             # Since we're always trying to minimize things, return
             # the -ve of whatever that is.
             return -quantity

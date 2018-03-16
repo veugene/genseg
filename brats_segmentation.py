@@ -296,25 +296,25 @@ if __name__ == '__main__':
                                      log_path=os.path.join(path,
                                                            "log_valid.txt"))
     trainer.add_event_handler(Events.ITERATION_COMPLETED, progress_train)
-    cpt_handler = ModelCheckpoint(dirname=path,
-                                  filename_prefix='weights',
-                                  n_saved=5,
-                                  score_function=scoring_function(),
-                                  atomic=False,
-                                  exist_ok=True,
-                                  create_dir=True)
-    trainer.add_event_handler(Events.EPOCH_COMPLETED,
-                              cpt_handler,
-                              {'model':
-                               {'exp_id': exp_id,
-                                'weights': model.state_dict(),
-                                'module_as_str': module_as_str,
-                                'optim': optimizer.state_dict()}
-                              })
     trainer.add_event_handler(Events.EPOCH_COMPLETED,
                               lambda engine, state: evaluator.run(loader_valid))
     evaluator.add_event_handler(Events.ITERATION_COMPLETED, progress_valid)
     evaluator.add_event_handler(Events.ITERATION_COMPLETED, image_saver_valid)
+    cpt_handler = ModelCheckpoint(dirname=path,
+                                  filename_prefix='weights',
+                                  n_saved=5,
+                                  score_function=scoring_function("val_metrics"),
+                                  atomic=False,
+                                  exist_ok=True,
+                                  create_dir=True)
+    evaluator.add_event_handler(Events.COMPLETED,
+                                cpt_handler,
+                                {'model':
+                                 {'exp_id': exp_id,
+                                  'weights': model.state_dict(),
+                                  'module_as_str': module_as_str,
+                                  'optim': optimizer.state_dict()}
+                                })
 
     '''
     Train.
