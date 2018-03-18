@@ -48,7 +48,7 @@ def parse_args():
     parser.add_argument('--data_dir', type=str, default='/home/eugene/data/')
     parser.add_argument('--save_path', type=str, default='./experiments')
     g_load = parser.add_mutually_exclusive_group(required=False)
-    g_load.add_argument('--model_from', type=str, default='configs/resunet.py')
+    g_load.add_argument('--model_from', type=str, default='configs_cyclegan/baseline.py')
     g_load.add_argument('--resume', type=str, default=None)
     parser.add_argument('-e', '--evaluate', action='store_true')
     parser.add_argument('--weight_decay', type=float, default=1e-4)
@@ -64,7 +64,7 @@ def parse_args():
     return args
 
 
-def get_optimizer(name, params, lr):
+def _get_optimizer(name, params, lr):
     if name == 'adam':
         optimizer = torch.optim.Adam(params=params,
                                         lr=lr,
@@ -75,6 +75,22 @@ def get_optimizer(name, params, lr):
         raise NotImplemented("Optimizer {} not supported."
                             "".format(args.optimizer))
 
+def get_optimizers(name, g_params, d_a_params, d_b_params, lr):
+    optimizer = {
+        'g': _get_optimizer(
+            args.optimizer,
+            g_params,
+            args.learning_rate),
+        'd_a': _get_optimizer(
+            args.optimizer,
+            d_a_params,
+            args.learning_rate),
+        'd_b': _get_optimizer(
+            args.optimizer,
+            d_b_params,
+            args.learning_rate)
+    }
+    return optimizer
 
 '''
 Save images on validation.
@@ -174,23 +190,6 @@ if __name__ == '__main__':
                                      rng=np.random.RandomState(42))
 
     '''
-    hs = []
-    ws = []
-    c = 0
-    for batch in loader_train.flow():
-        hs.append(batch[0].shape[2])
-        ws.append(batch[0].shape[3])
-        hs.append(batch[1].shape[2])
-        ws.append(batch[1].shape[3])
-        c += 1
-        print(c)
-        if c == 1000:
-            break
-    import pdb
-    pdb.set_trace()
-    '''
-
-    '''
     Prepare model. The `resume` arg is able to restore the model,
     its state, and the optimizer's state, whereas `model_from`
     (which is mutually exclusive with `resume`) only loads the
@@ -198,28 +197,55 @@ if __name__ == '__main__':
     '''
     torch.backends.cudnn.benchmark = False   # profiler
     exp_id = None
-    disc_params = {'input_nc':4, 'ndf':64, 'n_layers_D':3, 'norm':'instance', 'which_model_netD':'n_layers'}
-    model = {
-        'g_atob': image2image.define_G(4,4,64,'resnet_9blocks', norm='instance'),
-        'g_btoa': image2image.define_G(4,4,64,'resnet_9blocks', norm='instance'),
-        'd_a': image2image.define_D(**disc_params),
-        'd_b': image2image.define_D(**disc_params)
-    }
-    if not args.cpu:
-        for model_ in model.values():
-            model_.cuda()
+    if args.resume is not None:
+        saved_dict = torch.load(args.resume)
+        exp_id = saved_dict['exp_id']
+        # Extract the module string, then turn it into a module.
+        # From this, we can invoke the model creation function and
+        # load its saved weights.
+        module_as_str = saved_dict['module_as_str']
+        module = imp.new_module('model_from')
+        exec(module_as_str, module.__dict__)
+        model = getattr(module, 'build_model')()
+        if not args.cpu:
+            for model_ in model.values():
+                model_.cuda(args.gpu_id)
+        # Load weights for all four networks.
+        for key in saved_dict['weights']:
+            model[key].load_state_dict(saved_dict['weights'][key])
+        # Load optim state for all networks.
+        optimizer = get_optimizers(args.optimizer,
+                                   itertools.chain(
+                                       model['g_atob'].parameters(),
+                                       model['g_btoa'].parameters()),
+                                   model['d_a'].parameters(),
+                                   model['d_b'].parameters(),
+                                   args.learning_rate)
+        optimizer['g'].load_state_dict(saved_dict['optim']['g'])
+        optimizer['d_a'].load_state_dict(saved_dict['optim']['d_a'])
+        optimizer['d_b'].load_state_dict(saved_dict['optim']['d_b'])
+    else:
+        # If `model_from` is a .py file, then we import that as a module
+        # and load the model. Otherwise, we assume it's a pickle, and
+        # we load it, extract the module contained inside, and load it
+        if args.model_from.endswith(".py"):
+            module = imp.load_source('model_from', args.model_from)
+            module_as_str = open(args.model_from).read()
+        else:
+            module_as_str = torch.load(args.model_from)['module_as_str']
+            module = imp.new_module('model_from')
+            exec(module_as_str, module.__dict__)
+        model = getattr(module, 'build_model')()
+        if not args.cpu:
+            for model_ in model.values():
+                model_.cuda(args.gpu_id)
+    # TODO: do we also save what's inside the
+    # image pool?
     fake_A_pool = ImagePool(args.num_pool)
     fake_B_pool = ImagePool(args.num_pool)
-    optimizer = {
-        'g': get_optimizer(
-            args.optimizer,
-            itertools.chain(model['g_atob'].parameters(), model['g_btoa'].parameters()),
-            args.learning_rate
-        ),
-        'd_a': get_optimizer(args.optimizer, model['d_a'].parameters(), args.learning_rate),
-        'd_b': get_optimizer(args.optimizer, model['d_b'].parameters(), args.learning_rate)
-    }
-
+    for key in model:
+        print("Number of parameters for {}: {}".format(
+            key, count_params(model[key])))
 
     '''
     Set up experiment directory.
@@ -238,7 +264,7 @@ if __name__ == '__main__':
         d_b_fake = d_b(atob)
         ones_db = torch.ones(d_b_fake.size())
         if not args.cpu:
-            ones_db = ones_db.cuda()
+            ones_db = ones_db.cuda(args.gpu_id)
         ones_db = Variable(ones_db)
         atob_gen_loss = mse_loss(d_b_fake, ones_db)
         cycle_aba = torch.mean(torch.abs(A_real - atob_btoa))
@@ -250,7 +276,7 @@ if __name__ == '__main__':
         d_a_fake = d_a(btoa)
         ones_da = torch.ones(d_a_fake.size())
         if not args.cpu:
-            ones_da = ones_da.cuda()
+            ones_da = ones_da.cuda(args.gpu_id)
         ones_da = Variable(ones_da)
         btoa_gen_loss = mse_loss(d_a_fake, ones_da)
         cycle_bab = torch.mean(torch.abs(B_real - btoa_atob))
@@ -269,36 +295,25 @@ if __name__ == '__main__':
         ones_db_real, zeros_db_fake = torch.ones(d_b_real.size()), torch.zeros(d_b_fake.size())
         if not args.cpu:
             ones_da_real, zeros_da_fake, ones_db_real, zeros_db_fake = \
-                        ones_da_real.cuda(), zeros_da_fake.cuda(), ones_db_real.cuda(), zeros_db_fake.cuda()
+                        ones_da_real.cuda(args.gpu_id), \
+                        zeros_da_fake.cuda(args.gpu_id), \
+                        ones_db_real.cuda(args.gpu_id), \
+                        zeros_db_fake.cuda(args.gpu_id)
         ones_da_real, zeros_da_fake, ones_db_real, zeros_db_fake = \
-                        Variable(ones_da_real), Variable(zeros_da_fake), Variable(ones_db_real), Variable(zeros_db_fake)
+                        Variable(ones_da_real), \
+                        Variable(zeros_da_fake), \
+                        Variable(ones_db_real), \
+                        Variable(zeros_db_fake)
         d_a_loss = (mse_loss(d_a_real, ones_da_real) + mse_loss(d_a_fake, zeros_da_fake)) * 0.5
         d_b_loss = (mse_loss(d_b_real, ones_db_real) + mse_loss(d_b_fake, zeros_db_fake)) * 0.5
         return d_a_loss, d_b_loss
-
 
     '''
     Set up loss function.
     '''
     mse_loss = torch.nn.MSELoss()
     if not args.cpu:
-        mse_loss = mse_loss.cuda()
-    '''
-    Set up loss functions and metrics. Since this is a multiclass problem,
-    set up a metrics handler for each output map.
-    '''
-    '''
-    labels = [0,1,2,4] # 4 classes
-    loss_functions = []
-    metrics_dict = OrderedDict()
-    for idx,l in enumerate(labels):
-        dice = dice_loss(l,idx)
-        if not args.cpu:
-            dice = dice.cuda(args.gpu_id)
-        loss_functions.append(dice)
-        metrics_dict['dice{}'.format(l)] = dice
-    metrics = metrics_handler(metrics_dict)
-    '''
+        mse_loss = mse_loss.cuda(args.gpu_id)
     
     '''
     Visualize train outputs.
@@ -310,7 +325,8 @@ if __name__ == '__main__':
         epoch_length(data['train']['h'])
     )
     image_saver_train = image_saver(save_path=os.path.join(path, "train"),
-                                    epoch_length=num_batches_train)
+                                    epoch_length=num_batches_train,
+                                    save_every=500)
 
     '''
     Visualize valid outputs.
@@ -320,7 +336,8 @@ if __name__ == '__main__':
         epoch_length(data['valid']['h'])
     )
     image_saver_valid = image_saver(save_path=os.path.join(path, "valid"),
-                                    epoch_length=num_batches_valid)
+                                    epoch_length=num_batches_valid,
+                                    save_every=500)
     
     '''
     Set up training and evaluation functions.
@@ -425,23 +442,34 @@ if __name__ == '__main__':
     evaluator.add_event_handler(Events.ITERATION_COMPLETED, progress_valid)
     evaluator.add_event_handler(Events.ITERATION_COMPLETED, image_saver_valid)
 
-    '''
     cpt_handler = ModelCheckpoint(dirname=path,
                                   filename_prefix='weights',
                                   n_saved=5,
-                                  score_function=scoring_function("val_metrics"),
+                                  save_interval=1,
                                   atomic=False,
                                   exist_ok=True,
-                                  create_dir=True)
+                                  create_dir=True,
+                                  require_empty=False)
+    model_dict = {
+        'model': {
+            'exp_id': exp_id,
+            'weights': {
+                'g_atob': model['g_atob'].state_dict(),
+                'g_btoa': model['g_btoa'].state_dict(),
+                'd_a': model['d_a'].state_dict(),
+                'd_b': model['d_b'].state_dict()
+            },
+            'module_as_str': module_as_str,
+            'optim': {
+                'g': optimizer['g'].state_dict(),
+                'd_a': optimizer['d_a'].state_dict(),
+                'd_b': optimizer['d_b'].state_dict()
+            }
+        }
+    }
     evaluator.add_event_handler(Events.COMPLETED,
                                 cpt_handler,
-                                {'model':
-                                 {'exp_id': exp_id,
-                                  'weights': model.state_dict(),
-                                  'module_as_str': module_as_str,
-                                  'optim': optimizer.state_dict()}
-                                })
-    '''
+                                model_dict)
 
     '''
     Train.
