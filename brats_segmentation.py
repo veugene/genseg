@@ -135,7 +135,7 @@ class image_saver(object):
             out_image = np.concatenate(im_i+im_t+im_p, axis=1)
             all_imgs.append(out_image)
         imsave(os.path.join(save_dir,
-                            "{}.png".format(self._current_batch_num)),
+                            "{}.jpg".format(self._current_batch_num)),
                             np.vstack(all_imgs))
 
     def _process_slice(self, s):
