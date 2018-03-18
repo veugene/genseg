@@ -1,3 +1,5 @@
+from __future__ import (print_function,
+                        division)
 import torch
 from fcn_maker.loss import dice_loss as _dice_loss
 

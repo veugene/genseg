@@ -1,4 +1,5 @@
-from __future__ import print_function
+from __future__ import (print_function,
+                        division)
 import os
 import numpy as np
 from collections import OrderedDict
