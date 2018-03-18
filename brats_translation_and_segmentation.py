@@ -48,7 +48,8 @@ def parse_args():
     parser.add_argument('--data_dir', type=str, default='/home/eugene/data/')
     parser.add_argument('--save_path', type=str, default='./experiments')
     g_load = parser.add_mutually_exclusive_group(required=False)
-    g_load.add_argument('--model_from', type=str, default='configs_cyclegan/baseline.py')
+    g_load.add_argument('--t_model_from', type=str, default='configs_cyclegan/baseline.py')
+    g_load.add_argument('--s_model_from', type=str, default='configs/resunet_hybrid.py')
     g_load.add_argument('--resume', type=str, default=None)
     parser.add_argument('-e', '--evaluate', action='store_true')
     parser.add_argument('--weight_decay', type=float, default=1e-4)
@@ -75,7 +76,7 @@ def _get_optimizer(name, params, lr):
         raise NotImplemented("Optimizer {} not supported."
                             "".format(args.optimizer))
 
-def get_optimizers(name, g_params, d_a_params, d_b_params, lr):
+def get_optimizers(name, g_params, d_a_params, d_b_params, seg_params, lr):
     optimizer = {
         'g': _get_optimizer(
             args.optimizer,
@@ -88,71 +89,17 @@ def get_optimizers(name, g_params, d_a_params, d_b_params, lr):
         'd_b': _get_optimizer(
             args.optimizer,
             d_b_params,
+            args.learning_rate),
+        'seg': _get_optimizer(
+            args.optimizer,
+            seg_params,
             args.learning_rate)
     }
     return optimizer
 
-'''
-Save images on validation.
-'''
-class image_saver(object):
-    def __init__(self, save_path, epoch_length, save_every=1):
-        """
-        save_every : save every this many minibatches.
-        """
-        self.save_path = save_path
-        self.epoch_length = epoch_length
-        self.save_every = save_every
-        self._current_batch_num = 0
-        self._current_epoch = 0
+from brats_translation import image_saver as image_saver_t
+from brats_segmentation import image_saver as image_saver_s
 
-    def __call__(self, engine, state):
-
-        if self._current_batch_num % self.save_every != 0:
-            return
-
-        # Extract images and change them from [-1, 1] to [0,1].
-        a, atob, atob_btoa, b, btoa, btoa_atob = \
-            [ (elem.cpu().numpy()*0.5)+0.5 for elem in state.output[1] ]
-        
-        # Current batch size.
-        this_batch_size = len(a)
-
-        # Current batch_num, epoch.
-        self._current_batch_num += 1
-        if self._current_batch_num==self.epoch_length:
-            self._current_epoch += 1
-            self._current_batch_num = 0
-
-        # Make directory.
-        save_dir = os.path.join(self.save_path, str(self._current_epoch))
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
-
-        from skimage.transform import resize
-            
-        # Visualize.
-        all_imgs = []
-        for i in range(this_batch_size):
-
-            this_row = []
-            # TODO: just show one channel only first
-            # Images in B may not be the same size so do a
-            # resize if necessary.
-            this_row.append(a[i,0])
-            this_row.append(atob[i,0])
-            this_row.append(atob_btoa[i,0])
-            this_row.append( resize(b[i,0], a.shape[2:]) )
-            this_row.append( resize(btoa[i,0], a.shape[2:]) )
-            this_row.append( resize(btoa_atob[i,0], a.shape[2:]) )
-            #out_image = np.concatenate(im_i+im_t+im_p, axis=1)
-            out_image = np.hstack(this_row)
-            all_imgs.append(out_image)
-        imsave(os.path.join(save_dir,
-                            "{}.png".format(self._current_batch_num)),
-                            np.vstack(all_imgs))
-
-    
 if __name__ == '__main__':
     args = parse_args()
 
@@ -162,8 +109,10 @@ if __name__ == '__main__':
     # Load
     data = prepare_data_brats(path_hgg=os.path.join(args.data_dir, "hgg.h5"),
                               path_lgg=os.path.join(args.data_dir, "lgg.h5"))
-    data_train = [data['train']['s'], data['train']['h']]
-    data_valid = [data['valid']['s'], data['valid']['h']]
+    data_train_t = [data['train']['s'], data['train']['h']]
+    data_valid_t = [data['valid']['s'], data['valid']['h']]
+    data_train_s = [data['train']['s'], data['train']['m']]
+    data_valid_s = [data['valid']['s'], data['valid']['m']]
     # Prepare data augmentation and data loaders.
     da_kwargs = {'rotation_range': 3.,
                  'zoom_range': 0.1,
@@ -173,22 +122,42 @@ if __name__ == '__main__':
                  'warp_sigma': 5,
                  'warp_grid_size': 3}
     preprocessor_train = preprocessor_brats(data_augmentation_kwargs=da_kwargs)
-    loader_train = data_flow_sampler(data_train,
-                                     sample_random=True,
-                                     batch_size=args.batch_size,
-                                     preprocessor=preprocessor_train,
-                                     nb_io_workers=1,
-                                     nb_proc_workers=3,
-                                     rng=np.random.RandomState(42))
+    loader_train_t = data_flow_sampler(data_train_t,
+                                       sample_random=True,
+                                       batch_size=args.batch_size,
+                                       preprocessor=preprocessor_train,
+                                       nb_io_workers=1,
+                                       nb_proc_workers=3,
+                                       rng=np.random.RandomState(42))
+    loader_train_s = data_flow_sampler(data_train_s,
+                                       sample_random=True,
+                                       batch_size=args.batch_size,
+                                       preprocessor=preprocessor_train,
+                                       nb_io_workers=1,
+                                       nb_proc_workers=3,
+                                       rng=np.random.RandomState(42))
     preprocessor_valid = preprocessor_brats(data_augmentation_kwargs=None)
-    loader_valid = data_flow_sampler(data_valid,
-                                     sample_random=True,
-                                     batch_size=args.batch_size,
-                                     preprocessor=preprocessor_valid,
-                                     nb_io_workers=1,
-                                     nb_proc_workers=0,
-                                     rng=np.random.RandomState(42))
+    loader_valid_t = data_flow_sampler(data_valid_t,
+                                       sample_random=True,
+                                       batch_size=args.batch_size,
+                                       preprocessor=preprocessor_valid,
+                                       nb_io_workers=1,
+                                       nb_proc_workers=0,
+                                       rng=np.random.RandomState(42))
+    loader_valid_s = data_flow_sampler(data_valid_s,
+                                       sample_random=True,
+                                       batch_size=args.batch_size,
+                                       preprocessor=preprocessor_valid,
+                                       nb_io_workers=1,
+                                       nb_proc_workers=0,
+                                       rng=np.random.RandomState(42))
 
+    loader_train = zip(loader_train_t.flow(), loader_train_s.flow())
+    loader_valid = zip(loader_valid_t.flow(), loader_valid_s.flow())
+
+    bs = args.batch_size
+    epoch_length = lambda ds : len(ds)//bs + int(len(ds)%bs>0)
+    
     '''
     Prepare model. The `resume` arg is able to restore the model,
     its state, and the optimizer's state, whereas `model_from`
@@ -198,6 +167,7 @@ if __name__ == '__main__':
     torch.backends.cudnn.benchmark = False   # profiler
     exp_id = None
     if args.resume is not None:
+        '''
         saved_dict = torch.load(args.resume)
         exp_id = saved_dict['exp_id']
         # Extract the module string, then turn it into a module.
@@ -224,18 +194,33 @@ if __name__ == '__main__':
         optimizer['g'].load_state_dict(saved_dict['optim']['g'])
         optimizer['d_a'].load_state_dict(saved_dict['optim']['d_a'])
         optimizer['d_b'].load_state_dict(saved_dict['optim']['d_b'])
+        '''
+        raise NotImplementedError("")
     else:
         # If `model_from` is a .py file, then we import that as a module
         # and load the model. Otherwise, we assume it's a pickle, and
         # we load it, extract the module contained inside, and load it
-        if args.model_from.endswith(".py"):
-            module = imp.load_source('model_from', args.model_from)
-            module_as_str = open(args.model_from).read()
+
+        # Process translation model.
+        if args.t_model_from.endswith(".py"):
+            t_module = imp.load_source('t_model_from', args.t_model_from)
+            t_module_as_str = open(args.t_model_from).read()
         else:
-            module_as_str = torch.load(args.model_from)['module_as_str']
-            module = imp.new_module('model_from')
-            exec(module_as_str, module.__dict__)
-        model = getattr(module, 'build_model')()
+            t_module_as_str = torch.load(args.t_model_from)['module_as_str']
+            t_module = imp.new_module('t_model_from')
+            exec(t_module_as_str, t_module.__dict__)
+        # Process segmentation model.
+        if args.s_model_from.endswith(".py"):
+            s_module = imp.load_source('s_model_from', args.s_model_from)
+            s_module_as_str = open(args.s_model_from).read()
+        else:
+            s_module_as_str = torch.load(args.s_model_from)['module_as_str']
+            s_module = imp.new_module('s_model_from')
+            exec(s_module_as_str, s_module.__dict__)
+        # Translation model is a dict, so do this first,
+        # then plop in the segmentation model.
+        model = getattr(t_module, 'build_model')()
+        model['seg'] = getattr(s_module, 'build_model')()
         if not args.cpu:
             for model_ in model.values():
                 model_.cuda(args.gpu_id)
@@ -245,6 +230,7 @@ if __name__ == '__main__':
                                        model['g_btoa'].parameters()),
                                    model['d_a'].parameters(),
                                    model['d_b'].parameters(),
+                                   model['seg'].parameters(),
                                    args.learning_rate)
     # TODO: do we also save what's inside the
     # image pool?
@@ -321,35 +307,53 @@ if __name__ == '__main__':
     mse_loss = torch.nn.MSELoss()
     if not args.cpu:
         mse_loss = mse_loss.cuda(args.gpu_id)
-    
+
+    '''
+    Set up loss functions and metrics. Since this is a multiclass problem,
+    set up a metrics handler for each output map.
+    '''
+    labels = [0,1,2,4] # 4 classes
+    loss_functions = []
+    metrics_dict = OrderedDict()
+    for idx,l in enumerate(labels):
+        dice = dice_loss(l,idx)
+        if not args.cpu:
+            dice = dice.cuda(args.gpu_id)
+        loss_functions.append(dice)
+        metrics_dict['dice{}'.format(l)] = dice
+    metrics = metrics_handler(metrics_dict)
+        
     '''
     Visualize train outputs.
     '''
-    bs = args.batch_size
-    epoch_length = lambda ds : len(ds)//bs + int(len(ds)%bs>0)
     num_batches_train = min(
         epoch_length(data['train']['s']),
         epoch_length(data['train']['h'])
     )
-    image_saver_train = image_saver(save_path=os.path.join(path, "train"),
+    image_saver_train_seg = image_saver_s(save_path=os.path.join(path, "train"),
                                     epoch_length=num_batches_train,
                                     save_every=500)
-
+    #image_saver_train_trans = image_saver_t(save_path=os.path.join(path, "train"),
+    #                                epoch_length=num_batches_train,
+    #                                save_every=500)
+    
     '''
     Visualize valid outputs.
+    '''
     '''
     num_batches_valid = min(
         epoch_length(data['valid']['s']),
         epoch_length(data['valid']['h'])
     )
-    image_saver_valid = image_saver(save_path=os.path.join(path, "valid"),
+    image_saver_valid = image_saver_(save_path=os.path.join(path, "valid"),
                                     epoch_length=num_batches_valid,
                                     save_every=500)
+    '''
     
     '''
-    Set up training and evaluation functions.
+    Set up training and evaluation functions for translation.
     '''
-    def prepare_batch(batch):
+    def prepare_batch_translation(batch):
         b0, b1 = batch
         # TODO: we norm in [-1, 1] here as this is
         # what cyclegan does
@@ -360,8 +364,8 @@ if __name__ == '__main__':
             b1 = b1.cuda(args.gpu_id)
         return b0, b1
 
-    def training_function(batch):
-        batch = prepare_batch(batch)
+    def training_function_translation(batch):
+        batch = prepare_batch_translation(batch)
         for model_ in model.values():
             model_.train()
         A_real, B_real = batch
@@ -399,11 +403,12 @@ if __name__ == '__main__':
             'd_a_loss': d_a_loss.data.item(),
             'd_b_loss': d_b_loss.data.item()
         }
-        return g_tot_loss.data.item(), (A_real.data, atob.data, atob_btoa.data, B_real.data, btoa.data, btoa_atob.data), this_metrics
-    trainer = Trainer(training_function)
+        return g_tot_loss.data.item(), \
+            (A_real.data, atob.data, atob_btoa.data, B_real.data, btoa.data, btoa_atob.data), \
+            this_metrics
 
-    def validation_function(batch):
-        batch = prepare_batch(batch)
+    def validation_function_translation(batch):
+        batch = prepare_batch_translation(batch)
         for model_ in model.values():
             model_.eval()
         with torch.no_grad():
@@ -419,36 +424,134 @@ if __name__ == '__main__':
             btoa_gen_loss, cycle_bab = compute_g_losses_bab(B_real, btoa, btoa_atob)
             g_tot_loss = btoa_gen_loss + args.lamb*cycle_bab
             d_a_loss, d_b_loss = compute_d_losses(A_real, atob, B_real, btoa)
-        this_metrics = {
+        this_metrics = OrderedDict({
             'atob_gen_loss': atob_gen_loss.data.item(),
             'cycle_aba': cycle_aba.data.item(),
             'btoa_gen_loss': btoa_gen_loss.data.item(),
             'cycle_bab': cycle_bab.data.item(),
             'd_a_loss': d_a_loss.data.item(),
             'd_b_loss': d_b_loss.data.item()
-        }
-        return g_tot_loss.data.item(), (A_real.data, atob.data, atob_btoa.data, B_real.data, btoa.data, btoa_atob.data), this_metrics
+        })
+        return g_tot_loss.data.item(), \
+            (A_real.data, atob.data, atob_btoa.data, B_real.data, btoa.data, btoa_atob.data), \
+            this_metrics
+
+    '''
+    Set up functions for training segmentation.
+    '''
+    def prepare_batch_segmentation(batch):
+        b0, b1 = batch
+        b0 = Variable(torch.from_numpy(np.array(b0 / 2.)))
+        b1 = Variable(torch.from_numpy(np.array(b1)))
+        if not args.cpu:
+            b0 = b0.cuda(args.gpu_id)
+            b1 = b1.cuda(args.gpu_id)
+        return b0, b1
+
+    def training_function_segmentation(batch):
+        """
+        s --> h -----> m
+              s --|
+        """
+        batch = prepare_batch_segmentation(batch)
+        for model_ in model.values():
+            model_.train()
+        optimizer['seg'].zero_grad()
+        optimizer['g'].zero_grad() ##
+        hh, ww = batch[0].shape[-2], batch[0].shape[-1]
+        s2h = model['g_atob'](batch[0])[:, :, 0:hh, 0:ww]
+        inp_concat = torch.cat((batch[0], s2h), dim=1)
+        output = model['seg'](inp_concat)
+        loss = 0.
+        for i in range(len(loss_functions)):
+            loss += loss_functions[i](output, batch[1])
+        loss /= len(loss_functions) # average
+        loss.backward()
+        optimizer['seg'].step()
+        optimizer['g'].step() ##
+        return loss.data.item(), \
+            (batch[0], batch[1], output), \
+            metrics(output, batch[1])
+
+    def validation_function_segmentation(batch):
+        for model_ in model.values():
+            model_.eval()
+        with torch.no_grad():
+            batch = prepare_batch_segmentation(batch)
+            hh, ww = batch[0].shape[-2], batch[0].shape[-1]
+            s2h = model['g_atob'](batch[0])[:, :, 0:hh, 0:ww]
+            inp_concat = torch.cat((batch[0], s2h), dim=1)
+            output = model['seg'](inp_concat)
+            loss = 0.
+            for i in range(len(loss_functions)):
+                loss += loss_functions[i](output, batch[1])
+            loss /= len(loss_functions) # average
+        return loss.data.item(), \
+            (batch[0], batch[1], output), \
+            metrics(output, batch[1])
+
+    def training_function(batch):
+        batch_t, batch_s = batch
+        # batch_t contains (sick,healthy)
+        # and batch_s contains (sick,mask)
+        batch_t = prepare_batch_translation(batch_t)
+        batch_s = prepare_batch_segmentation(batch_s)
+        # Handle the translation part.
+        t_loss, t_vis, t_metrics = training_function_translation(batch_t)
+        # Handle the segmentation part.
+        s_loss, s_vis, s_metrics = training_function_segmentation(batch_s)
+        # TODO??
+        #s_metrics.update(t_metrics)
+        s_metrics['g_atob'] = t_metrics['atob_gen_loss']
+        s_metrics['d_b'] = t_metrics['d_b_loss']
+        return s_loss, s_vis, s_metrics
+    trainer = Trainer(training_function)
+
+    def validation_function(batch):
+        batch_t, batch_s = batch
+        for model_ in model.values():
+            model_.eval()
+        with torch.no_grad():
+            batch_t = prepare_batch_translation(batch_t)
+            batch_s = prepare_batch_segmentation(batch_s)
+            # Handle the translation part.
+            t_loss, t_vis, t_metrics = validation_function_translation(batch_t)
+            # Handle the segmentation part.
+            s_loss, s_vis, s_metrics = validation_function_segmentation(batch_s)
+            #s_metrics.update(t_metrics)
+            s_metrics['g_atob'] = t_metrics['atob_gen_loss']
+            s_metrics['d_b'] = t_metrics['d_b_loss']
+        # TODO??
+        return s_loss, s_vis, s_metrics
     evaluator = Evaluator(validation_function)
 
     '''
     Set up logging to screen.
     '''
-    bs = args.batch_size
     progress_train = progress_report(prefix=None,
+                                     epoch_length=min(
+                                         epoch_length(data['train']['h']),
+                                         epoch_length(data['train']['s'])
+                                     ),
                                      log_path=os.path.join(path,
                                                            "log_train.txt"))
     progress_valid = progress_report(prefix="val",
+                                     epoch_length=min(
+                                         epoch_length(data['valid']['h']),
+                                         epoch_length(data['valid']['s'])
+                                     ),
                                      log_path=os.path.join(path,
                                                            "log_valid.txt"))
     trainer.add_event_handler(Events.ITERATION_COMPLETED, progress_train)
-
-    trainer.add_event_handler(Events.ITERATION_COMPLETED, image_saver_train)
+    trainer.add_event_handler(Events.ITERATION_COMPLETED, image_saver_train_seg)
+    #trainer.add_event_handler(Events.ITERATION_COMPLETED, image_saver_train_trans)
     
     trainer.add_event_handler(Events.EPOCH_COMPLETED,
                               lambda engine, state: evaluator.run(loader_valid))
     evaluator.add_event_handler(Events.ITERATION_COMPLETED, progress_valid)
-    evaluator.add_event_handler(Events.ITERATION_COMPLETED, image_saver_valid)
+    #evaluator.add_event_handler(Events.ITERATION_COMPLETED, image_saver_valid)
 
+    '''
     cpt_handler = ModelCheckpoint(dirname=path,
                                   filename_prefix='weights',
                                   n_saved=5,
@@ -477,6 +580,7 @@ if __name__ == '__main__':
     evaluator.add_event_handler(Events.COMPLETED,
                                 cpt_handler,
                                 model_dict)
+    '''
 
     '''
     Train.
