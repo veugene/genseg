@@ -14,9 +14,9 @@ from scipy.misc import imsave
 import torch
 from torch.autograd import Variable
 import ignite
-from ignite.trainer import Trainer
-from ignite.engine import Events
-from ignite.evaluator import Evaluator
+from ignite.engines import (Events,
+                            Trainer,
+                            Evaluator)
 from ignite.handlers import ModelCheckpoint
 
 from architectures.image2image import DilatedFCN
