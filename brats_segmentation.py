@@ -315,22 +315,36 @@ if __name__ == '__main__':
                             lambda engine, state: evaluator.run(loader_valid))
     evaluator.add_event_handler(Events.ITERATION_COMPLETED, progress_valid)
     evaluator.add_event_handler(Events.ITERATION_COMPLETED, image_saver_valid)
-    cpt_handler = ModelCheckpoint(\
+    
+    '''
+    Save a checkpoint every epoch and when encountering the lowest loss.
+    '''
+    checkpoint_kwargs = {'model': {'exp_id': exp_id,
+                                   'weights': model.state_dict(),
+                                   'module_as_str': module_as_str,
+                                   'optim': optimizer.state_dict()}}
+    checkpoint_best_handler = ModelCheckpoint(\
                                 dirname=path,
-                                filename_prefix='weights',
-                                n_saved=5,
+                                filename_prefix='best_weights',
+                                n_saved=2,
                                 score_function=scoring_function("val_metrics"),
-                                atomic=False,
+                                atomic=True,
                                 exist_ok=True,
                                 create_dir=True)
     evaluator.add_event_handler(Events.COMPLETED,
-                                cpt_handler,
-                                {'model':
-                                 {'exp_id': exp_id,
-                                  'weights': model.state_dict(),
-                                  'module_as_str': module_as_str,
-                                  'optim': optimizer.state_dict()}
-                                })
+                                checkpoint_best_handler,
+                                checkpoint_kwargs)
+    checkpoint_last_handler = ModelCheckpoint(\
+                                dirname=path,
+                                filename_prefix='weights',
+                                n_saved=1,
+                                save_interval=1,
+                                atomic=True,
+                                exist_ok=True,
+                                create_dir=True)
+    evaluator.add_event_handler(Events.COMPLETED,
+                                checkpoint_last_handler,
+                                checkpoint_kwargs)
 
     '''
     Train.
