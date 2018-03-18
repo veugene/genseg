@@ -215,8 +215,9 @@ if __name__ == '__main__':
     '''
     Set up experiment directory.
     '''
+    exp_time = "{0:%Y-%m-%d}_{0:%H-%M-%S}".format(datetime.now())
     if exp_id is None:
-        exp_id = "{}_{}".format(args.name, "{0:%Y-%m-%d}_{0:%H-%M-%S}".format(datetime.now()))
+        exp_id = "{}_{}".format(args.name, exp_time)
     path = os.path.join(args.save_path, exp_id)
     if not os.path.exists(path):
         os.makedirs(path)
@@ -282,7 +283,9 @@ if __name__ == '__main__':
             for i in range(len(loss_functions)):
                 loss += loss_functions[i](output, batch[1])
             loss /= len(loss_functions) # average
-        return loss.data.item(), (batch[0], batch[1], output), metrics(output, batch[1])
+        return ( loss.data.item(),
+                 (batch[0], batch[1], output),
+                 metrics(output, batch[1]) )
     evaluator = Evaluator(validation_function)
     
     '''
@@ -297,16 +300,17 @@ if __name__ == '__main__':
                                                            "log_valid.txt"))
     trainer.add_event_handler(Events.ITERATION_COMPLETED, progress_train)
     trainer.add_event_handler(Events.EPOCH_COMPLETED,
-                              lambda engine, state: evaluator.run(loader_valid))
+                            lambda engine, state: evaluator.run(loader_valid))
     evaluator.add_event_handler(Events.ITERATION_COMPLETED, progress_valid)
     evaluator.add_event_handler(Events.ITERATION_COMPLETED, image_saver_valid)
-    cpt_handler = ModelCheckpoint(dirname=path,
-                                  filename_prefix='weights',
-                                  n_saved=5,
-                                  score_function=scoring_function("val_metrics"),
-                                  atomic=False,
-                                  exist_ok=True,
-                                  create_dir=True)
+    cpt_handler = ModelCheckpoint(\
+                                dirname=path,
+                                filename_prefix='weights',
+                                n_saved=5,
+                                score_function=scoring_function("val_metrics"),
+                                atomic=False,
+                                exist_ok=True,
+                                create_dir=True)
     evaluator.add_event_handler(Events.COMPLETED,
                                 cpt_handler,
                                 {'model':

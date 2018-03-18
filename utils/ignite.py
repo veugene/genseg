@@ -84,6 +84,7 @@ class metrics_handler(object):
     def add(self, metric_name, function):
         self.measure_functions[metric_name] = function
 
+
 class scoring_function(object):
     def __init__(self, metrics_name, loss_name=None, period=1):
         """
@@ -100,6 +101,7 @@ class scoring_function(object):
         self.loss_name = loss_name
         self.period = period
         self.epochs_since_last_save = 0
+        
     def __call__(self, state):
         self.epochs_since_last_save += 1
         if self.epochs_since_last_save >= self.period:
@@ -111,65 +113,3 @@ class scoring_function(object):
         else:
             return -np.inf
 
-'''
-Save images on validation.
-'''
-class image_saver(object):
-    def __init__(self, save_path, epoch_length):
-        self.save_path = save_path
-        self.epoch_length = epoch_length
-        self._current_batch_num = 0
-        self._current_epoch = 0
-
-    def __call__(self, inputs, target, prediction):
-        # Current batch size.
-        this_batch_size = len(target)
-
-        # Current batch_num, epoch.
-        self._current_batch_num += 1
-        if self._current_batch_num==self.epoch_length:
-            self._current_epoch += 1
-            self._current_batch_num = 0
-
-        # Make directory.
-        save_dir = os.path.join(self.save_path, str(self._current_epoch))
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
-
-        # Variables to numpy.
-        inputs = inputs.cpu().numpy()
-        target = target.cpu().numpy()
-        prediction = prediction.detach().cpu().numpy()
-
-        # Visualize.
-        for i in range(this_batch_size):
-
-            # inputs
-            im_i = []
-            for x in inputs[i]:
-                im_i.append(self._process_slice((x+2)/4.))
-
-            # target
-            im_t = [self._process_slice(target[i]/4.)]
-
-            # prediction
-            p = prediction[i]
-            p[0] = 0
-            p[1] *= 1
-            p[2] *= 2
-            p[3] *= 4
-            p = p.max(axis=0)
-            im_p = [self._process_slice(p/4.)]
-
-            out_image = np.concatenate(im_i+im_t+im_p, axis=1)
-            imsave(os.path.join(save_dir,
-                                "{}_{}.png"
-                                "".format(self._current_batch_num, i)),
-                   out_image)
-
-    def _process_slice(self, s):
-        s = np.squeeze(s)
-        s = np.clip(s, 0, 1)
-        s[0,0]=1
-        s[0,1]=0
-        return s
