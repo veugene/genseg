@@ -72,14 +72,24 @@ def get_optimizer(name, model, lr):
 Save images on validation.
 '''
 class image_saver(object):
-    def __init__(self, save_path, epoch_length):
+    def __init__(self, save_path, epoch_length, score_function=None):
         self.save_path = save_path
         self.epoch_length = epoch_length
+        self.score_function = score_function
+        self._max_score = -np.inf
         self._current_batch_num = 0
         self._current_epoch = 0
 
     def __call__(self, engine, state):
+        # If tracking a score, only save whenever a max score is reached.
+        if self.score_function is not None:
+            score = float(self.score_function(state))
+            if score > self._max_score:
+                self._max_score = score
+            else:
+                return
 
+        # Unpack inputs, outputs.
         inputs, target, prediction = state.output[1]
 
         # Current batch size.
@@ -246,7 +256,9 @@ if __name__ == '__main__':
     epoch_length = lambda ds : len(ds)//bs + int(len(ds)%bs>0)
     num_batches_valid = epoch_length(data['valid']['s'])
     image_saver_valid = image_saver(save_path=os.path.join(path, "validation"),
-                                    epoch_length=num_batches_valid)
+                                    epoch_length=num_batches_valid,
+                                score_function=scoring_function("val_metrics"))
+                                    
     
     '''
     Set up training and evaluation functions.
