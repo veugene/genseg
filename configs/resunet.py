@@ -1,5 +1,5 @@
 from collections import OrderedDict
-
+import torch
 from fcn_maker.model import assemble_resunet
 from fcn_maker.blocks import (tiny_block,
                               basic_block)
@@ -16,7 +16,7 @@ def build_model():
         ('main_block', basic_block),
         ('init_block', tiny_block),
         ('norm_kwargs', {'momentum': 0.1}),
-        ('nonlinearity', 'ReLU'),
+        ('nonlinearity', (torch.nn.LeakyReLU, {'inplace': True})),
         ('ndim', 2)
     ))
     return assemble_resunet(**model_kwargs)
