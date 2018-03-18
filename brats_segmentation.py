@@ -14,9 +14,9 @@ from scipy.misc import imsave
 import torch
 from torch.autograd import Variable
 import ignite
-from ignite.trainer import Trainer
-from ignite.engine import Events
-from ignite.evaluator import Evaluator
+from ignite.engines import (Events,
+                            Trainer,
+                            Evaluator)
 from ignite.handlers import ModelCheckpoint
 
 from architectures.image2image import DilatedFCN
@@ -72,14 +72,24 @@ def get_optimizer(name, model, lr):
 Save images on validation.
 '''
 class image_saver(object):
-    def __init__(self, save_path, epoch_length):
+    def __init__(self, save_path, epoch_length, score_function=None):
         self.save_path = save_path
         self.epoch_length = epoch_length
+        self.score_function = score_function
+        self._max_score = -np.inf
         self._current_batch_num = 0
         self._current_epoch = 0
 
     def __call__(self, engine, state):
+        # If tracking a score, only save whenever a max score is reached.
+        if self.score_function is not None:
+            score = float(self.score_function(state))
+            if score > self._max_score:
+                self._max_score = score
+            else:
+                return
 
+        # Unpack inputs, outputs.
         inputs, target, prediction = state.output[1]
 
         # Current batch size.
@@ -125,7 +135,7 @@ class image_saver(object):
             out_image = np.concatenate(im_i+im_t+im_p, axis=1)
             all_imgs.append(out_image)
         imsave(os.path.join(save_dir,
-                            "{}.png".format(self._current_batch_num)),
+                            "{}.jpg".format(self._current_batch_num)),
                             np.vstack(all_imgs))
 
     def _process_slice(self, s):
@@ -215,8 +225,9 @@ if __name__ == '__main__':
     '''
     Set up experiment directory.
     '''
+    exp_time = "{0:%Y-%m-%d}_{0:%H-%M-%S}".format(datetime.now())
     if exp_id is None:
-        exp_id = "{}_{}".format(args.name, "{0:%Y-%m-%d}_{0:%H-%M-%S}".format(datetime.now()))
+        exp_id = "{}_{}".format(args.name, exp_time)
     path = os.path.join(args.save_path, exp_id)
     if not os.path.exists(path):
         os.makedirs(path)
@@ -245,7 +256,9 @@ if __name__ == '__main__':
     epoch_length = lambda ds : len(ds)//bs + int(len(ds)%bs>0)
     num_batches_valid = epoch_length(data['valid']['s'])
     image_saver_valid = image_saver(save_path=os.path.join(path, "validation"),
-                                    epoch_length=num_batches_valid)
+                                    epoch_length=num_batches_valid,
+                                score_function=scoring_function("val_metrics"))
+                                    
     
     '''
     Set up training and evaluation functions.
@@ -282,7 +295,9 @@ if __name__ == '__main__':
             for i in range(len(loss_functions)):
                 loss += loss_functions[i](output, batch[1])
             loss /= len(loss_functions) # average
-        return loss.data.item(), (batch[0], batch[1], output), metrics(output, batch[1])
+        return ( loss.data.item(),
+                 (batch[0], batch[1], output),
+                 metrics(output, batch[1]) )
     evaluator = Evaluator(validation_function)
     
     '''
@@ -297,24 +312,39 @@ if __name__ == '__main__':
                                                            "log_valid.txt"))
     trainer.add_event_handler(Events.ITERATION_COMPLETED, progress_train)
     trainer.add_event_handler(Events.EPOCH_COMPLETED,
-                              lambda engine, state: evaluator.run(loader_valid))
+                            lambda engine, state: evaluator.run(loader_valid))
     evaluator.add_event_handler(Events.ITERATION_COMPLETED, progress_valid)
     evaluator.add_event_handler(Events.ITERATION_COMPLETED, image_saver_valid)
-    cpt_handler = ModelCheckpoint(dirname=path,
-                                  filename_prefix='weights',
-                                  n_saved=5,
-                                  score_function=scoring_function("val_metrics"),
-                                  atomic=False,
-                                  exist_ok=True,
-                                  create_dir=True)
+    
+    '''
+    Save a checkpoint every epoch and when encountering the lowest loss.
+    '''
+    checkpoint_kwargs = {'model': {'exp_id': exp_id,
+                                   'weights': model.state_dict(),
+                                   'module_as_str': module_as_str,
+                                   'optim': optimizer.state_dict()}}
+    checkpoint_best_handler = ModelCheckpoint(\
+                                dirname=path,
+                                filename_prefix='best_weights',
+                                n_saved=2,
+                                score_function=scoring_function("val_metrics"),
+                                atomic=True,
+                                exist_ok=True,
+                                create_dir=True)
     evaluator.add_event_handler(Events.COMPLETED,
-                                cpt_handler,
-                                {'model':
-                                 {'exp_id': exp_id,
-                                  'weights': model.state_dict(),
-                                  'module_as_str': module_as_str,
-                                  'optim': optimizer.state_dict()}
-                                })
+                                checkpoint_best_handler,
+                                checkpoint_kwargs)
+    checkpoint_last_handler = ModelCheckpoint(\
+                                dirname=path,
+                                filename_prefix='weights',
+                                n_saved=1,
+                                save_interval=1,
+                                atomic=True,
+                                exist_ok=True,
+                                create_dir=True)
+    evaluator.add_event_handler(Events.COMPLETED,
+                                checkpoint_last_handler,
+                                checkpoint_kwargs)
 
     '''
     Train.
