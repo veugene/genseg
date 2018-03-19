@@ -93,7 +93,8 @@ class image_saver(object):
                 return
 
         # Unpack inputs, outputs.
-        inputs, target, prediction = state.output[1]
+        inputs, target = state.output[1]
+        prediction = state.output[2]
 
         # Current batch size.
         this_batch_size = len(target)
@@ -303,7 +304,7 @@ if __name__ == '__main__':
         optimizer.step()
         with torch.no_grad():
             metrics_dict = metrics['train'](output.detach(), batch[1])
-        return loss.item(), metrics_dict
+        return loss.item(), batch, output.detach(), metrics_dict
     trainer = Trainer(training_function)
 
     def validation_function(batch):
@@ -316,7 +317,7 @@ if __name__ == '__main__':
                 loss += loss_functions[i](output, batch[1])
             loss /= len(loss_functions) # average
             metrics_dict = metrics['train'](output, batch[1])
-        return loss.item(), batch+(output.detach(),), metrics_dict
+        return loss.item(), batch, output.detach(), metrics_dict
     evaluator = Evaluator(validation_function)
     
     '''
