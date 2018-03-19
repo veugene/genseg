@@ -47,7 +47,8 @@ def parse_args():
     g_load.add_argument('--resume', type=str, default=None)
     parser.add_argument('-e', '--evaluate', action='store_true')
     parser.add_argument('--weight_decay', type=float, default=1e-4)
-    parser.add_argument('--batch_size', type=int, default=80)
+    parser.add_argument('--batch_size_train', type=int, default=80)
+    parser.add_argument('--batch_size_valid', type=int, default=400)
     parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument('--learning_rate', type=float, default=0.001)
     parser.add_argument('--optimizer', type=str, default='RMSprop')
@@ -167,7 +168,7 @@ if __name__ == '__main__':
     preprocessor_train = preprocessor_brats(data_augmentation_kwargs=da_kwargs)
     loader_train = data_flow_sampler(data_train,
                                      sample_random=True,
-                                     batch_size=args.batch_size,
+                                     batch_size=args.batch_size_train,
                                      preprocessor=preprocessor_train,
                                      nb_io_workers=1,
                                      nb_proc_workers=3,
@@ -175,7 +176,7 @@ if __name__ == '__main__':
     preprocessor_valid = preprocessor_brats(data_augmentation_kwargs=None)
     loader_valid = data_flow_sampler(data_valid,
                                      sample_random=True,
-                                     batch_size=args.batch_size,
+                                     batch_size=args.batch_size_valid,
                                      preprocessor=preprocessor_valid,
                                      nb_io_workers=1,
                                      nb_proc_workers=0,
@@ -252,9 +253,8 @@ if __name__ == '__main__':
     '''
     Visualize validation outputs.
     '''
-    bs = args.batch_size
-    epoch_length = lambda ds : len(ds)//bs + int(len(ds)%bs>0)
-    num_batches_valid = epoch_length(data['valid']['s'])
+    epoch_length = lambda ds, bs : len(ds)//bs + int(len(ds)%bs>0)
+    num_batches_valid = epoch_length(data['valid']['s'], args.batch_size_valid)
     image_saver_valid = image_saver(save_path=os.path.join(path, "validation"),
                                     epoch_length=num_batches_valid,
                                 score_function=scoring_function("val_metrics"))
@@ -303,7 +303,6 @@ if __name__ == '__main__':
     '''
     Set up logging to screen.
     '''
-    bs = args.batch_size
     progress_train = progress_report(prefix=None,
                                      log_path=os.path.join(path,
                                                            "log_train.txt"))
