@@ -53,6 +53,7 @@ def parse_args():
     g_load.add_argument('--resume', type=str, default=None)
     parser.add_argument('-e', '--evaluate', action='store_true')
     parser.add_argument('--weight_decay', type=float, default=1e-4)
+    parser.add_argument('--cg_coef', type=float, default=1.)
     parser.add_argument('--num_pool', type=int, default=0)
     parser.add_argument('--lamb', type=float, default=10.)
     parser.add_argument('--batch_size', type=int, default=1)
@@ -97,8 +98,97 @@ def get_optimizers(name, g_params, d_a_params, d_b_params, seg_params, lr):
     }
     return optimizer
 
-from brats_translation import image_saver as image_saver_t
-from brats_segmentation import image_saver as image_saver_s
+
+'''
+Save images on validation.
+'''
+class image_saver(object):
+    def __init__(self, save_path, epoch_length, save_every=1, score_function=None):
+        self.save_path = save_path
+        self.epoch_length = epoch_length
+        self.score_function = score_function
+        self.save_every = save_every
+        self._max_score = -np.inf
+        self._current_batch_num = 0
+        self._current_epoch = 0
+
+    def __call__(self, engine, state):
+        # If tracking a score, only save whenever a max score is reached.
+        if self.score_function is not None:
+            score = float(self.score_function(state))
+            if score > self._max_score:
+                self._max_score = score
+            else:
+                return
+
+        # Unpack inputs, outputs.
+        inputs, target, prediction, translation = state.output[1]
+
+        # Current batch size.
+        this_batch_size = len(target)
+
+        # Current batch_num, epoch.
+        self._current_batch_num += 1
+
+        if self._current_batch_num==self.epoch_length:
+            self._current_epoch += 1
+            self._current_batch_num = 0
+
+        # Make directory.
+        save_dir = os.path.join(self.save_path, str(self._current_epoch))
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+
+        # Only do the image saving if we're at the right
+        # interval.
+        if self._current_batch_num % self.save_every != 0:
+            return
+            
+        # Variables to numpy.
+        inputs = inputs.cpu().numpy()
+        target = target.cpu().numpy()
+        prediction = prediction.detach().cpu().numpy()
+        translation = translation.detach().cpu().numpy()
+
+        # Visualize.
+        all_imgs = []
+        for i in range(this_batch_size):
+
+            # inputs
+            im_i = []
+            for x in inputs[i]:
+                im_i.append(self._process_slice((x+0.5)*0.5))
+
+            # target
+            im_t = [self._process_slice(target[i]/4.)]
+
+            # prediction
+            p = prediction[i]
+            p[0] = 0
+            p[1] *= 1
+            p[2] *= 2
+            p[3] *= 4
+            p = p.max(axis=0)
+            im_p = [self._process_slice(p/4.)]
+
+            # translation
+            im_tr = []
+            for x in translation[i]:
+                im_tr.append( x*0.5 + 0.5 )
+
+            out_image = np.concatenate(im_i+im_t+im_p+im_tr, axis=1)
+            all_imgs.append(out_image)
+        imsave(os.path.join(save_dir,
+                            "{}.jpg".format(self._current_batch_num)),
+                            np.vstack(all_imgs))
+
+    def _process_slice(self, s):
+        s = np.squeeze(s)
+        s = np.clip(s, 0, 1)
+        s[0,0]=1
+        s[0,1]=0
+        return s
+
 
 if __name__ == '__main__':
     args = parse_args()
@@ -109,10 +199,10 @@ if __name__ == '__main__':
     # Load
     data = prepare_data_brats(path_hgg=os.path.join(args.data_dir, "hgg.h5"),
                               path_lgg=os.path.join(args.data_dir, "lgg.h5"))
-    data_train_t = [data['train']['s'], data['train']['h']]
-    data_valid_t = [data['valid']['s'], data['valid']['h']]
-    data_train_s = [data['train']['s'], data['train']['m']]
-    data_valid_s = [data['valid']['s'], data['valid']['m']]
+    #data_train_t = [data['train']['h']]
+    #data_valid_t = [data['valid']['h']]
+    data_train = [data['train']['h'], data['train']['s'], data['train']['m']]
+    data_valid = [data['valid']['h'], data['valid']['s'], data['valid']['m']]
     # Prepare data augmentation and data loaders.
     da_kwargs = {'rotation_range': 3.,
                  'zoom_range': 0.1,
@@ -122,38 +212,21 @@ if __name__ == '__main__':
                  'warp_sigma': 5,
                  'warp_grid_size': 3}
     preprocessor_train = preprocessor_brats(data_augmentation_kwargs=da_kwargs)
-    loader_train_t = data_flow_sampler(data_train_t,
+    loader_train = data_flow_sampler(data_train,
                                        sample_random=True,
                                        batch_size=args.batch_size,
                                        preprocessor=preprocessor_train,
                                        nb_io_workers=1,
-                                       nb_proc_workers=3,
-                                       rng=np.random.RandomState(42))
-    loader_train_s = data_flow_sampler(data_train_s,
-                                       sample_random=True,
-                                       batch_size=args.batch_size,
-                                       preprocessor=preprocessor_train,
-                                       nb_io_workers=1,
-                                       nb_proc_workers=3,
+                                       nb_proc_workers=0,
                                        rng=np.random.RandomState(42))
     preprocessor_valid = preprocessor_brats(data_augmentation_kwargs=None)
-    loader_valid_t = data_flow_sampler(data_valid_t,
+    loader_valid = data_flow_sampler(data_valid,
                                        sample_random=True,
                                        batch_size=args.batch_size,
                                        preprocessor=preprocessor_valid,
                                        nb_io_workers=1,
                                        nb_proc_workers=0,
                                        rng=np.random.RandomState(42))
-    loader_valid_s = data_flow_sampler(data_valid_s,
-                                       sample_random=True,
-                                       batch_size=args.batch_size,
-                                       preprocessor=preprocessor_valid,
-                                       nb_io_workers=1,
-                                       nb_proc_workers=0,
-                                       rng=np.random.RandomState(42))
-
-    loader_train = zip(loader_train_t.flow(), loader_train_s.flow())
-    loader_valid = zip(loader_valid_t.flow(), loader_valid_s.flow())
 
     bs = args.batch_size
     epoch_length = lambda ds : len(ds)//bs + int(len(ds)%bs>0)
@@ -330,12 +403,9 @@ if __name__ == '__main__':
         epoch_length(data['train']['s']),
         epoch_length(data['train']['h'])
     )
-    image_saver_train_seg = image_saver_s(save_path=os.path.join(path, "train"),
-                                    epoch_length=num_batches_train,
-                                    save_every=500)
-    #image_saver_train_trans = image_saver_t(save_path=os.path.join(path, "train"),
-    #                                epoch_length=num_batches_train,
-    #                                save_every=500)
+    image_saver_train_seg = image_saver(save_path=os.path.join(path, "train"),
+                                        epoch_length=num_batches_train,
+                                        save_every=200)
     
     '''
     Visualize valid outputs.
@@ -353,23 +423,26 @@ if __name__ == '__main__':
     '''
     Set up training and evaluation functions for translation.
     '''
-    def prepare_batch_translation(batch):
-        b0, b1 = batch
+    def prepare_batch(batch):
+        h, s, m = batch
         # TODO: we norm in [-1, 1] here as this is
         # what cyclegan does
-        b0 = Variable(torch.from_numpy(np.array(b0 / 2.)))
-        b1 = Variable(torch.from_numpy(np.array(b1 / 2.)))
+        h = Variable(torch.from_numpy(np.array(h / 2.)))
+        s = Variable(torch.from_numpy(np.array(s / 2.)))
+        m = Variable(torch.from_numpy(np.array(m)))
         if not args.cpu:
-            b0 = b0.cuda(args.gpu_id)
-            b1 = b1.cuda(args.gpu_id)
-        return b0, b1
+            h = h.cuda(args.gpu_id)
+            s = s.cuda(args.gpu_id)
+            m = m.cuda(args.gpu_id)
+        return h, s, m
 
-    def training_function_translation(batch):
-        batch = prepare_batch_translation(batch)
+    def training_function(batch):
+        batch = prepare_batch(batch)
         for model_ in model.values():
             model_.train()
-        A_real, B_real = batch
-        # optimise F and back
+        A_real, B_real, M_real = batch
+        # CycleGAN: optimise F and back.
+        # This is the healthy to sick and back.
         hh, ww = A_real.shape[-2], A_real.shape[-1]
         atob = model['g_atob'](A_real)[:, :, 0:hh, 0:ww]
         atob_btoa = model['g_btoa'](atob)[:, :, 0:hh, 0:ww]
@@ -378,16 +451,30 @@ if __name__ == '__main__':
         optimizer['g'].zero_grad()
         g_tot_loss.backward()
         optimizer['g'].step()
-        # optimise G and back
+        # CycleGAN: optimise G and back.
+        # This is the sick to healthy and back.
         hh, ww = B_real.shape[-2], B_real.shape[-1]
         btoa = model['g_btoa'](B_real)[:, :, 0:hh, 0:ww]
         btoa_atob = model['g_atob'](btoa)[:, :, 0:hh, 0:ww]
         btoa_gen_loss, cycle_bab = compute_g_losses_bab(B_real, btoa, btoa_atob)
-        g_tot_loss = btoa_gen_loss + args.lamb*cycle_bab
+        # Segmentation: take the real sick and the translated
+        # to healthy version, concatenate them, and feed into
+        # seg model.
+        seg_inp = torch.cat((B_real, btoa), dim=1)
+        seg_out = model['seg'](seg_inp)
+        seg_loss = 0.
+        for i in range(len(loss_functions)):
+            seg_loss += loss_functions[i](seg_out, M_real)
+        seg_loss /= len(loss_functions) # average
+        # TODO: do we need to weight the relative contribution of
+        # the segmentation here?
+        g_tot_loss = args.cg_coef*(btoa_gen_loss + args.lamb*cycle_bab) + seg_loss
         optimizer['g'].zero_grad()
+        optimizer['seg'].zero_grad()
         g_tot_loss.backward()
         optimizer['g'].step()
-        # update discriminator
+        optimizer['seg'].step()
+        # Update discriminator.
         d_a_loss, d_b_loss = compute_d_losses(A_real, atob, B_real, btoa)
         optimizer['d_a'].zero_grad()
         d_a_loss.backward()
@@ -403,16 +490,18 @@ if __name__ == '__main__':
             'd_a_loss': d_a_loss.data.item(),
             'd_b_loss': d_b_loss.data.item()
         }
-        return g_tot_loss.data.item(), \
-            (A_real.data, atob.data, atob_btoa.data, B_real.data, btoa.data, btoa_atob.data), \
+        return seg_loss.data.item(), \
+            (B_real, M_real, seg_out.detach(), btoa.detach()), \
             this_metrics
 
-    def validation_function_translation(batch):
-        batch = prepare_batch_translation(batch)
+    trainer = Trainer(training_function)
+
+    def validation_function(batch):
+        batch = prepare_batch(batch)
         for model_ in model.values():
             model_.eval()
         with torch.no_grad():
-            A_real, B_real = batch
+            A_real, B_real, M_real = batch
             hh, ww = A_real.shape[-2], A_real.shape[-1]
             atob = model['g_atob'](A_real)[:, :, 0:hh, 0:ww]
             atob_btoa = model['g_btoa'](atob)[:, :, 0:hh, 0:ww]
@@ -422,7 +511,15 @@ if __name__ == '__main__':
             btoa = model['g_btoa'](B_real)[:, :, 0:hh, 0:ww]
             btoa_atob = model['g_atob'](btoa)[:, :, 0:hh, 0:ww]
             btoa_gen_loss, cycle_bab = compute_g_losses_bab(B_real, btoa, btoa_atob)
-            g_tot_loss = btoa_gen_loss + args.lamb*cycle_bab
+            seg_inp = torch.cat((B_real, btoa), dim=1)
+            seg_out = model['seg'](seg_inp)
+            seg_loss = 0.
+            for i in range(len(loss_functions)):
+                seg_loss += loss_functions[i](seg_out, M_real)
+            seg_loss /= len(loss_functions) # average
+            # TODO: do we need to weight the relative contribution of
+            # the segmentation here?
+            g_tot_loss = args.cg_coef*(btoa_gen_loss + args.lamb*cycle_bab) + seg_loss            
             d_a_loss, d_b_loss = compute_d_losses(A_real, atob, B_real, btoa)
         this_metrics = OrderedDict({
             'atob_gen_loss': atob_gen_loss.data.item(),
@@ -432,97 +529,9 @@ if __name__ == '__main__':
             'd_a_loss': d_a_loss.data.item(),
             'd_b_loss': d_b_loss.data.item()
         })
-        return g_tot_loss.data.item(), \
-            (A_real.data, atob.data, atob_btoa.data, B_real.data, btoa.data, btoa_atob.data), \
+        return seg_loss.data.item(), \
+            (B_real, M_real, seg_out.detach(), btoa.detach()), \
             this_metrics
-
-    '''
-    Set up functions for training segmentation.
-    '''
-    def prepare_batch_segmentation(batch):
-        b0, b1 = batch
-        b0 = Variable(torch.from_numpy(np.array(b0 / 2.)))
-        b1 = Variable(torch.from_numpy(np.array(b1)))
-        if not args.cpu:
-            b0 = b0.cuda(args.gpu_id)
-            b1 = b1.cuda(args.gpu_id)
-        return b0, b1
-
-    def training_function_segmentation(batch):
-        """
-        s --> h -----> m
-              s --|
-        """
-        batch = prepare_batch_segmentation(batch)
-        for model_ in model.values():
-            model_.train()
-        optimizer['seg'].zero_grad()
-        optimizer['g'].zero_grad() ##
-        hh, ww = batch[0].shape[-2], batch[0].shape[-1]
-        s2h = model['g_atob'](batch[0])[:, :, 0:hh, 0:ww]
-        inp_concat = torch.cat((batch[0], s2h), dim=1)
-        output = model['seg'](inp_concat)
-        loss = 0.
-        for i in range(len(loss_functions)):
-            loss += loss_functions[i](output, batch[1])
-        loss /= len(loss_functions) # average
-        loss.backward()
-        optimizer['seg'].step()
-        optimizer['g'].step() ##
-        return loss.data.item(), \
-            (batch[0], batch[1], output), \
-            metrics(output, batch[1])
-
-    def validation_function_segmentation(batch):
-        for model_ in model.values():
-            model_.eval()
-        with torch.no_grad():
-            batch = prepare_batch_segmentation(batch)
-            hh, ww = batch[0].shape[-2], batch[0].shape[-1]
-            s2h = model['g_atob'](batch[0])[:, :, 0:hh, 0:ww]
-            inp_concat = torch.cat((batch[0], s2h), dim=1)
-            output = model['seg'](inp_concat)
-            loss = 0.
-            for i in range(len(loss_functions)):
-                loss += loss_functions[i](output, batch[1])
-            loss /= len(loss_functions) # average
-        return loss.data.item(), \
-            (batch[0], batch[1], output), \
-            metrics(output, batch[1])
-
-    def training_function(batch):
-        batch_t, batch_s = batch
-        # batch_t contains (sick,healthy)
-        # and batch_s contains (sick,mask)
-        batch_t = prepare_batch_translation(batch_t)
-        batch_s = prepare_batch_segmentation(batch_s)
-        # Handle the translation part.
-        t_loss, t_vis, t_metrics = training_function_translation(batch_t)
-        # Handle the segmentation part.
-        s_loss, s_vis, s_metrics = training_function_segmentation(batch_s)
-        # TODO??
-        #s_metrics.update(t_metrics)
-        s_metrics['g_atob'] = t_metrics['atob_gen_loss']
-        s_metrics['d_b'] = t_metrics['d_b_loss']
-        return s_loss, s_vis, s_metrics
-    trainer = Trainer(training_function)
-
-    def validation_function(batch):
-        batch_t, batch_s = batch
-        for model_ in model.values():
-            model_.eval()
-        with torch.no_grad():
-            batch_t = prepare_batch_translation(batch_t)
-            batch_s = prepare_batch_segmentation(batch_s)
-            # Handle the translation part.
-            t_loss, t_vis, t_metrics = validation_function_translation(batch_t)
-            # Handle the segmentation part.
-            s_loss, s_vis, s_metrics = validation_function_segmentation(batch_s)
-            #s_metrics.update(t_metrics)
-            s_metrics['g_atob'] = t_metrics['atob_gen_loss']
-            s_metrics['d_b'] = t_metrics['d_b_loss']
-        # TODO??
-        return s_loss, s_vis, s_metrics
     evaluator = Evaluator(validation_function)
 
     '''
@@ -567,13 +576,15 @@ if __name__ == '__main__':
                 'g_atob': model['g_atob'].state_dict(),
                 'g_btoa': model['g_btoa'].state_dict(),
                 'd_a': model['d_a'].state_dict(),
-                'd_b': model['d_b'].state_dict()
+                'd_b': model['d_b'].state_dict(),
+                'seg': model['seg'].state_dict()
             },
-            'module_as_str': module_as_str,
+            'module_as_str': "module_as_str",
             'optim': {
                 'g': optimizer['g'].state_dict(),
                 'd_a': optimizer['d_a'].state_dict(),
-                'd_b': optimizer['d_b'].state_dict()
+                'd_b': optimizer['d_b'].state_dict(),
+                'seg': optimizer['seg'].state_dict()
             }
         }
     }
