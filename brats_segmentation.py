@@ -54,6 +54,8 @@ def parse_args():
     parser.add_argument('--optimizer', type=str, default='RMSprop')
     parser.add_argument('--cpu', default=False, action='store_true')
     parser.add_argument('--gpu_id', type=int, default=None)
+    parser.add_argument('--nb_io_workers', type=int, default=1)
+    parser.add_argument('--nb_proc_workers', type=int, default=2)
     args = parser.parse_args()
     return args
 
@@ -170,15 +172,15 @@ if __name__ == '__main__':
                                      sample_random=True,
                                      batch_size=args.batch_size_train,
                                      preprocessor=preprocessor_train,
-                                     nb_io_workers=1,
-                                     nb_proc_workers=3,
+                                     nb_io_workers=args.nb_io_workers,
+                                     nb_proc_workers=args.nb_proc_workers,
                                      rng=np.random.RandomState(42))
     preprocessor_valid = preprocessor_brats(data_augmentation_kwargs=None)
     loader_valid = data_flow_sampler(data_valid,
                                      sample_random=True,
                                      batch_size=args.batch_size_valid,
                                      preprocessor=preprocessor_valid,
-                                     nb_io_workers=1,
+                                     nb_io_workers=args.nb_io_workers,
                                      nb_proc_workers=0,
                                      rng=np.random.RandomState(42))
 
