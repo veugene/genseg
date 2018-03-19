@@ -24,6 +24,7 @@ from utils.ignite import (progress_report,
                           metrics_handler,
                           scoring_function)
 from utils.metrics import (dice_loss,
+                           global_dice,
                            accuracy)
 from utils.data import data_flow_sampler
 from utils.data import prepare_data_brats
@@ -147,6 +148,7 @@ class image_saver(object):
         s[0,0]=1
         s[0,1]=0
         return s
+    
 
 if __name__ == '__main__':
     args = parse_args()
@@ -243,14 +245,18 @@ if __name__ == '__main__':
     '''
     labels = [0,1,2,4] # 4 classes
     loss_functions = []
-    metrics_dict = OrderedDict()
-    for idx,l in enumerate(labels):
-        dice = dice_loss(l,idx)
-        if not args.cpu:
-            dice = dice.cuda(args.gpu_id)
-        loss_functions.append(dice)
-        metrics_dict['dice{}'.format(l)] = dice
-    metrics = metrics_handler(metrics_dict)
+    metrics = {'train': None, 'valid': None}
+    for key in metrics.keys():
+        metrics_dict = OrderedDict()
+        for idx,l in enumerate(labels):
+            dice = dice_loss(l,idx)
+            g_dice = global_dice(l,idx)
+            if not args.cpu:
+                dice = dice.cuda(args.gpu_id)
+                g_dice = g_dice.cuda(args.gpu_id)
+            loss_functions.append(dice)
+            metrics_dict['dice{}'.format(l)] = g_dice
+        metrics[key] = metrics_handler(metrics_dict)
     
     '''
     Visualize validation outputs.
@@ -301,6 +307,15 @@ if __name__ == '__main__':
                  (batch[0], batch[1], output.detach()),
                  metrics['valid'](output.detach(), batch[1]) )
     evaluator = Evaluator(validation_function)
+    
+    '''
+    Reset global Dice score counts every epoch (or validation run).
+    '''
+    for l in labels:
+        func = lambda key : \
+            metrics[key].measure_functions['dice{}'.format(l)].reset_counts
+        trainer.add_event_handler(Events.EPOCH_STARTED, func('train'))
+        trainer.add_event_handler(Events.EPOCH_COMPLETED, func('valid'))
     
     '''
     Set up logging to screen.
