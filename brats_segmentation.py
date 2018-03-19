@@ -283,7 +283,7 @@ if __name__ == '__main__':
         loss /= len(loss_functions) # average
         loss.backward()
         optimizer.step()
-        return loss.data.item(), metrics(output, batch[1])
+        return loss.item(), metrics['train'](output.detach(), batch[1])
     trainer = Trainer(training_function)
 
     def validation_function(batch):
@@ -295,9 +295,9 @@ if __name__ == '__main__':
             for i in range(len(loss_functions)):
                 loss += loss_functions[i](output, batch[1])
             loss /= len(loss_functions) # average
-        return ( loss.data.item(),
-                 (batch[0], batch[1], output),
-                 metrics(output, batch[1]) )
+        return ( loss.item(),
+                 (batch[0], batch[1], output.detach()),
+                 metrics['valid'](output.detach(), batch[1]) )
     evaluator = Evaluator(validation_function)
     
     '''

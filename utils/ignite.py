@@ -79,7 +79,7 @@ class metrics_handler(object):
     def __call__(self, output, target):
         measures = OrderedDict()
         for m in self.measure_functions:
-            measures[m] = self.measure_functions[m](output, target).data.item()
+            measures[m] = self.measure_functions[m](output, target).item()
         return measures
 
     def add(self, metric_name, function):
