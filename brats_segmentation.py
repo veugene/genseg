@@ -52,7 +52,7 @@ def parse_args():
     parser.add_argument('--learning_rate', type=float, default=0.001)
     parser.add_argument('--optimizer', type=str, default='RMSprop')
     parser.add_argument('--cpu', default=False, action='store_true')
-    parser.add_argument('--gpu_id', type=int, default=0)
+    parser.add_argument('--gpu_id', type=int, default=None)
     args = parser.parse_args()
     return args
 
