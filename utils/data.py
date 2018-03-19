@@ -185,17 +185,18 @@ def preprocessor_brats(data_augmentation_kwargs=None):
             if batch[2][0].dtype==np.int64:
                 has_segmentations = True
         
-        # Center all slices onto empty buffers with a size equal to the
-        # largest.
-        out_batch = []
+        # Find the largest slice.
+        max_shape = (0,0)
         for b in batch:
-            # Find the largest slice.
-            max_shape = (0,0)
             for im in b:
                 im_shape = np.shape(im)[1:]
                 max_shape = (max(im_shape[0], max_shape[0]),
                              max(im_shape[1], max_shape[1]))
-            
+        
+        # Center all slices onto empty buffers with a size equal to the
+        # largest.
+        out_batch = []
+        for b in batch:
             # Create buffer and center images into it.
             out_b = np.zeros((len(b),len(b[0]))+max_shape, dtype=np.float32)
             out_b[...] = np.inf     # To be replaced with background intensity.
