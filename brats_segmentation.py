@@ -248,14 +248,23 @@ if __name__ == '__main__':
     metrics = {'train': None, 'valid': None}
     for key in metrics.keys():
         metrics_dict = OrderedDict()
+        
+        # Dice score for every class.
         for idx,l in enumerate(labels):
             dice = dice_loss(l,idx)
-            g_dice = global_dice(l,idx)
+            g_dice = global_dice(target_class=l, target_index=idx)
             if not args.cpu:
                 dice = dice.cuda(args.gpu_id)
                 g_dice = g_dice.cuda(args.gpu_id)
             loss_functions.append(dice)
             metrics_dict['dice{}'.format(l)] = g_dice
+            
+        # Overall tumour Dice.
+        g_dice = global_dice(target_class=[1,2,4], target_index=[1,2,3])
+        if not args.cpu:
+            g_dice = g_dice.cuda(args.gpu_id)
+        metrics_dict['dice124'] = g_dice
+        
         metrics[key] = metrics_handler(metrics_dict)
     
     '''

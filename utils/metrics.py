@@ -20,32 +20,33 @@ class dice_loss(torch.nn.Module):
           to `target_class`.
         """
         super(dice_loss, self).__init__()
-        self.target_class = target_class
-        self.target_index = target_index
+        if not hasattr(target_class, '__len__'):
+            self.target_class = [target_class]
+        else:
+            self.target_class = target_class
+        if not hasattr(target_index, '__len__'):
+            self.target_index = [target_index]
+        else:
+            self.target_index = target_index
         self.mask_class = mask_class
         self._dice_loss = _dice_loss(target_class, mask_class)
 
     def forward(self, y_pred, y_true):
-        idx = self.target_index
-        return self._dice_loss(y_pred[:,idx:(idx+1)].contiguous(), y_true)
+        y_pred_indexed = sum([y_pred[:,i:i+1] for i in self.target_index])
+        return self._dice_loss(y_pred_indexed.contiguous(), y_true)
 
 
-class global_dice(torch.nn.Module):
+class global_dice(dice_loss):
     '''
     Global Dice metric. Accumulates counts over the course of an epoch.
     '''
     def __init__(self, target_class, target_index, mask_class=None,
                  epoch_length=None):
-        super(global_dice, self).__init__()
-        if not hasattr(target_class, '__len__'):
-            target_class = [target_class]
-        if mask_class is not None and not hasattr(mask_class, '__len__'):
-            mask_class = [mask_class]
-        self.target_class = target_class
-        self.target_index = target_index
-        self.mask_class = mask_class
+        super(global_dice, self).__init__(target_class=target_class,
+                                          target_index=target_index,
+                                          mask_class=mask_class)
         self.epoch_length = epoch_length
-        self.smooth = 1
+        self._smooth = 1
         self._iteration = 0
         self._intersection = 0
         self._y_target_sum = 0
@@ -93,13 +94,9 @@ class global_dice(torch.nn.Module):
         self._iteration += 1
         
         # Compute dice.
-        dice_val = -(2.*self._intersection+self.smooth) / \
-                    (self._y_target_sum+self._y_pred_sum+self.smooth)
+        dice_val = -(2.*self._intersection+self._smooth) / \
+                    (self._y_target_sum+self._y_pred_sum+self._smooth)
         return torch.FloatTensor([dice_val])
-    
-    def forward(self, y_pred, y_true):
-        idx = self.target_index
-        return self._dice_loss(y_pred[:,idx:(idx+1)].contiguous(), y_true)
     
     def reset_counts(self, *args, **kwargs):
         self._intersection = 0
