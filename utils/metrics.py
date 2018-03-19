@@ -13,12 +13,11 @@ def accuracy(output, target):
 
 
 class dice_loss(torch.nn.Module):
-    def __init__(self, target_class, target_index, mask_class=None):
-        """
-        target_class : the integer label in the ground truth
-        target_index : the index into the output feature map corresponding
-          to `target_class`.
-        """
+    '''
+    Global Dice metric. Accumulates counts over the course of an epoch.
+    '''
+    def __init__(self, target_class, target_index, mask_class=None,
+                 epoch_length=None, accumulate=False):
         super(dice_loss, self).__init__()
         if not hasattr(target_class, '__len__'):
             self.target_class = [target_class]
@@ -29,37 +28,22 @@ class dice_loss(torch.nn.Module):
         else:
             self.target_index = target_index
         self.mask_class = mask_class
-        self._dice_loss = _dice_loss(target_class, mask_class)
-
-    def forward(self, y_pred, y_true):
-        y_pred_indexed = sum([y_pred[:,i:i+1] for i in self.target_index])
-        return self._dice_loss(y_pred_indexed.contiguous(), y_true)
-
-
-class global_dice(dice_loss):
-    '''
-    Global Dice metric. Accumulates counts over the course of an epoch.
-    '''
-    def __init__(self, target_class, target_index, mask_class=None,
-                 epoch_length=None):
-        super(global_dice, self).__init__(target_class=target_class,
-                                          target_index=target_index,
-                                          mask_class=mask_class)
         self.epoch_length = epoch_length
+        self.accumulate = accumulate
         self._smooth = 1
         self._iteration = 0
-        self._intersection = 0
-        self._y_target_sum = 0
-        self._y_pred_sum = 0
+        self._intersection = 0.
+        self._y_target_sum = 0.
+        self._y_pred_sum = 0.
             
     def _dice_loss(self, y_pred, y_true):
         '''
         Expects integer or one-hot class labeling in y_true.
         Expects outputs in range [0, 1] in y_pred.
         
-        Computes the soft dice loss considering all classes in target_class as one
-        aggregate target class and ignoring all elements with ground truth classes
-        in mask_class.
+        Computes the soft dice loss considering all classes in target_class as
+        one aggregate target class and ignoring all elements with ground truth
+        classes in mask_class.
         
         target_class : integer or list
         mask_class : integer or list
@@ -88,17 +72,27 @@ class global_dice(dice_loss):
         if self.epoch_length is not None:
             if self._iteration==self.epoch_length:
                 self.reset_counts()
-        self._intersection += torch.sum(y_target * y_pred_f).item()
-        self._y_target_sum += torch.sum(y_target).item()
-        self._y_pred_sum += torch.sum(y_pred).item()
+        self._intersection += torch.sum(y_target * y_pred_f)
+        self._y_target_sum += torch.sum(y_target)
+        self._y_pred_sum += torch.sum(y_pred)
         self._iteration += 1
         
         # Compute dice.
         dice_val = -(2.*self._intersection+self._smooth) / \
                     (self._y_target_sum+self._y_pred_sum+self._smooth)
-        return torch.FloatTensor([dice_val])
+        
+        # Reset counts if not accumulating them.
+        if not self.accumulate:
+            self.reset_counts()
+        
+        #return torch.FloatTensor([dice_val])
+        return dice_val
     
     def reset_counts(self, *args, **kwargs):
-        self._intersection = 0
-        self._y_target_sum = 0
-        self._y_pred_sum = 0
+        self._intersection = 0.
+        self._y_target_sum = 0.
+        self._y_pred_sum = 0.
+        
+    def forward(self, y_pred, y_true):
+        y_pred_indexed = sum([y_pred[:,i:i+1] for i in self.target_index])
+        return self._dice_loss(y_pred_indexed.contiguous(), y_true)

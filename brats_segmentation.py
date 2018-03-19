@@ -24,7 +24,6 @@ from utils.ignite import (progress_report,
                           metrics_handler,
                           scoring_function)
 from utils.metrics import (dice_loss,
-                           global_dice,
                            accuracy)
 from utils.data import data_flow_sampler
 from utils.data import prepare_data_brats
@@ -252,7 +251,8 @@ if __name__ == '__main__':
         # Dice score for every class.
         for idx,l in enumerate(labels):
             dice = dice_loss(l,idx)
-            g_dice = global_dice(target_class=l, target_index=idx)
+            g_dice = dice_loss(target_class=l, target_index=idx,
+                               accumulate=True)
             if not args.cpu:
                 dice = dice.cuda(args.gpu_id)
                 g_dice = g_dice.cuda(args.gpu_id)
@@ -260,7 +260,8 @@ if __name__ == '__main__':
             metrics_dict['dice{}'.format(l)] = g_dice
             
         # Overall tumour Dice.
-        g_dice = global_dice(target_class=[1,2,4], target_index=[1,2,3])
+        g_dice = dice_loss(target_class=[1,2,4], target_index=[1,2,3],
+                           accumulate=True)
         if not args.cpu:
             g_dice = g_dice.cuda(args.gpu_id)
         metrics_dict['dice124'] = g_dice
@@ -300,7 +301,9 @@ if __name__ == '__main__':
         loss /= len(loss_functions) # average
         loss.backward()
         optimizer.step()
-        return loss.item(), metrics['train'](output.detach(), batch[1])
+        with torch.no_grad():
+            metrics_dict = metrics['train'](output.detach(), batch[1])
+        return loss.item(), metrics_dict
     trainer = Trainer(training_function)
 
     def validation_function(batch):
@@ -312,9 +315,8 @@ if __name__ == '__main__':
             for i in range(len(loss_functions)):
                 loss += loss_functions[i](output, batch[1])
             loss /= len(loss_functions) # average
-        return ( loss.item(),
-                 (batch[0], batch[1], output.detach()),
-                 metrics['valid'](output.detach(), batch[1]) )
+            metrics_dict = metrics['train'](output, batch[1])
+        return loss.item(), batch+(output.detach(),), metrics_dict
     evaluator = Evaluator(validation_function)
     
     '''
