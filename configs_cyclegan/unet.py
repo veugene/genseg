@@ -1,5 +1,4 @@
 from architectures import image2image
-from torch import nn
 
 def build_model():
     disc_params = {
@@ -9,15 +8,16 @@ def build_model():
         'norm': 'instance',
         'which_model_netD': 'n_layers'
     }
-    gen_kwargs = {
-        'in_channels': 4,
-        'out_channels': 4,
-        'C': 24,
-        'norm_layer': nn.InstanceNorm2d
+    g_params = {
+        'input_nc': 4,
+        'output_nc': 4,
+        'ngf': 64,
+        'norm': 'instance',
+        'which_model_netG': 'unet_128'
     }
     model = {
-        'g_atob': image2image.DilatedFCN(**gen_kwargs),
-        'g_btoa': image2image.DilatedFCN(**gen_kwargs),
+        'g_atob': image2image.define_G(**g_params),
+        'g_btoa': image2image.define_G(**g_params),
         'd_a': image2image.define_D(**disc_params),
         'd_b': image2image.define_D(**disc_params)
     }
