@@ -52,7 +52,7 @@ def parse_args():
     parser.add_argument('--resume', type=str, default=None)
     parser.add_argument('-e', '--evaluate', action='store_true')
     parser.add_argument('--weight_decay', type=float, default=1e-4)
-    parser.add_argument('--cg_coef', type=float, default=1.)
+    parser.add_argument('--seg_coef', type=float, default=1.)
     parser.add_argument('--num_pool', type=int, default=0)
     parser.add_argument('--lamb', type=float, default=10.)
     parser.add_argument('--batch_size', type=int, default=1)
@@ -467,7 +467,7 @@ if __name__ == '__main__':
         seg_loss /= len(loss_functions) # average
         # TODO: do we need to weight the relative contribution of
         # the segmentation here?
-        g_tot_loss = args.cg_coef*(btoa_gen_loss + args.lamb*cycle_bab) + seg_loss
+        g_tot_loss = (btoa_gen_loss + args.lamb*cycle_bab) + args.seg_coef*seg_loss
         optimizer['g'].zero_grad()
         optimizer['seg'].zero_grad()
         g_tot_loss.backward()
@@ -518,7 +518,7 @@ if __name__ == '__main__':
             seg_loss /= len(loss_functions) # average
             # TODO: do we need to weight the relative contribution of
             # the segmentation here?
-            g_tot_loss = args.cg_coef*(btoa_gen_loss + args.lamb*cycle_bab) + seg_loss            
+            g_tot_loss = (btoa_gen_loss + args.lamb*cycle_bab) + args.seg_coef*seg_loss
             d_a_loss, d_b_loss = compute_d_losses(A_real, atob, B_real, btoa)
         this_metrics = OrderedDict({
             'atob_gen_loss': atob_gen_loss.data.item(),
