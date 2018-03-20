@@ -30,14 +30,14 @@ def parse_log_file(filename):
                 dd[ tp[0] ].append( float(tp[1]) )
     return dd
 
-dd_train = parse_log_file(args.logname)
-if args.key not in dd_train:
+dd = parse_log_file(args.logname)
+if args.key not in dd:
     raise Exception("Specified key ({}) was not found!".format(args.key))
 
-plt.plot(dd_train[args.key])
+plt.plot(dd[args.key])
 plt.title(args.key)
 plt.ylabel(args.key)
 plt.xlabel('epoch')
-plt.savefig("{}/train_{}.png".format(os.path.dirname(args.logname), args.key))
+plt.savefig("{}/{}.png".format(os.path.dirname(args.logname), args.key))
 plt.close()
 
