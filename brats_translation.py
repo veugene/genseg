@@ -11,6 +11,7 @@ import imp
 
 import numpy as np
 from scipy.misc import imsave
+from skimage.transform import resize
 import torch
 from torch.autograd import Variable
 import ignite
@@ -106,14 +107,20 @@ class image_saver(object):
         self._current_batch_num = 0
         self._current_epoch = 0
 
-    def __call__(self, engine, state):
+    def _process_slice(self, s):
+        s = np.squeeze(s)
+        s = np.clip(s, 0, 1)
+        s[0,0]=1
+        s[0,1]=0
+        return s
 
-        if self._current_batch_num % self.save_every != 0:
-            return
+    def __call__(self, engine, state):
 
         # Extract images and change them from [-1, 1] to [0,1].
         a, atob, atob_btoa, b, btoa, btoa_atob = \
-            [ (elem.cpu().numpy()*0.5)+0.5 for elem in state.output[1] ]
+            [ (elem.cpu().numpy()*0.5)+0.5 for elem in state.output[1][:-1] ]
+        # Extract the segmentation mask, which is already in Numpy.
+        mask = state.output[1][-1]
         
         # Current batch size.
         this_batch_size = len(a)
@@ -129,25 +136,26 @@ class image_saver(object):
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
 
-        from skimage.transform import resize
+        if self._current_batch_num % self.save_every != 0:
+            return
             
         # Visualize.
         all_imgs = []
         for i in range(this_batch_size):
-
-            this_row = []
-            # TODO: just show one channel only first
-            # Images in B may not be the same size so do a
-            # resize if necessary.
-            this_row.append(a[i,0])
-            this_row.append(atob[i,0])
-            this_row.append(atob_btoa[i,0])
-            this_row.append( resize(b[i,0], a.shape[2:]) )
-            this_row.append( resize(btoa[i,0], a.shape[2:]) )
-            this_row.append( resize(btoa_atob[i,0], a.shape[2:]) )
-            #out_image = np.concatenate(im_i+im_t+im_p, axis=1)
-            out_image = np.hstack(this_row)
-            all_imgs.append(out_image)
+            # For each example in the batch, plot all of the
+            # channels. So the image will have bs*f rows, where
+            # f = 4.
+            for j in range(a.shape[1]):
+                this_row = []
+                this_row.append(a[i,j])
+                this_row.append(atob[i,j])
+                this_row.append(atob_btoa[i,j])
+                this_row.append( resize(b[i,j], a.shape[2:]) )
+                this_row.append( resize(btoa[i,j], a.shape[2:]) )
+                this_row.append( resize(btoa_atob[i,j], a.shape[2:]) )
+                this_row.append( resize(self._process_slice(mask[i]/4.), a.shape[2:]) )
+                out_image = np.hstack(this_row)
+                all_imgs.append(out_image)
         imsave(os.path.join(save_dir,
                             "{}.png".format(self._current_batch_num)),
                             np.vstack(all_imgs))
@@ -162,8 +170,8 @@ if __name__ == '__main__':
     # Load
     data = prepare_data_brats(path_hgg=os.path.join(args.data_dir, "hgg.h5"),
                               path_lgg=os.path.join(args.data_dir, "lgg.h5"))
-    data_train = [data['train']['s'], data['train']['h']]
-    data_valid = [data['valid']['s'], data['valid']['h']]
+    data_train = [data['train']['h'], data['train']['s'], data['train']['m']]
+    data_valid = [data['valid']['h'], data['valid']['s'], data['train']['m']]
     # Prepare data augmentation and data loaders.
     da_kwargs = {'rotation_range': 3.,
                  'zoom_range': 0.1,
@@ -350,7 +358,7 @@ if __name__ == '__main__':
     Set up training and evaluation functions.
     '''
     def prepare_batch(batch):
-        b0, b1 = batch
+        b0, b1, b2 = batch
         # TODO: we norm in [-1, 1] here as this is
         # what cyclegan does
         b0 = Variable(torch.from_numpy(np.array(b0 / 2.)))
@@ -358,13 +366,13 @@ if __name__ == '__main__':
         if not args.cpu:
             b0 = b0.cuda(args.gpu_id)
             b1 = b1.cuda(args.gpu_id)
-        return b0, b1
+        return b0, b1, b2
 
     def training_function(batch):
         batch = prepare_batch(batch)
         for model_ in model.values():
             model_.train()
-        A_real, B_real = batch
+        A_real, B_real, M_np = batch
         # optimise F and back
         hh, ww = A_real.shape[-2], A_real.shape[-1]
         atob = model['g_atob'](A_real)[:, :, 0:hh, 0:ww]
@@ -399,7 +407,9 @@ if __name__ == '__main__':
             'd_a_loss': d_a_loss.data.item(),
             'd_b_loss': d_b_loss.data.item()
         }
-        return g_tot_loss.data.item(), (A_real.data, atob.data, atob_btoa.data, B_real.data, btoa.data, btoa_atob.data), this_metrics
+        return g_tot_loss.data.item(), \
+            (A_real.data, atob.data, atob_btoa.data, B_real.data, btoa.data, btoa_atob.data, M_np), \
+            this_metrics
     trainer = Trainer(training_function)
 
     def validation_function(batch):
@@ -407,7 +417,7 @@ if __name__ == '__main__':
         for model_ in model.values():
             model_.eval()
         with torch.no_grad():
-            A_real, B_real = batch
+            A_real, B_real, M_np = batch
             hh, ww = A_real.shape[-2], A_real.shape[-1]
             atob = model['g_atob'](A_real)[:, :, 0:hh, 0:ww]
             atob_btoa = model['g_btoa'](atob)[:, :, 0:hh, 0:ww]
@@ -427,7 +437,9 @@ if __name__ == '__main__':
             'd_a_loss': d_a_loss.data.item(),
             'd_b_loss': d_b_loss.data.item()
         }
-        return g_tot_loss.data.item(), (A_real.data, atob.data, atob_btoa.data, B_real.data, btoa.data, btoa_atob.data), this_metrics
+        return g_tot_loss.data.item(), \
+            (A_real.data, atob.data, atob_btoa.data, B_real.data, btoa.data, btoa_atob.data, M_np), \
+            this_metrics
     evaluator = Evaluator(validation_function)
 
     '''
