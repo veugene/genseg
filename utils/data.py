@@ -180,7 +180,7 @@ def preprocessor_brats(data_augmentation_kwargs=None):
                 has_segmentations = True
         if len(batch)==3:
             assert batch[0][0].dtype==np.float32
-            assert batch[1][1].dtype==np.float32
+            assert batch[1][0].dtype==np.float32
             assert batch[2][0].dtype==np.float32 or batch[2][0].dtype==np.int64
             if batch[2][0].dtype==np.int64:
                 has_segmentations = True
