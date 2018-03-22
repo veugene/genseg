@@ -83,17 +83,22 @@ class data_flow_sampler(data_flow):
         return super(data_flow_sampler, self).flow()
 
 
-def prepare_data_brats(path_hgg, path_lgg):
+def prepare_data_brats(path_hgg, path_lgg, orientations=None):
     """
     Convenience function to prepare brats data as multi_source_array objects,
     split into training and validation subsets.
     
     path_hgg (string) : Path of the h5py file containing the HGG data.
     path_lgg (string) : Path of the h5py file containing the LGG data.
+    orientations (list) : A list of integers in {1, 2, 3}, specifying the
+        axes along which to slice image volumes.
     
     Returns six arrays: healthy slices, sick slices, and segmentations for 
     the training and validation subsets.
     """
+    
+    if orientations is None:
+        orientations = [1,2,3]
     
     # Random 20% data split.
     validation_indices = {'hgg': [60,54,182,64,166,190,184,143,6,75,169,183,
@@ -101,7 +106,6 @@ def prepare_data_brats(path_hgg, path_lgg):
                                   101,120,5,185,203,151,100,149,44,48,151,34,
                                   88,204,149,119,152,65],
                           'lgg': [25,14,25,4,54,56,56,54,59,1,38,6,24,23,53]}
-    orientations = [1,2,3]
     
     
     def _prepare(path, axis, validation_indices):
@@ -180,22 +184,23 @@ def preprocessor_brats(data_augmentation_kwargs=None):
                 has_segmentations = True
         if len(batch)==3:
             assert batch[0][0].dtype==np.float32
-            assert batch[1][1].dtype==np.float32
+            assert batch[1][0].dtype==np.float32
             assert batch[2][0].dtype==np.float32 or batch[2][0].dtype==np.int64
             if batch[2][0].dtype==np.int64:
                 has_segmentations = True
+        
+        # Find the largest slice.
+        max_shape = (0,0)
+        for b in batch:
+            for im in b:
+                im_shape = np.shape(im)[1:]
+                max_shape = (max(im_shape[0], max_shape[0]),
+                             max(im_shape[1], max_shape[1]))
         
         # Center all slices onto empty buffers with a size equal to the
         # largest.
         out_batch = []
         for b in batch:
-            # Find the largest slice.
-            max_shape = (0,0)
-            for im in b:
-                im_shape = np.shape(im)[1:]
-                max_shape = (max(im_shape[0], max_shape[0]),
-                             max(im_shape[1], max_shape[1]))
-            
             # Create buffer and center images into it.
             out_b = np.zeros((len(b),len(b[0]))+max_shape, dtype=np.float32)
             out_b[...] = np.inf     # To be replaced with background intensity.

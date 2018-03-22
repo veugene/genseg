@@ -47,12 +47,15 @@ def parse_args():
     g_load.add_argument('--resume', type=str, default=None)
     parser.add_argument('-e', '--evaluate', action='store_true')
     parser.add_argument('--weight_decay', type=float, default=1e-4)
-    parser.add_argument('--batch_size', type=int, default=80)
+    parser.add_argument('--batch_size_train', type=int, default=80)
+    parser.add_argument('--batch_size_valid', type=int, default=400)
     parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument('--learning_rate', type=float, default=0.001)
     parser.add_argument('--optimizer', type=str, default='RMSprop')
     parser.add_argument('--cpu', default=False, action='store_true')
-    parser.add_argument('--gpu_id', type=int, default=0)
+    parser.add_argument('--gpu_id', type=int, default=None)
+    parser.add_argument('--nb_io_workers', type=int, default=1)
+    parser.add_argument('--nb_proc_workers', type=int, default=2)
     args = parser.parse_args()
     return args
 
@@ -90,7 +93,8 @@ class image_saver(object):
                 return
 
         # Unpack inputs, outputs.
-        inputs, target, prediction = state.output[1]
+        inputs, target = state.output[1]
+        prediction = state.output[2]
 
         # Current batch size.
         this_batch_size = len(target)
@@ -144,6 +148,7 @@ class image_saver(object):
         s[0,0]=1
         s[0,1]=0
         return s
+    
 
 if __name__ == '__main__':
     args = parse_args()
@@ -167,17 +172,17 @@ if __name__ == '__main__':
     preprocessor_train = preprocessor_brats(data_augmentation_kwargs=da_kwargs)
     loader_train = data_flow_sampler(data_train,
                                      sample_random=True,
-                                     batch_size=args.batch_size,
+                                     batch_size=args.batch_size_train,
                                      preprocessor=preprocessor_train,
-                                     nb_io_workers=1,
-                                     nb_proc_workers=3,
+                                     nb_io_workers=args.nb_io_workers,
+                                     nb_proc_workers=args.nb_proc_workers,
                                      rng=np.random.RandomState(42))
     preprocessor_valid = preprocessor_brats(data_augmentation_kwargs=None)
     loader_valid = data_flow_sampler(data_valid,
                                      sample_random=True,
-                                     batch_size=args.batch_size,
+                                     batch_size=args.batch_size_valid,
                                      preprocessor=preprocessor_valid,
-                                     nb_io_workers=1,
+                                     nb_io_workers=args.nb_io_workers,
                                      nb_proc_workers=0,
                                      rng=np.random.RandomState(42))
 
@@ -240,21 +245,35 @@ if __name__ == '__main__':
     '''
     labels = [0,1,2,4] # 4 classes
     loss_functions = []
-    metrics_dict = OrderedDict()
-    for idx,l in enumerate(labels):
-        dice = dice_loss(l,idx)
+    metrics = {'train': None, 'valid': None}
+    for key in metrics.keys():
+        metrics_dict = OrderedDict()
+        
+        # Dice score for every class.
+        for idx,l in enumerate(labels):
+            dice = dice_loss(l,idx)
+            g_dice = dice_loss(target_class=l, target_index=idx,
+                               accumulate=True)
+            if not args.cpu:
+                dice = dice.cuda(args.gpu_id)
+                g_dice = g_dice.cuda(args.gpu_id)
+            loss_functions.append(dice)
+            metrics_dict['dice{}'.format(l)] = g_dice
+            
+        # Overall tumour Dice.
+        g_dice = dice_loss(target_class=[1,2,4], target_index=[1,2,3],
+                           accumulate=True)
         if not args.cpu:
-            dice = dice.cuda(args.gpu_id)
-        loss_functions.append(dice)
-        metrics_dict['dice{}'.format(l)] = dice
-    metrics = metrics_handler(metrics_dict)
+            g_dice = g_dice.cuda(args.gpu_id)
+        metrics_dict['dice124'] = g_dice
+        
+        metrics[key] = metrics_handler(metrics_dict)
     
     '''
     Visualize validation outputs.
     '''
-    bs = args.batch_size
-    epoch_length = lambda ds : len(ds)//bs + int(len(ds)%bs>0)
-    num_batches_valid = epoch_length(data['valid']['s'])
+    epoch_length = lambda ds, bs : len(ds)//bs + int(len(ds)%bs>0)
+    num_batches_valid = epoch_length(data['valid']['s'], args.batch_size_valid)
     image_saver_valid = image_saver(save_path=os.path.join(path, "validation"),
                                     epoch_length=num_batches_valid,
                                 score_function=scoring_function("val_metrics"))
@@ -283,7 +302,9 @@ if __name__ == '__main__':
         loss /= len(loss_functions) # average
         loss.backward()
         optimizer.step()
-        return loss.data.item(), metrics(output, batch[1])
+        with torch.no_grad():
+            metrics_dict = metrics['train'](output.detach(), batch[1])
+        return loss.item(), batch, output.detach(), metrics_dict
     trainer = Trainer(training_function)
 
     def validation_function(batch):
@@ -295,15 +316,22 @@ if __name__ == '__main__':
             for i in range(len(loss_functions)):
                 loss += loss_functions[i](output, batch[1])
             loss /= len(loss_functions) # average
-        return ( loss.data.item(),
-                 (batch[0], batch[1], output),
-                 metrics(output, batch[1]) )
+            metrics_dict = metrics['valid'](output, batch[1])
+        return loss.item(), batch, output.detach(), metrics_dict
     evaluator = Evaluator(validation_function)
+    
+    '''
+    Reset global Dice score counts every epoch (or validation run).
+    '''
+    for l in labels:
+        func = lambda key : \
+            metrics[key].measure_functions['dice{}'.format(l)].reset_counts
+        trainer.add_event_handler(Events.EPOCH_STARTED, func('train'))
+        trainer.add_event_handler(Events.EPOCH_COMPLETED, func('valid'))
     
     '''
     Set up logging to screen.
     '''
-    bs = args.batch_size
     progress_train = progress_report(prefix=None,
                                      log_path=os.path.join(path,
                                                            "log_train.txt"))
