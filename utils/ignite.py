@@ -22,23 +22,23 @@ class progress_report(object):
         desc = "{}: {}".format(desc, mstr) if len(desc) else mstr
         print(desc, file=file)
        
-    def __call__(self, engine, state):
+    def __call__(self, engine):
         if self.epoch_length is None:
             # If no epoch length is defined, see if we can pull it
             # out of the data loader.
-            if hasattr(state.dataloader, '__len__'):
-                self.epoch_length = len(state.dataloader)
+            if hasattr(engine.state.dataloader, '__len__'):
+                self.epoch_length = len(engine.state.dataloader)
             else:
                 self.epoch_length = np.inf
         prefix = ""
         if self.prefix is not None:
             prefix = "{}_".format(self.prefix)
-        if (state.iteration-1) % self.epoch_length == 0:
+        if (engine.state.iteration-1) % self.epoch_length == 0:
             # Every time we're at the start of the next epoch, reset
             # the statistics.
             self.metrics = OrderedDict(((prefix+'loss', 0),))
-            setattr(state, prefix+"metrics", self.metrics)
-        iter_history = state.output # only this iteration's history
+            setattr(engine.state, prefix+"metrics", self.metrics)
+        iter_history = engine.state.output # only this iteration's history
         loss = iter_history[0]
         self.metrics[prefix+'loss'] += loss
         for name, val in iter_history[-1].items():
@@ -48,19 +48,19 @@ class progress_report(object):
             self.metrics[name] += val
         # Average metrics over the epoch thus far.
         metrics = OrderedDict()
-        denom = ((float(state.iteration)-1) % self.epoch_length) + 1
+        denom = ((float(engine.state.iteration)-1) % self.epoch_length) + 1
         for name in self.metrics:
             metrics[name] = self.metrics[name] / denom
         # Print to screen.
         desc = ""
-        if hasattr(state, 'epoch'):
-            desc += "Epoch {}".format(state.epoch)
+        if hasattr(engine.state, 'epoch'):
+            desc += "Epoch {}".format(engine.state.epoch)
         if self.progress_bar:
             if self._pbar is None:
                 self._pbar = tqdm(total=self.epoch_length, desc=desc)
             self._pbar.set_postfix(metrics)
             self._pbar.update(1)
-            if state.iteration % self.epoch_length == 0:
+            if engine.state.iteration % self.epoch_length == 0:
                 self._pbar.close()
                 self._pbar = None
                 if self.log_path is not None:
@@ -92,7 +92,7 @@ class scoring_function(object):
         metrics_name : the name of the dictionary in the state
           object storing the metrics to monitor.
         loss_name : loss to monitor. This is one of the keys in
-          state.output[-1] of the trainer.
+          engine.state.output[-1] of the trainer.
         period : only consider saving the best model every
           this many epochs.
         """
@@ -103,11 +103,11 @@ class scoring_function(object):
         self.period = period
         self.epochs_since_last_save = 0
         
-    def __call__(self, state):
+    def __call__(self, engine):
         self.epochs_since_last_save += 1
         if self.epochs_since_last_save >= self.period:
             self.epochs_since_last_save = 0
-            quantity = getattr(state, self.metrics_name)[self.loss_name]
+            quantity = getattr(engine.state, self.metrics_name)[self.loss_name]
             # Since we're always trying to minimize things, return
             # the -ve of whatever that is.
             return -quantity

@@ -83,18 +83,18 @@ class image_saver(object):
         self._current_batch_num = 0
         self._current_epoch = 0
 
-    def __call__(self, engine, state):
+    def __call__(self, engine):
         # If tracking a score, only save whenever a max score is reached.
         if self.score_function is not None:
-            score = float(self.score_function(state))
+            score = float(self.score_function(engine))
             if score > self._max_score:
                 self._max_score = score
             else:
                 return
 
         # Unpack inputs, outputs.
-        inputs, target = state.output[1]
-        prediction = state.output[2]
+        inputs, target = engine.state.output[1]
+        prediction = engine.state.output[2]
 
         # Current batch size.
         this_batch_size = len(target)
@@ -291,7 +291,7 @@ if __name__ == '__main__':
             b1 = b1.cuda(args.gpu_id)
         return b0, b1
 
-    def training_function(batch):
+    def training_function(engine, batch):
         batch = prepare_batch(batch)
         model.train()
         optimizer.zero_grad()
@@ -307,7 +307,7 @@ if __name__ == '__main__':
         return loss.item(), batch, output.detach(), metrics_dict
     trainer = Trainer(training_function)
 
-    def validation_function(batch):
+    def validation_function(engine, batch):
         model.eval()
         with torch.no_grad():
             batch = prepare_batch(batch)
@@ -340,7 +340,7 @@ if __name__ == '__main__':
                                                            "log_valid.txt"))
     trainer.add_event_handler(Events.ITERATION_COMPLETED, progress_train)
     trainer.add_event_handler(Events.EPOCH_COMPLETED,
-                            lambda engine, state: evaluator.run(loader_valid))
+                              lambda _: evaluator.run(loader_valid))
     evaluator.add_event_handler(Events.ITERATION_COMPLETED, progress_valid)
     evaluator.add_event_handler(Events.ITERATION_COMPLETED, image_saver_valid)
     
