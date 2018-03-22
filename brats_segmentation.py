@@ -217,11 +217,14 @@ if __name__ == '__main__':
         if args.model_from.endswith(".py"):
             module = imp.load_source('model_from', args.model_from)
             module_as_str = open(args.model_from).read()
+            model = getattr(module, 'build_model')()
         else:
-            module_as_str = torch.load(args.model_from)['module_as_str']
+            saved_dict = torch.load(args.model_from)
+            module_as_str = saved_dict['module_as_str']
             module = imp.new_module('model_from')
             exec(module_as_str, module.__dict__)
-        model = getattr(module, 'build_model')()
+            model = getattr(module, 'build_model')()
+            model.load_state_dict(saved_dict['weights'])
         if not args.cpu:
             model.cuda(args.gpu_id)
         optimizer = get_optimizer(args.optimizer, model, args.learning_rate)
