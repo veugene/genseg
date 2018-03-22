@@ -316,7 +316,7 @@ if __name__ == '__main__':
             for i in range(len(loss_functions)):
                 loss += loss_functions[i](output, batch[1])
             loss /= len(loss_functions) # average
-            metrics_dict = metrics['train'](output, batch[1])
+            metrics_dict = metrics['valid'](output, batch[1])
         return loss.item(), batch, output.detach(), metrics_dict
     evaluator = Evaluator(validation_function)
     
