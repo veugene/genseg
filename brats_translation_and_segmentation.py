@@ -14,9 +14,10 @@ from scipy.misc import imsave
 import torch
 from torch.autograd import Variable
 import ignite
-from ignite.trainer import Trainer
-from ignite.engine import Events
-from ignite.evaluator import Evaluator
+
+from ignite.engines import (Events,
+                            Trainer,
+                            Evaluator)
 from ignite.handlers import ModelCheckpoint
 
 from architectures.image2image import DilatedFCN
@@ -52,15 +53,17 @@ def parse_args():
     parser.add_argument('--resume', type=str, default=None)
     parser.add_argument('-e', '--evaluate', action='store_true')
     parser.add_argument('--weight_decay', type=float, default=1e-4)
-    parser.add_argument('--seg_coef', type=float, default=1.)
     parser.add_argument('--num_pool', type=int, default=0)
     parser.add_argument('--lamb', type=float, default=10.)
-    parser.add_argument('--batch_size', type=int, default=1)
+    parser.add_argument('--batch_size_train', type=int, default=1)
+    parser.add_argument('--batch_size_valid', type=int, default=1)
     parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument('--learning_rate', type=float, default=0.0002)
     parser.add_argument('--optimizer', type=str, default='adam')
     parser.add_argument('--cpu', default=False, action='store_true')
     parser.add_argument('--gpu_id', type=int, default=0)
+    parser.add_argument('--nb_io_workers', type=int, default=1)
+    parser.add_argument('--nb_proc_workers', type=int, default=0)
     args = parser.parse_args()
     return args
 
@@ -111,18 +114,18 @@ class image_saver(object):
         self._current_batch_num = 0
         self._current_epoch = 0
 
-    def __call__(self, engine, state):
+    def __call__(self, engine):
         # If tracking a score, only save whenever a max score is reached.
         if self.score_function is not None:
-            score = float(self.score_function(state))
+            score = float(self.score_function(engine.state))
             if score > self._max_score:
                 self._max_score = score
             else:
                 return
 
         # Unpack inputs, outputs.
-        inputs, target, prediction, translation = state.output[1]
-
+        inputs, target, prediction, translation = engine.state.output[2]
+        
         # Current batch size.
         this_batch_size = len(target)
 
@@ -198,8 +201,6 @@ if __name__ == '__main__':
     # Load
     data = prepare_data_brats(path_hgg=os.path.join(args.data_dir, "hgg.h5"),
                               path_lgg=os.path.join(args.data_dir, "lgg.h5"))
-    #data_train_t = [data['train']['h']]
-    #data_valid_t = [data['valid']['h']]
     data_train = [data['train']['h'], data['train']['s'], data['train']['m']]
     data_valid = [data['valid']['h'], data['valid']['s'], data['valid']['m']]
     # Prepare data augmentation and data loaders.
@@ -213,22 +214,21 @@ if __name__ == '__main__':
     preprocessor_train = preprocessor_brats(data_augmentation_kwargs=da_kwargs)
     loader_train = data_flow_sampler(data_train,
                                        sample_random=True,
-                                       batch_size=args.batch_size,
+                                       batch_size=args.batch_size_train,
                                        preprocessor=preprocessor_train,
-                                       nb_io_workers=1,
-                                       nb_proc_workers=0,
+                                       nb_io_workers=args.nb_io_workers,
+                                       nb_proc_workers=args.nb_proc_workers,
                                        rng=np.random.RandomState(42))
     preprocessor_valid = preprocessor_brats(data_augmentation_kwargs=None)
     loader_valid = data_flow_sampler(data_valid,
                                        sample_random=True,
-                                       batch_size=args.batch_size,
+                                       batch_size=args.batch_size_valid,
                                        preprocessor=preprocessor_valid,
-                                       nb_io_workers=1,
-                                       nb_proc_workers=0,
+                                       nb_io_workers=args.nb_io_workers,
+                                       nb_proc_workers=args.nb_proc_workers,
                                        rng=np.random.RandomState(42))
 
-    bs = args.batch_size
-    epoch_length = lambda ds : len(ds)//bs + int(len(ds)%bs>0)
+    epoch_length = lambda ds, bs : len(ds)//bs + int(len(ds)%bs>0)
     
     '''
     Prepare model. The `resume` arg is able to restore the model,
@@ -380,29 +380,45 @@ if __name__ == '__main__':
     if not args.cpu:
         mse_loss = mse_loss.cuda(args.gpu_id)
 
+
     '''
     Set up loss functions and metrics. Since this is a multiclass problem,
     set up a metrics handler for each output map.
     '''
     labels = [0,1,2,4] # 4 classes
     loss_functions = []
-    metrics_dict = OrderedDict()
-    for idx,l in enumerate(labels):
-        dice = dice_loss(l,idx)
-        if not args.cpu:
-            dice = dice.cuda(args.gpu_id)
-        loss_functions.append(dice)
-        metrics_dict['dice{}'.format(l)] = dice
-    metrics = metrics_handler(metrics_dict)
+    metrics = {'train': None, 'valid': None}
+    for key in metrics.keys():
+        metrics_dict = OrderedDict()
         
+        # Dice score for every class.
+        for idx,l in enumerate(labels):
+            dice = dice_loss(l,idx)
+            g_dice = dice_loss(target_class=l, target_index=idx,
+                               accumulate=True)
+            if not args.cpu:
+                dice = dice.cuda(args.gpu_id)
+                g_dice = g_dice.cuda(args.gpu_id)
+            loss_functions.append(dice)
+            metrics_dict['dice{}'.format(l)] = g_dice
+            
+        # Overall tumour Dice.
+        g_dice = dice_loss(target_class=[1,2,4], target_index=[1,2,3],
+                           accumulate=True)
+        if not args.cpu:
+            g_dice = g_dice.cuda(args.gpu_id)
+        metrics_dict['dice124'] = g_dice
+        
+        metrics[key] = metrics_handler(metrics_dict)
+       
     '''
     Visualize train outputs.
     '''
     num_batches_train = min(
-        epoch_length(data['train']['s']),
-        epoch_length(data['train']['h'])
+        epoch_length(data['train']['s'], args.batch_size_train),
+        epoch_length(data['train']['h'], args.batch_size_train)
     )
-    image_saver_train_seg = image_saver(save_path=os.path.join(path, "train"),
+    image_saver_train = image_saver(save_path=os.path.join(path, "train"),
                                         epoch_length=num_batches_train,
                                         save_every=200)
     
@@ -435,7 +451,7 @@ if __name__ == '__main__':
             m = m.cuda(args.gpu_id)
         return h, s, m
 
-    def training_function(batch):
+    def training_function(engine, batch):
         batch = prepare_batch(batch)
         for model_ in model.values():
             model_.train()
@@ -467,7 +483,7 @@ if __name__ == '__main__':
         seg_loss /= len(loss_functions) # average
         # TODO: do we need to weight the relative contribution of
         # the segmentation here?
-        g_tot_loss = (btoa_gen_loss + args.lamb*cycle_bab) + args.seg_coef*seg_loss
+        g_tot_loss = (btoa_gen_loss + args.lamb*cycle_bab) + seg_loss
         optimizer['g'].zero_grad()
         optimizer['seg'].zero_grad()
         g_tot_loss.backward()
@@ -489,13 +505,16 @@ if __name__ == '__main__':
             'd_a_loss': d_a_loss.data.item(),
             'd_b_loss': d_b_loss.data.item()
         }
-        return seg_loss.data.item(), \
+        with torch.no_grad():
+            this_metrics.update(metrics['train'](seg_out, M_real))
+        return seg_loss.item(), \
+            batch, \
             (B_real, M_real, seg_out.detach(), btoa.detach()), \
             this_metrics
 
     trainer = Trainer(training_function)
 
-    def validation_function(batch):
+    def validation_function(engine, batch):
         batch = prepare_batch(batch)
         for model_ in model.values():
             model_.eval()
@@ -518,7 +537,7 @@ if __name__ == '__main__':
             seg_loss /= len(loss_functions) # average
             # TODO: do we need to weight the relative contribution of
             # the segmentation here?
-            g_tot_loss = (btoa_gen_loss + args.lamb*cycle_bab) + args.seg_coef*seg_loss
+            g_tot_loss = (btoa_gen_loss + args.lamb*cycle_bab) + seg_loss
             d_a_loss, d_b_loss = compute_d_losses(A_real, atob, B_real, btoa)
         this_metrics = OrderedDict({
             'atob_gen_loss': atob_gen_loss.data.item(),
@@ -528,37 +547,40 @@ if __name__ == '__main__':
             'd_a_loss': d_a_loss.data.item(),
             'd_b_loss': d_b_loss.data.item()
         })
-        return seg_loss.data.item(), \
+        this_metrics.update(metrics['valid'](seg_out, M_real))
+        return seg_loss.item(), \
+            batch, \
             (B_real, M_real, seg_out.detach(), btoa.detach()), \
             this_metrics
     evaluator = Evaluator(validation_function)
 
     '''
+    Reset global Dice score counts every epoch (or validation run).
+    '''
+    for l in labels:
+        func = lambda key : \
+            metrics[key].measure_functions['dice{}'.format(l)].reset_counts
+        trainer.add_event_handler(Events.EPOCH_STARTED, func('train'))
+        trainer.add_event_handler(Events.EPOCH_COMPLETED, func('valid'))
+    
+    '''
     Set up logging to screen.
     '''
     progress_train = progress_report(prefix=None,
-                                     epoch_length=min(
-                                         epoch_length(data['train']['h']),
-                                         epoch_length(data['train']['s'])
-                                     ),
                                      log_path=os.path.join(path,
                                                            "log_train.txt"))
     progress_valid = progress_report(prefix="val",
-                                     epoch_length=min(
-                                         epoch_length(data['valid']['h']),
-                                         epoch_length(data['valid']['s'])
-                                     ),
                                      log_path=os.path.join(path,
                                                            "log_valid.txt"))
     trainer.add_event_handler(Events.ITERATION_COMPLETED, progress_train)
-    trainer.add_event_handler(Events.ITERATION_COMPLETED, image_saver_train_seg)
-    #trainer.add_event_handler(Events.ITERATION_COMPLETED, image_saver_train_trans)
+    trainer.add_event_handler(Events.ITERATION_COMPLETED, image_saver_train)
     
     trainer.add_event_handler(Events.EPOCH_COMPLETED,
-                              lambda engine, state: evaluator.run(loader_valid))
+                              lambda _: evaluator.run(loader_valid))
     evaluator.add_event_handler(Events.ITERATION_COMPLETED, progress_valid)
     #evaluator.add_event_handler(Events.ITERATION_COMPLETED, image_saver_valid)
 
+    
     '''
     cpt_handler = ModelCheckpoint(dirname=path,
                                   filename_prefix='weights',
