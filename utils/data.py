@@ -265,3 +265,37 @@ def preprocessor_brats(data_augmentation_kwargs=None):
         return out_batch
     return f
         
+
+class masked_view(delayed_view):
+    """
+    Given an array, mask some random subset of indices, returning `None`
+    for at these indices.
+    
+    arr : The source array.
+    masked_fraction : Fraction of elements to mask (length axis), in [0, 1.0].
+    rng : A numpy random number generator.
+    """
+    
+    def __init__(self, arr, masked_fraction, rng=None):
+        super(masked_view, self).__init__(arr=arr, shuffle=False, rng=rng)
+        if 0 > masked_fraction or masked_fraction > 1:
+            raise ValueError("In `masked_view`, `masked_fraction` must be set "
+                             "to a value in [0, 1.0] but was set to {}."
+                             "".format(masked_fraction))
+        self.masked_fraction = masked_fraction
+        num_masked_indices = int(min(self.num_items,
+                                     masked_fraction*self.num_items+0.5))
+        self.masked_indices = self.rng.choice(self.num_items,
+                                              size=num_masked_indices,
+                                              replace=False)
+        
+    def _get_element(self, int_key, key_remainder=None):
+        if not isinstance(int_key, (int, np.integer)):
+            raise IndexError("cannot index with {}".format(type(int_key)))
+        if int_key in self.masked_indices:
+            return None
+        idx = self.arr_indices[int_key]
+        if key_remainder is not None:
+            idx = (idx,)+key_remainder
+        idx = int(idx)  # Some libraries don't like np.integer
+        return self.arr[idx]
