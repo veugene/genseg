@@ -93,18 +93,20 @@ def get_slices(volume, segmentation, axis):
     # Fill this dict.
     slices_dict = OrderedDict()
     
-    # Everything without anomalies is healthy.
-    indices = np.where(segmentation==0)
-    indices_slice = [slice(None, None)]*4
-    indices_slice[axis] = np.unique(indices[axis])
-    slices_dict['healthy'] = volume[indices_slice].transpose(order)
-    
     # Locate anomalies. These are sick slices.
-    indices = np.where(segmentation)
-    indices_slice = [slice(None, None)]*4
-    indices_slice[axis] = np.unique(indices[axis])
-    slices_dict['sick'] = volume[indices_slice].transpose(order)
-    slices_dict['segmentation'] = segmentation[indices_slice].transpose(order)
+    indices_anomaly = np.unique(np.where(segmentation)[axis])
+    indices_anomaly_slice = [slice(None, None)]*4
+    indices_anomaly_slice[axis] = indices_anomaly
+    slices_dict['sick'] = volume[indices_anomaly_slice].transpose(order)
+    slices_dict['segmentation'] = \
+        segmentation[indices_anomaly_slice].transpose(order)
+
+    # All other slices without anomalies are healthy.
+    indices_all = range(segmentation.shape[axis])
+    indices_healthy = [i for i in indices_all if i not in indices_anomaly]
+    indices_healthy_slice = [slice(None, None)]*4
+    indices_healthy_slice[axis] = indices_healthy
+    slices_dict['healthy'] = volume[indices_healthy_slice].transpose(order)
         
     return slices_dict
 
