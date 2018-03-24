@@ -239,16 +239,21 @@ if __name__ == '__main__':
     torch.backends.cudnn.benchmark = False   # profiler
     exp_id = None
     if args.resume is not None:
-        '''
         saved_dict = torch.load(args.resume)
         exp_id = saved_dict['exp_id']
-        # Extract the module string, then turn it into a module.
-        # From this, we can invoke the model creation function and
-        # load its saved weights.
-        module_as_str = saved_dict['module_as_str']
-        module = imp.new_module('model_from')
-        exec(module_as_str, module.__dict__)
-        model = getattr(module, 'build_model')()
+        t_module_as_str = saved_dict['t_module_as_str']
+        s_module_as_str = saved_dict['s_module_as_str']
+        # Load the translation module contained
+        # in the dict.
+        t_module = imp.new_module('t_model_from')
+        exec(t_module_as_str, t_module.__dict__)
+        model = getattr(t_module, 'build_model')()
+        # Load the segmentation model contained
+        # in the dict.
+        s_module = imp.new_module('s_model_from')
+        s_model = getattr(s_module, 'build_model')()
+        exec(s_module_as_str, s_module.__dict__)
+        model['seg'] = s_model
         if not args.cpu:
             for model_ in model.values():
                 model_.cuda(args.gpu_id)
@@ -266,19 +271,16 @@ if __name__ == '__main__':
         optimizer['g'].load_state_dict(saved_dict['optim']['g'])
         optimizer['d_a'].load_state_dict(saved_dict['optim']['d_a'])
         optimizer['d_b'].load_state_dict(saved_dict['optim']['d_b'])
-        '''
-        raise NotImplementedError("")
     else:
         # If `model_from` is a .py file, then we import that as a module
         # and load the model. Otherwise, we assume it's a pickle, and
         # we load it, extract the module contained inside, and load it
-
         # Process translation model.
         if args.t_model_from.endswith(".py"):
             t_module = imp.load_source('t_model_from', args.t_model_from)
             t_module_as_str = open(args.t_model_from).read()
         else:
-            t_module_as_str = torch.load(args.t_model_from)['module_as_str']
+            t_module_as_str = torch.load(args.t_model_from)['t_module_as_str']
             t_module = imp.new_module('t_model_from')
             exec(t_module_as_str, t_module.__dict__)
         # Process segmentation model.
@@ -286,7 +288,7 @@ if __name__ == '__main__':
             s_module = imp.load_source('s_model_from', args.s_model_from)
             s_module_as_str = open(args.s_model_from).read()
         else:
-            s_module_as_str = torch.load(args.s_model_from)['module_as_str']
+            s_module_as_str = torch.load(args.s_model_from)['s_module_as_str']
             s_module = imp.new_module('s_model_from')
             exec(s_module_as_str, s_module.__dict__)
         # Translation model is a dict, so do this first,
@@ -472,22 +474,21 @@ if __name__ == '__main__':
         btoa = model['g_btoa'](B_real)[:, :, 0:hh, 0:ww]
         btoa_atob = model['g_atob'](btoa)[:, :, 0:hh, 0:ww]
         btoa_gen_loss, cycle_bab = compute_g_losses_bab(B_real, btoa, btoa_atob)
+        g_tot_loss = btoa_gen_loss + args.lamb*cycle_bab
+        optimizer['g'].zero_grad()
+        g_tot_loss.backward()
+        optimizer['g'].step()
         # Segmentation: take the real sick and the translated
         # to healthy version, concatenate them, and feed into
         # seg model.
-        seg_inp = torch.cat((B_real, btoa), dim=1)
+        seg_inp = torch.cat((B_real, btoa.detach()), dim=1)
         seg_out = model['seg'](seg_inp)
         seg_loss = 0.
         for i in range(len(loss_functions)):
             seg_loss += loss_functions[i](seg_out, M_real)
         seg_loss /= len(loss_functions) # average
-        # TODO: do we need to weight the relative contribution of
-        # the segmentation here?
-        g_tot_loss = (btoa_gen_loss + args.lamb*cycle_bab) + seg_loss
-        optimizer['g'].zero_grad()
         optimizer['seg'].zero_grad()
-        g_tot_loss.backward()
-        optimizer['g'].step()
+        seg_loss.backward()
         optimizer['seg'].step()
         # Update discriminator.
         d_a_loss, d_b_loss = compute_d_losses(A_real, atob, B_real, btoa)
@@ -535,9 +536,6 @@ if __name__ == '__main__':
             for i in range(len(loss_functions)):
                 seg_loss += loss_functions[i](seg_out, M_real)
             seg_loss /= len(loss_functions) # average
-            # TODO: do we need to weight the relative contribution of
-            # the segmentation here?
-            g_tot_loss = (btoa_gen_loss + args.lamb*cycle_bab) + seg_loss
             d_a_loss, d_b_loss = compute_d_losses(A_real, atob, B_real, btoa)
         this_metrics = OrderedDict({
             'atob_gen_loss': atob_gen_loss.data.item(),
@@ -580,8 +578,6 @@ if __name__ == '__main__':
     evaluator.add_event_handler(Events.ITERATION_COMPLETED, progress_valid)
     #evaluator.add_event_handler(Events.ITERATION_COMPLETED, image_saver_valid)
 
-    
-    '''
     cpt_handler = ModelCheckpoint(dirname=path,
                                   filename_prefix='weights',
                                   n_saved=5,
@@ -600,7 +596,8 @@ if __name__ == '__main__':
                 'd_b': model['d_b'].state_dict(),
                 'seg': model['seg'].state_dict()
             },
-            'module_as_str': "module_as_str",
+            't_module_as_str': t_module_as_str,
+            's_module_as_str': s_module_as_str,
             'optim': {
                 'g': optimizer['g'].state_dict(),
                 'd_a': optimizer['d_a'].state_dict(),
@@ -612,7 +609,6 @@ if __name__ == '__main__':
     evaluator.add_event_handler(Events.COMPLETED,
                                 cpt_handler,
                                 model_dict)
-    '''
 
     '''
     Train.
