@@ -51,6 +51,7 @@ def parse_args():
     parser.add_argument('--t_model_from', type=str, default='configs_cyclegan/dilated_fcn.py')
     parser.add_argument('--s_model_from', type=str, default='configs/resunet_hybrid.py')
     parser.add_argument('--resume', type=str, default=None)
+    parser.add_argument('--vis_freq', type=float, default=0.5)
     parser.add_argument('-e', '--evaluate', action='store_true')
     parser.add_argument('--weight_decay', type=float, default=1e-4)
     parser.add_argument('--num_pool', type=int, default=0)
@@ -251,8 +252,8 @@ if __name__ == '__main__':
         # Load the segmentation model contained
         # in the dict.
         s_module = imp.new_module('s_model_from')
-        s_model = getattr(s_module, 'build_model')()
         exec(s_module_as_str, s_module.__dict__)
+        s_model = getattr(s_module, 'build_model')()
         model['seg'] = s_model
         if not args.cpu:
             for model_ in model.values():
@@ -267,6 +268,7 @@ if __name__ == '__main__':
                                        model['g_btoa'].parameters()),
                                    model['d_a'].parameters(),
                                    model['d_b'].parameters(),
+                                   model['seg'].parameters(),
                                    args.learning_rate)
         optimizer['g'].load_state_dict(saved_dict['optim']['g'])
         optimizer['d_a'].load_state_dict(saved_dict['optim']['d_a'])
@@ -420,22 +422,22 @@ if __name__ == '__main__':
         epoch_length(data['train']['s'], args.batch_size_train),
         epoch_length(data['train']['h'], args.batch_size_train)
     )
+    train_save_freq = int(args.vis_freq*num_batches_train)
     image_saver_train = image_saver(save_path=os.path.join(path, "train"),
                                         epoch_length=num_batches_train,
-                                        save_every=200)
-    
+                                        save_every=train_save_freq)
+
     '''
     Visualize valid outputs.
     '''
-    '''
     num_batches_valid = min(
-        epoch_length(data['valid']['s']),
-        epoch_length(data['valid']['h'])
+        epoch_length(data['valid']['s'], args.batch_size_valid),
+        epoch_length(data['valid']['h'], args.batch_size_valid)
     )
-    image_saver_valid = image_saver_(save_path=os.path.join(path, "valid"),
+    valid_save_freq = int(args.vis_freq*num_batches_valid)
+    image_saver_valid = image_saver(save_path=os.path.join(path, "valid"),
                                     epoch_length=num_batches_valid,
-                                    save_every=500)
-    '''
+                                    save_every=valid_save_freq)
     
     '''
     Set up training and evaluation functions for translation.
@@ -576,7 +578,7 @@ if __name__ == '__main__':
     trainer.add_event_handler(Events.EPOCH_COMPLETED,
                               lambda _: evaluator.run(loader_valid))
     evaluator.add_event_handler(Events.ITERATION_COMPLETED, progress_valid)
-    #evaluator.add_event_handler(Events.ITERATION_COMPLETED, image_saver_valid)
+    evaluator.add_event_handler(Events.ITERATION_COMPLETED, image_saver_valid)
 
     cpt_handler = ModelCheckpoint(dirname=path,
                                   filename_prefix='weights',
