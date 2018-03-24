@@ -48,6 +48,7 @@ def parse_args():
     parser.add_argument('--name', type=str, default="brats_trans")
     parser.add_argument('--data_dir', type=str, default='/home/eugene/data/')
     parser.add_argument('--save_path', type=str, default='./experiments')
+    # TODO: do proper mutual exclusion
     parser.add_argument('--t_model_from', type=str, default='configs_cyclegan/dilated_fcn.py')
     parser.add_argument('--s_model_from', type=str, default='configs/resunet_hybrid.py')
     parser.add_argument('--resume', type=str, default=None)
@@ -80,7 +81,7 @@ def _get_optimizer(name, params, lr):
         raise NotImplemented("Optimizer {} not supported."
                             "".format(args.optimizer))
 
-def get_optimizers(name, g_params, d_a_params, d_b_params, seg_params, lr):
+def setup_optimizers(name, g_params, d_a_params, d_b_params, seg_params, lr):
     optimizer = {
         'g': _get_optimizer(
             args.optimizer,
@@ -193,6 +194,7 @@ class image_saver(object):
         return s
 
 
+    
 if __name__ == '__main__':
     args = parse_args()
 
@@ -262,7 +264,7 @@ if __name__ == '__main__':
         for key in saved_dict['weights']:
             model[key].load_state_dict(saved_dict['weights'][key])
         # Load optim state for all networks.
-        optimizer = get_optimizers(args.optimizer,
+        optimizer = setup_optimizers(args.optimizer,
                                    itertools.chain(
                                        model['g_atob'].parameters(),
                                        model['g_btoa'].parameters()),
@@ -275,41 +277,56 @@ if __name__ == '__main__':
         optimizer['d_b'].load_state_dict(saved_dict['optim']['d_b'])
     else:
         # If `model_from` is a .py file, then we import that as a module
-        # and load the model. Otherwise, we assume it's a pickle, and
-        # we load it, extract the module contained inside, and load it
+        # and load the model. Otherwise, we assume it's a checkpoint, and
+        # we load it, extract the modules contained inside, and load the
+        # translation + seg models.
+
         # Process translation model.
+        model = {}
         if args.t_model_from.endswith(".py"):
             t_module = imp.load_source('t_model_from', args.t_model_from)
             t_module_as_str = open(args.t_model_from).read()
         else:
-            t_module_as_str = torch.load(args.t_model_from)['t_module_as_str']
+            t_model_dict = torch.load(args.t_model_from)
+            t_module_as_str = t_model_dict['t_module_as_str']
             t_module = imp.new_module('t_model_from')
             exec(t_module_as_str, t_module.__dict__)
+            # Return the models and load in their weights.
+            t_models = getattr(t_module, 'build_model')()
+            model.update(t_models)
+            for key in ['g_atob', 'g_btoa', 'd_a', 'd_b']:
+                model[key].load_state_dict(t_model_dict['weights'][key])
         # Process segmentation model.
         if args.s_model_from.endswith(".py"):
             s_module = imp.load_source('s_model_from', args.s_model_from)
             s_module_as_str = open(args.s_model_from).read()
         else:
-            s_module_as_str = torch.load(args.s_model_from)['s_module_as_str']
+            s_model_dict = torch.load(args.s_model_from)
+            s_module_as_str = s_model_dict['s_module_as_str']
             s_module = imp.new_module('s_model_from')
             exec(s_module_as_str, s_module.__dict__)
+            # Return the models and load in their weights.
+            model['seg'] = getattr(s_module, 'build_model')()
+            model['seg'].load_state_dict(s_model_dict['weights']['seg'])
         # Translation model is a dict, so do this first,
         # then plop in the segmentation model.
         model = getattr(t_module, 'build_model')()
         model['seg'] = getattr(s_module, 'build_model')()
+
         if not args.cpu:
             for model_ in model.values():
                 model_.cuda(args.gpu_id)
-        optimizer = get_optimizers(args.optimizer,
-                                   itertools.chain(
+        optimizer = setup_optimizers(args.optimizer,
+                                     itertools.chain(
                                        model['g_atob'].parameters(),
                                        model['g_btoa'].parameters()),
-                                   model['d_a'].parameters(),
-                                   model['d_b'].parameters(),
-                                   model['seg'].parameters(),
-                                   args.learning_rate)
-    # TODO: do we also save what's inside the
-    # image pool?
+                                     model['d_a'].parameters(),
+                                     model['d_b'].parameters(),
+                                     model['seg'].parameters(),
+                                     args.learning_rate)
+
+    # Note: currently, contents of the image pool
+    # are not saved with the model.
     fake_A_pool = ImagePool(args.num_pool)
     fake_B_pool = ImagePool(args.num_pool)
     for key in model:
@@ -320,70 +337,46 @@ if __name__ == '__main__':
     Set up experiment directory.
     '''
     if exp_id is None:
-        exp_id = "{}_{}".format(args.name, "{0:%Y-%m-%d}_{0:%H-%M-%S}".format(datetime.now()))
+        exp_id = "{}_{}".format(
+            args.name,
+            "{0:%Y-%m-%d}_{0:%H-%M-%S}".format(datetime.now())
+        )
     path = os.path.join(args.save_path, exp_id)
     if not os.path.exists(path):
         os.makedirs(path)
     with open(os.path.join(path, "cmd.sh"), 'w') as f:
         f.write(' '.join(sys.argv))
 
+    '''
+    Set up loss functions.
+    '''
+    def mse(prediction, target):
+        if not hasattr(target, '__len__'):
+            target = torch.ones_like(prediction)*target
+            if prediction.is_cuda:
+                target = target.cuda()
+            target = Variable(target)
+        return torch.nn.MSELoss()(prediction, target)
+
     def compute_g_losses_aba(A_real, atob, atob_btoa):
         """Return all the losses related to generation"""
-        g_atob, g_btoa, d_a, d_b = model['g_atob'], model['g_btoa'], model['d_a'], model['d_b']
-        d_b_fake = d_b(atob)
-        ones_db = torch.ones(d_b_fake.size())
-        if not args.cpu:
-            ones_db = ones_db.cuda(args.gpu_id)
-        ones_db = Variable(ones_db)
-        atob_gen_loss = mse_loss(d_b_fake, ones_db)
+        atob_gen_loss = mse(model['d_b'](atob), 1)
         cycle_aba = torch.mean(torch.abs(A_real - atob_btoa))
         return atob_gen_loss, cycle_aba
 
     def compute_g_losses_bab(B_real, btoa, btoa_atob):
         """Return all the losses related to generation"""
-        g_atob, g_btoa, d_a, d_b = model['g_atob'], model['g_btoa'], model['d_a'], model['d_b']
-        d_a_fake = d_a(btoa)
-        ones_da = torch.ones(d_a_fake.size())
-        if not args.cpu:
-            ones_da = ones_da.cuda(args.gpu_id)
-        ones_da = Variable(ones_da)
-        btoa_gen_loss = mse_loss(d_a_fake, ones_da)
+        btoa_gen_loss = mse(model['d_a'](btoa), 1)
         cycle_bab = torch.mean(torch.abs(B_real - btoa_atob))
         return btoa_gen_loss, cycle_bab
-    
+
     def compute_d_losses(A_real, atob, B_real, btoa):
         """Return all losses related to discriminator"""
-        g_atob, g_btoa, d_a, d_b = model['g_atob'], model['g_btoa'], model['d_a'], model['d_b']
-        d_a_real = d_a(A_real)
-        d_b_real = d_b(B_real)
-        A_fake = fake_A_pool.query(btoa)
-        B_fake = fake_B_pool.query(atob)
-        d_a_fake = d_a(A_fake)
-        d_b_fake = d_b(B_fake)
-        ones_da_real, zeros_da_fake = torch.ones(d_a_real.size()), torch.zeros(d_a_fake.size())
-        ones_db_real, zeros_db_fake = torch.ones(d_b_real.size()), torch.zeros(d_b_fake.size())
-        if not args.cpu:
-            ones_da_real, zeros_da_fake, ones_db_real, zeros_db_fake = \
-                        ones_da_real.cuda(args.gpu_id), \
-                        zeros_da_fake.cuda(args.gpu_id), \
-                        ones_db_real.cuda(args.gpu_id), \
-                        zeros_db_fake.cuda(args.gpu_id)
-        ones_da_real, zeros_da_fake, ones_db_real, zeros_db_fake = \
-                        Variable(ones_da_real), \
-                        Variable(zeros_da_fake), \
-                        Variable(ones_db_real), \
-                        Variable(zeros_db_fake)
-        d_a_loss = (mse_loss(d_a_real, ones_da_real) + mse_loss(d_a_fake, zeros_da_fake)) * 0.5
-        d_b_loss = (mse_loss(d_b_real, ones_db_real) + mse_loss(d_b_fake, zeros_db_fake)) * 0.5
+        d_a_loss = 0.5*(mse(model['d_a'](A_real), 1) +
+                        mse(model['d_a'](fake_A_pool.query(btoa)), 0))
+        d_b_loss = 0.5*(mse(model['d_b'](B_real), 1) +
+                        mse(model['d_b'](fake_B_pool.query(atob)), 0))
         return d_a_loss, d_b_loss
-
-    '''
-    Set up loss function.
-    '''
-    mse_loss = torch.nn.MSELoss()
-    if not args.cpu:
-        mse_loss = mse_loss.cuda(args.gpu_id)
-
 
     '''
     Set up loss functions and metrics. Since this is a multiclass problem,
@@ -424,8 +417,8 @@ if __name__ == '__main__':
     )
     train_save_freq = int(args.vis_freq*num_batches_train)
     image_saver_train = image_saver(save_path=os.path.join(path, "train"),
-                                        epoch_length=num_batches_train,
-                                        save_every=train_save_freq)
+                                    epoch_length=num_batches_train,
+                                    save_every=train_save_freq)
 
     '''
     Visualize valid outputs.
@@ -438,14 +431,14 @@ if __name__ == '__main__':
     image_saver_valid = image_saver(save_path=os.path.join(path, "valid"),
                                     epoch_length=num_batches_valid,
                                     save_every=valid_save_freq)
-    
+
     '''
     Set up training and evaluation functions for translation.
     '''
     def prepare_batch(batch):
         h, s, m = batch
-        # TODO: we norm in [-1, 1] here as this is
-        # what cyclegan does
+        # Scaling differs from segmentation-only task in
+        # that we divide h,s by 2 here, so it's in [-1,1].
         h = Variable(torch.from_numpy(np.array(h / 2.)))
         s = Variable(torch.from_numpy(np.array(s / 2.)))
         m = Variable(torch.from_numpy(np.array(m)))
@@ -460,21 +453,23 @@ if __name__ == '__main__':
         for model_ in model.values():
             model_.train()
         A_real, B_real, M_real = batch
-        # CycleGAN: optimise F and back.
-        # This is the healthy to sick and back.
+        # CycleGAN: optimize mapping from A -> B,
+        # and from A -> B -> A (cycle).
         hh, ww = A_real.shape[-2], A_real.shape[-1]
         atob = model['g_atob'](A_real)[:, :, 0:hh, 0:ww]
         atob_btoa = model['g_btoa'](atob)[:, :, 0:hh, 0:ww]
+        # Compute loss for A -> B and cycle.
         atob_gen_loss, cycle_aba = compute_g_losses_aba(A_real, atob, atob_btoa)
         g_tot_loss = atob_gen_loss + args.lamb*cycle_aba
         optimizer['g'].zero_grad()
         g_tot_loss.backward()
         optimizer['g'].step()
-        # CycleGAN: optimise G and back.
-        # This is the sick to healthy and back.
+        # CycleGAN: optimize mapping from B -> A,
+        # and from B -> A -> B (cycle).
         hh, ww = B_real.shape[-2], B_real.shape[-1]
         btoa = model['g_btoa'](B_real)[:, :, 0:hh, 0:ww]
         btoa_atob = model['g_atob'](btoa)[:, :, 0:hh, 0:ww]
+        # Compute loss for B -> A and cycle.
         btoa_gen_loss, cycle_bab = compute_g_losses_bab(B_real, btoa, btoa_atob)
         g_tot_loss = btoa_gen_loss + args.lamb*cycle_bab
         optimizer['g'].zero_grad()
@@ -526,12 +521,13 @@ if __name__ == '__main__':
             hh, ww = A_real.shape[-2], A_real.shape[-1]
             atob = model['g_atob'](A_real)[:, :, 0:hh, 0:ww]
             atob_btoa = model['g_btoa'](atob)[:, :, 0:hh, 0:ww]
-            atob_gen_loss, cycle_aba = compute_g_losses_aba(A_real, atob, atob_btoa)
-            g_tot_loss = atob_gen_loss + args.lamb*cycle_aba
+            atob_gen_loss, cycle_aba = compute_g_losses_aba(
+                A_real, atob, atob_btoa)
             hh, ww = B_real.shape[-2], B_real.shape[-1]
             btoa = model['g_btoa'](B_real)[:, :, 0:hh, 0:ww]
             btoa_atob = model['g_atob'](btoa)[:, :, 0:hh, 0:ww]
-            btoa_gen_loss, cycle_bab = compute_g_losses_bab(B_real, btoa, btoa_atob)
+            btoa_gen_loss, cycle_bab = compute_g_losses_bab(
+                B_real, btoa, btoa_atob)
             seg_inp = torch.cat((B_real, btoa), dim=1)
             seg_out = model['seg'](seg_inp)
             seg_loss = 0.
