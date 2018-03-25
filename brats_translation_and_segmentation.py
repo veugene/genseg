@@ -57,6 +57,7 @@ def parse_args():
     parser.add_argument('--weight_decay', type=float, default=1e-4)
     parser.add_argument('--num_pool', type=int, default=0)
     parser.add_argument('--lamb', type=float, default=10.)
+    parser.add_argument('--detach', action='store_true', default=False)
     parser.add_argument('--batch_size_train', type=int, default=1)
     parser.add_argument('--batch_size_valid', type=int, default=1)
     parser.add_argument('--epochs', type=int, default=200)
@@ -453,6 +454,9 @@ if __name__ == '__main__':
         for model_ in model.values():
             model_.train()
         A_real, B_real, M_real = batch
+        # Clear all grad buffers.
+        for key in optimizer:
+            optimizer[key].zero_grad()
         # CycleGAN: optimize mapping from A -> B,
         # and from A -> B -> A (cycle).
         hh, ww = A_real.shape[-2], A_real.shape[-1]
@@ -461,9 +465,7 @@ if __name__ == '__main__':
         # Compute loss for A -> B and cycle.
         atob_gen_loss, cycle_aba = compute_g_losses_aba(A_real, atob, atob_btoa)
         g_tot_loss = atob_gen_loss + args.lamb*cycle_aba
-        optimizer['g'].zero_grad()
         g_tot_loss.backward()
-        optimizer['g'].step()
         # CycleGAN: optimize mapping from B -> A,
         # and from B -> A -> B (cycle).
         hh, ww = B_real.shape[-2], B_real.shape[-1]
@@ -472,29 +474,33 @@ if __name__ == '__main__':
         # Compute loss for B -> A and cycle.
         btoa_gen_loss, cycle_bab = compute_g_losses_bab(B_real, btoa, btoa_atob)
         g_tot_loss = btoa_gen_loss + args.lamb*cycle_bab
-        optimizer['g'].zero_grad()
-        g_tot_loss.backward()
-        optimizer['g'].step()
         # Segmentation: take the real sick and the translated
         # to healthy version, concatenate them, and feed into
-        # seg model.
-        seg_inp = torch.cat((B_real, btoa.detach()), dim=1)
+        # seg model. If 'detach' mode is enabled, then gradients
+        # from the seg model do not feed back into the generator.
+        if args.detach:
+            seg_btoa = btoa.detach()
+        else:
+            seg_btoa = btoa
+        seg_inp = torch.cat((B_real, seg_btoa), dim=1)
         seg_out = model['seg'](seg_inp)
         seg_loss = 0.
         for i in range(len(loss_functions)):
             seg_loss += loss_functions[i](seg_out, M_real)
         seg_loss /= len(loss_functions) # average
-        optimizer['seg'].zero_grad()
-        seg_loss.backward()
-        optimizer['seg'].step()
+        if args.detach:
+            seg_loss.backward()
+            g_tot_loss.backward()
+        else:
+            g_tot_loss += seg_loss
+            g_tot_loss.backward()
         # Update discriminator.
         d_a_loss, d_b_loss = compute_d_losses(A_real, atob, B_real, btoa)
-        optimizer['d_a'].zero_grad()
         d_a_loss.backward()
-        optimizer['d_a'].step()
-        optimizer['d_b'].zero_grad()
         d_b_loss.backward()
-        optimizer['d_b'].step()
+        # Update all networks at once.
+        for key in optimizer:
+            optimizer[key].step()
         this_metrics = {
             'atob_gen_loss': atob_gen_loss.data.item(),
             'cycle_aba': cycle_aba.data.item(),
