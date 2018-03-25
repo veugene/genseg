@@ -15,9 +15,9 @@ from skimage.transform import resize
 import torch
 from torch.autograd import Variable
 import ignite
-from ignite.trainer import Trainer
-from ignite.engine import Events
-from ignite.evaluator import Evaluator
+from ignite.engines import (Events,
+                            Trainer,
+                            Evaluator)
 from ignite.handlers import ModelCheckpoint
 
 from architectures.image2image import DilatedFCN
@@ -51,11 +51,13 @@ def parse_args():
     g_load = parser.add_mutually_exclusive_group(required=False)
     g_load.add_argument('--model_from', type=str, default='configs_cyclegan/baseline.py')
     g_load.add_argument('--resume', type=str, default=None)
+    parser.add_argument('--vis_freq', type=float, default=0.5)
     parser.add_argument('-e', '--evaluate', action='store_true')
     parser.add_argument('--weight_decay', type=float, default=1e-4)
     parser.add_argument('--num_pool', type=int, default=0)
     parser.add_argument('--lamb', type=float, default=10.)
-    parser.add_argument('--batch_size', type=int, default=1)
+    parser.add_argument('--batch_size_train', type=int, default=1)
+    parser.add_argument('--batch_size_valid', type=int, default=1)
     parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument('--learning_rate', type=float, default=0.0002)
     parser.add_argument('--optimizer', type=str, default='adam')
@@ -76,7 +78,7 @@ def _get_optimizer(name, params, lr):
         raise NotImplemented("Optimizer {} not supported."
                             "".format(args.optimizer))
 
-def get_optimizers(name, g_params, d_a_params, d_b_params, lr):
+def setup_optimizers(name, g_params, d_a_params, d_b_params, lr):
     optimizer = {
         'g': _get_optimizer(
             args.optimizer,
@@ -114,13 +116,14 @@ class image_saver(object):
         s[0,1]=0
         return s
 
-    def __call__(self, engine, state):
+    def __call__(self, engine):
 
         # Extract images and change them from [-1, 1] to [0,1].
+        outputs = engine.state.output[1]
         a, atob, atob_btoa, b, btoa, btoa_atob = \
-            [ (elem.cpu().numpy()*0.5)+0.5 for elem in state.output[1][:-1] ]
+            [(elem.cpu().numpy()*0.5)+0.5 for elem in outputs[:-1]]
         # Extract the segmentation mask, which is already in Numpy.
-        mask = state.output[1][-1]
+        mask = engine.state.output[1][-1]
         
         # Current batch size.
         this_batch_size = len(a)
@@ -150,10 +153,11 @@ class image_saver(object):
                 this_row.append(a[i,j])
                 this_row.append(atob[i,j])
                 this_row.append(atob_btoa[i,j])
-                this_row.append( resize(b[i,j], a.shape[2:]) )
-                this_row.append( resize(btoa[i,j], a.shape[2:]) )
-                this_row.append( resize(btoa_atob[i,j], a.shape[2:]) )
-                this_row.append( resize(self._process_slice(mask[i]/4.), a.shape[2:]) )
+                this_row.append(resize(b[i,j], a.shape[2:]))
+                this_row.append(resize(btoa[i,j], a.shape[2:]))
+                this_row.append(resize(btoa_atob[i,j], a.shape[2:]))
+                this_row.append(
+                    resize(self._process_slice(mask[i]/4.), a.shape[2:]))
                 out_image = np.hstack(this_row)
                 all_imgs.append(out_image)
         imsave(os.path.join(save_dir,
@@ -183,7 +187,7 @@ if __name__ == '__main__':
     preprocessor_train = preprocessor_brats(data_augmentation_kwargs=da_kwargs)
     loader_train = data_flow_sampler(data_train,
                                      sample_random=True,
-                                     batch_size=args.batch_size,
+                                     batch_size=args.batch_size_train,
                                      preprocessor=preprocessor_train,
                                      nb_io_workers=1,
                                      nb_proc_workers=3,
@@ -191,7 +195,7 @@ if __name__ == '__main__':
     preprocessor_valid = preprocessor_brats(data_augmentation_kwargs=None)
     loader_valid = data_flow_sampler(data_valid,
                                      sample_random=True,
-                                     batch_size=args.batch_size,
+                                     batch_size=args.batch_size_valid,
                                      preprocessor=preprocessor_valid,
                                      nb_io_workers=1,
                                      nb_proc_workers=0,
@@ -222,13 +226,13 @@ if __name__ == '__main__':
         for key in saved_dict['weights']:
             model[key].load_state_dict(saved_dict['weights'][key])
         # Load optim state for all networks.
-        optimizer = get_optimizers(args.optimizer,
-                                   itertools.chain(
-                                       model['g_atob'].parameters(),
-                                       model['g_btoa'].parameters()),
-                                   model['d_a'].parameters(),
-                                   model['d_b'].parameters(),
-                                   args.learning_rate)
+        optimizer = setup_optimizers(args.optimizer,
+                                     itertools.chain(
+                                         model['g_atob'].parameters(),
+                                         model['g_btoa'].parameters()),
+                                     model['d_a'].parameters(),
+                                     model['d_b'].parameters(),
+                                     args.learning_rate)
         optimizer['g'].load_state_dict(saved_dict['optim']['g'])
         optimizer['d_a'].load_state_dict(saved_dict['optim']['d_a'])
         optimizer['d_b'].load_state_dict(saved_dict['optim']['d_b'])
@@ -239,21 +243,26 @@ if __name__ == '__main__':
         if args.model_from.endswith(".py"):
             module = imp.load_source('model_from', args.model_from)
             module_as_str = open(args.model_from).read()
+            model = getattr(module, 'build_model')()
         else:
-            module_as_str = torch.load(args.model_from)['module_as_str']
+            model_dict = torch.load(args.model_from)
+            module_as_str = model_dict['module_as_str']
             module = imp.new_module('model_from')
             exec(module_as_str, module.__dict__)
-        model = getattr(module, 'build_model')()
+            model = getattr(module, 'build_model')()
+            for key in ['g_atob', 'g_btoa', 'd_a', 'd_b']:
+                model[key].load_state_dict(model_dict['weights'][key])
+
         if not args.cpu:
             for model_ in model.values():
                 model_.cuda(args.gpu_id)
-        optimizer = get_optimizers(args.optimizer,
-                                   itertools.chain(
-                                       model['g_atob'].parameters(),
-                                       model['g_btoa'].parameters()),
-                                   model['d_a'].parameters(),
-                                   model['d_b'].parameters(),
-                                   args.learning_rate)
+        optimizer = setup_optimizers(args.optimizer,
+                                     itertools.chain(
+                                         model['g_atob'].parameters(),
+                                         model['g_btoa'].parameters()),
+                                     model['d_a'].parameters(),
+                                     model['d_b'].parameters(),
+                                     args.learning_rate)
     # TODO: do we also save what's inside the
     # image pool?
     fake_A_pool = ImagePool(args.num_pool)
@@ -266,94 +275,70 @@ if __name__ == '__main__':
     Set up experiment directory.
     '''
     if exp_id is None:
-        exp_id = "{}_{}".format(args.name, "{0:%Y-%m-%d}_{0:%H-%M-%S}".format(datetime.now()))
+        exp_id = "{}_{}".format(
+            args.name, "{0:%Y-%m-%d}_{0:%H-%M-%S}".format(datetime.now()))
     path = os.path.join(args.save_path, exp_id)
     if not os.path.exists(path):
         os.makedirs(path)
     with open(os.path.join(path, "cmd.sh"), 'w') as f:
         f.write(' '.join(sys.argv))
 
+    '''
+    Set up loss functions.
+    '''
+    def mse(prediction, target):
+        if not hasattr(target, '__len__'):
+            target = torch.ones_like(prediction)*target
+            if prediction.is_cuda:
+                target = target.cuda()
+            target = Variable(target)
+        return torch.nn.MSELoss()(prediction, target)
+
     def compute_g_losses_aba(A_real, atob, atob_btoa):
         """Return all the losses related to generation"""
-        g_atob, g_btoa, d_a, d_b = model['g_atob'], model['g_btoa'], model['d_a'], model['d_b']
-        d_b_fake = d_b(atob)
-        ones_db = torch.ones(d_b_fake.size())
-        if not args.cpu:
-            ones_db = ones_db.cuda(args.gpu_id)
-        ones_db = Variable(ones_db)
-        atob_gen_loss = mse_loss(d_b_fake, ones_db)
+        atob_gen_loss = mse(model['d_b'](atob), 1)
         cycle_aba = torch.mean(torch.abs(A_real - atob_btoa))
         return atob_gen_loss, cycle_aba
 
     def compute_g_losses_bab(B_real, btoa, btoa_atob):
         """Return all the losses related to generation"""
-        g_atob, g_btoa, d_a, d_b = model['g_atob'], model['g_btoa'], model['d_a'], model['d_b']
-        d_a_fake = d_a(btoa)
-        ones_da = torch.ones(d_a_fake.size())
-        if not args.cpu:
-            ones_da = ones_da.cuda(args.gpu_id)
-        ones_da = Variable(ones_da)
-        btoa_gen_loss = mse_loss(d_a_fake, ones_da)
+        btoa_gen_loss = mse(model['d_a'](btoa), 1)
         cycle_bab = torch.mean(torch.abs(B_real - btoa_atob))
         return btoa_gen_loss, cycle_bab
-    
+
     def compute_d_losses(A_real, atob, B_real, btoa):
         """Return all losses related to discriminator"""
-        g_atob, g_btoa, d_a, d_b = model['g_atob'], model['g_btoa'], model['d_a'], model['d_b']
-        d_a_real = d_a(A_real)
-        d_b_real = d_b(B_real)
-        A_fake = fake_A_pool.query(btoa)
-        B_fake = fake_B_pool.query(atob)
-        d_a_fake = d_a(A_fake)
-        d_b_fake = d_b(B_fake)
-        ones_da_real, zeros_da_fake = torch.ones(d_a_real.size()), torch.zeros(d_a_fake.size())
-        ones_db_real, zeros_db_fake = torch.ones(d_b_real.size()), torch.zeros(d_b_fake.size())
-        if not args.cpu:
-            ones_da_real, zeros_da_fake, ones_db_real, zeros_db_fake = \
-                        ones_da_real.cuda(args.gpu_id), \
-                        zeros_da_fake.cuda(args.gpu_id), \
-                        ones_db_real.cuda(args.gpu_id), \
-                        zeros_db_fake.cuda(args.gpu_id)
-        ones_da_real, zeros_da_fake, ones_db_real, zeros_db_fake = \
-                        Variable(ones_da_real), \
-                        Variable(zeros_da_fake), \
-                        Variable(ones_db_real), \
-                        Variable(zeros_db_fake)
-        d_a_loss = (mse_loss(d_a_real, ones_da_real) + mse_loss(d_a_fake, zeros_da_fake)) * 0.5
-        d_b_loss = (mse_loss(d_b_real, ones_db_real) + mse_loss(d_b_fake, zeros_db_fake)) * 0.5
+        d_a_loss = 0.5*(mse(model['d_a'](A_real), 1) +
+                        mse(model['d_a'](fake_A_pool.query(btoa)), 0))
+        d_b_loss = 0.5*(mse(model['d_b'](B_real), 1) +
+                        mse(model['d_b'](fake_B_pool.query(atob)), 0))
         return d_a_loss, d_b_loss
-
-    '''
-    Set up loss function.
-    '''
-    mse_loss = torch.nn.MSELoss()
-    if not args.cpu:
-        mse_loss = mse_loss.cuda(args.gpu_id)
     
     '''
     Visualize train outputs.
     '''
-    bs = args.batch_size
-    epoch_length = lambda ds : len(ds)//bs + int(len(ds)%bs>0)
+    epoch_length = lambda ds, bs : len(ds)//bs + int(len(ds)%bs>0)
     num_batches_train = min(
-        epoch_length(data['train']['s']),
-        epoch_length(data['train']['h'])
+        epoch_length(data['train']['s'], args.batch_size_train),
+        epoch_length(data['train']['h'], args.batch_size_train)
     )
+    train_save_freq = int(args.vis_freq*num_batches_train)
     image_saver_train = image_saver(save_path=os.path.join(path, "train"),
                                     epoch_length=num_batches_train,
-                                    save_every=500)
+                                    save_every=train_save_freq)
 
     '''
     Visualize valid outputs.
     '''
     num_batches_valid = min(
-        epoch_length(data['valid']['s']),
-        epoch_length(data['valid']['h'])
+        epoch_length(data['valid']['s'], args.batch_size_valid),
+        epoch_length(data['valid']['h'], args.batch_size_valid)
     )
+    valid_save_freq = int(args.vis_freq*num_batches_valid)
     image_saver_valid = image_saver(save_path=os.path.join(path, "valid"),
                                     epoch_length=num_batches_valid,
-                                    save_every=500)
-    
+                                    save_every=valid_save_freq)
+
     '''
     Set up training and evaluation functions.
     '''
@@ -368,51 +353,64 @@ if __name__ == '__main__':
             b1 = b1.cuda(args.gpu_id)
         return b0, b1, b2
 
-    def training_function(batch):
+    def training_function(engine, batch):
         batch = prepare_batch(batch)
         for model_ in model.values():
             model_.train()
+        # Clear all grad buffers.
+        for key in optimizer:
+            optimizer[key].zero_grad()
         A_real, B_real, M_np = batch
-        # optimise F and back
+        both_g_loss = 0.
+        # CycleGAN: optimize mapping from A -> B,
+        # and from A -> B -> A (cycle).
         hh, ww = A_real.shape[-2], A_real.shape[-1]
         atob = model['g_atob'](A_real)[:, :, 0:hh, 0:ww]
         atob_btoa = model['g_btoa'](atob)[:, :, 0:hh, 0:ww]
-        atob_gen_loss, cycle_aba = compute_g_losses_aba(A_real, atob, atob_btoa)
+        # Compute loss for A -> B and cycle.
+        atob_gen_loss, cycle_aba = compute_g_losses_aba(
+            A_real, atob, atob_btoa)
         g_tot_loss = atob_gen_loss + args.lamb*cycle_aba
-        optimizer['g'].zero_grad()
+        both_g_loss += g_tot_loss.item()
         g_tot_loss.backward()
-        optimizer['g'].step()
-        # optimise G and back
+        # CycleGAN: optimize mapping from B -> A,
+        # and from B -> A -> B (cycle).
         hh, ww = B_real.shape[-2], B_real.shape[-1]
         btoa = model['g_btoa'](B_real)[:, :, 0:hh, 0:ww]
         btoa_atob = model['g_atob'](btoa)[:, :, 0:hh, 0:ww]
-        btoa_gen_loss, cycle_bab = compute_g_losses_bab(B_real, btoa, btoa_atob)
+        # Compute loss for B -> A and cycle.
+        btoa_gen_loss, cycle_bab = compute_g_losses_bab(
+            B_real, btoa, btoa_atob)
         g_tot_loss = btoa_gen_loss + args.lamb*cycle_bab
-        optimizer['g'].zero_grad()
+        both_g_loss += g_tot_loss.item()
         g_tot_loss.backward()
-        optimizer['g'].step()
-        # update discriminator
+        # Update discriminator.
         d_a_loss, d_b_loss = compute_d_losses(A_real, atob, B_real, btoa)
-        optimizer['d_a'].zero_grad()
         d_a_loss.backward()
-        optimizer['d_a'].step()
-        optimizer['d_b'].zero_grad()
         d_b_loss.backward()
-        optimizer['d_b'].step()
+        # Update all networks at once.
+        for key in optimizer:
+            optimizer[key].step()
         this_metrics = {
-            'atob_gen_loss': atob_gen_loss.data.item(),
-            'cycle_aba': cycle_aba.data.item(),
-            'btoa_gen_loss': btoa_gen_loss.data.item(),
-            'cycle_bab': cycle_bab.data.item(),
-            'd_a_loss': d_a_loss.data.item(),
-            'd_b_loss': d_b_loss.data.item()
+            'atob_gen_loss': atob_gen_loss.item(),
+            'cycle_aba': cycle_aba.item(),
+            'btoa_gen_loss': btoa_gen_loss.item(),
+            'cycle_bab': cycle_bab.item(),
+            'd_a_loss': d_a_loss.item(),
+            'd_b_loss': d_b_loss.item()
         }
-        return g_tot_loss.data.item(), \
-            (A_real.data, atob.data, atob_btoa.data, B_real.data, btoa.data, btoa_atob.data, M_np), \
+        return both_g_loss, \
+            (A_real.data,
+             atob.data,
+             atob_btoa.data,
+             B_real.data,
+             btoa.data,
+             btoa_atob.data,
+             M_np), \
             this_metrics
     trainer = Trainer(training_function)
 
-    def validation_function(batch):
+    def validation_function(engine, batch):
         batch = prepare_batch(batch)
         for model_ in model.values():
             model_.eval()
@@ -421,31 +419,38 @@ if __name__ == '__main__':
             hh, ww = A_real.shape[-2], A_real.shape[-1]
             atob = model['g_atob'](A_real)[:, :, 0:hh, 0:ww]
             atob_btoa = model['g_btoa'](atob)[:, :, 0:hh, 0:ww]
-            atob_gen_loss, cycle_aba = compute_g_losses_aba(A_real, atob, atob_btoa)
+            atob_gen_loss, cycle_aba = compute_g_losses_aba(
+                A_real, atob, atob_btoa)
             g_tot_loss = atob_gen_loss + args.lamb*cycle_aba
             hh, ww = B_real.shape[-2], B_real.shape[-1]
             btoa = model['g_btoa'](B_real)[:, :, 0:hh, 0:ww]
             btoa_atob = model['g_atob'](btoa)[:, :, 0:hh, 0:ww]
-            btoa_gen_loss, cycle_bab = compute_g_losses_bab(B_real, btoa, btoa_atob)
-            g_tot_loss = btoa_gen_loss + args.lamb*cycle_bab
+            btoa_gen_loss, cycle_bab = compute_g_losses_bab(
+                B_real, btoa, btoa_atob)
+            g_tot_loss += btoa_gen_loss + args.lamb*cycle_bab
             d_a_loss, d_b_loss = compute_d_losses(A_real, atob, B_real, btoa)
         this_metrics = {
-            'atob_gen_loss': atob_gen_loss.data.item(),
-            'cycle_aba': cycle_aba.data.item(),
-            'btoa_gen_loss': btoa_gen_loss.data.item(),
-            'cycle_bab': cycle_bab.data.item(),
-            'd_a_loss': d_a_loss.data.item(),
-            'd_b_loss': d_b_loss.data.item()
+            'atob_gen_loss': atob_gen_loss.item(),
+            'cycle_aba': cycle_aba.item(),
+            'btoa_gen_loss': btoa_gen_loss.item(),
+            'cycle_bab': cycle_bab.item(),
+            'd_a_loss': d_a_loss.item(),
+            'd_b_loss': d_b_loss.item()
         }
-        return g_tot_loss.data.item(), \
-            (A_real.data, atob.data, atob_btoa.data, B_real.data, btoa.data, btoa_atob.data, M_np), \
+        return g_tot_loss.item(), \
+            (A_real.data,
+             atob.data,
+             atob_btoa.data,
+             B_real.data,
+             btoa.data,
+             btoa_atob.data,
+             M_np), \
             this_metrics
     evaluator = Evaluator(validation_function)
 
     '''
     Set up logging to screen.
     '''
-    bs = args.batch_size
     progress_train = progress_report(prefix=None,
                                      log_path=os.path.join(path,
                                                            "log_train.txt"))
@@ -455,9 +460,9 @@ if __name__ == '__main__':
     trainer.add_event_handler(Events.ITERATION_COMPLETED, progress_train)
 
     trainer.add_event_handler(Events.ITERATION_COMPLETED, image_saver_train)
-    
+
     trainer.add_event_handler(Events.EPOCH_COMPLETED,
-                              lambda engine, state: evaluator.run(loader_valid))
+                              lambda _: evaluator.run(loader_valid))
     evaluator.add_event_handler(Events.ITERATION_COMPLETED, progress_valid)
     evaluator.add_event_handler(Events.ITERATION_COMPLETED, image_saver_valid)
 
