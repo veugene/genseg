@@ -541,7 +541,8 @@ class DilatedResnetBlock(nn.Module):
         return out
 
 class DilatedFCN(nn.Module):
-    def __init__(self, in_channels, C, classes=None,
+    def __init__(self, in_channels, out_channels,
+                 C, classes=None,
                  mult=[2,2,4,8,16,32,32,1],
                  dilations=[1,1,2,4,8,16,1,1],
                  norm_layer=nn.BatchNorm2d,
@@ -593,7 +594,7 @@ class DilatedFCN(nn.Module):
                                    kernel_size=1)
             model += [classifier]
         else:
-            model += [nn.Conv2d(in_channels=C*mult[-1], out_channels=3, kernel_size=1), nn.Tanh()]
+            model += [nn.Conv2d(in_channels=C*mult[-1], out_channels=out_channels, kernel_size=1), nn.Tanh()]
         self.model = nn.Sequential(*model)
         self.classes = classes
     def forward(self, x):

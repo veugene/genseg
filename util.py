@@ -124,31 +124,38 @@ class ImagePool():
     Original code:
     https://github.com/togheppi/CycleGAN/blob/master/utils.py
     """
-    def __init__(self, pool_size):
+    def __init__(self, pool_size, use_cuda=False):
+        """
+        use_cuda: if `True`, store the buffer on GPU. This is
+          not recommended for large models!!!
+        """
         self.pool_size = pool_size
+        self.use_cuda = use_cuda
         if self.pool_size > 0:
             self.num_imgs = 0
-            self.images = []
+            self.images = [] # stored on cpu, NOT gpu
 
     def query(self, images):
         from torch.autograd import Variable
         if self.pool_size == 0:
-            return images
+            return Variable(images.data)
         return_images = []
         for image in images.data:
             image = torch.unsqueeze(image, 0)
             if self.num_imgs < self.pool_size:
                 self.num_imgs = self.num_imgs + 1
-                self.images.append(image)
+                self.images.append(image.cpu())
                 return_images.append(image)
             else:
                 p = np.random.uniform(0, 1)
                 if p > 0.5:
                     random_id = np.random.randint(0, self.pool_size-1)
                     tmp = self.images[random_id].clone()
-                    self.images[random_id] = image
+                    self.images[random_id] = image.cpu()
                     return_images.append(tmp)
                 else:
-                    return_images.append(image)
-        return_images = Variable(torch.cat(return_images, 0))
-        return return_images
+                    return_images.append(image.cpu())
+        return_images = torch.cat(return_images, 0)
+        if self.use_cuda:
+            return_images.cuda()
+        return Variable(return_images)
