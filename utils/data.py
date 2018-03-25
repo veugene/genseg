@@ -83,13 +83,16 @@ class data_flow_sampler(data_flow):
         return super(data_flow_sampler, self).flow()
 
 
-def prepare_data_brats(path_hgg, path_lgg, orientations=None):
+def prepare_data_brats(path_hgg, path_lgg,
+                       masked_fraction=0, orientations=None):
     """
     Convenience function to prepare brats data as multi_source_array objects,
     split into training and validation subsets.
     
     path_hgg (string) : Path of the h5py file containing the HGG data.
     path_lgg (string) : Path of the h5py file containing the LGG data.
+    masked_fraction (float) : The fraction in [0, 1.] of segmentation masks
+        in the training set to return as None.
     orientations (list) : A list of integers in {1, 2, 3}, specifying the
         axes along which to slice image volumes.
     
@@ -162,6 +165,9 @@ def prepare_data_brats(path_hgg, path_lgg, orientations=None):
     data['valid']['s'] = msa(data_hgg[3]+data_lgg[3], no_shape=True)
     data['train']['m'] = msa(data_hgg[4]+data_lgg[4], no_shape=True)
     data['valid']['m'] = msa(data_hgg[5]+data_lgg[5], no_shape=True)
+    if masked_fraction > 0:
+        data['train']['m'] = masked_view(data['train']['m'],
+                                         masked_fraction=masked_fraction)
         
     return data
 
