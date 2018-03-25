@@ -55,6 +55,7 @@ def parse_args():
     parser.add_argument('--vis_freq', type=float, default=0.5)
     parser.add_argument('-e', '--evaluate', action='store_true')
     parser.add_argument('--weight_decay', type=float, default=1e-4)
+    parser.add_argument('--masked_fraction', type=float, default=0)
     parser.add_argument('--num_pool', type=int, default=0)
     parser.add_argument('--lamb', type=float, default=10.)
     parser.add_argument('--detach', action='store_true', default=False)
@@ -204,7 +205,8 @@ if __name__ == '__main__':
     '''
     # Load
     data = prepare_data_brats(path_hgg=os.path.join(args.data_dir, "hgg.h5"),
-                              path_lgg=os.path.join(args.data_dir, "lgg.h5"))
+                              path_lgg=os.path.join(args.data_dir, "lgg.h5"),
+                              masked_fraction=args.masked_fraction)
     data_train = [data['train']['h'], data['train']['s'], data['train']['m']]
     data_valid = [data['valid']['h'], data['valid']['s'], data['valid']['m']]
     # Prepare data augmentation and data loaders.
@@ -438,22 +440,25 @@ if __name__ == '__main__':
     '''
     def prepare_batch(batch):
         h, s, m = batch
+        # Identify which segmentation masks are provided, if any.
+        indices = [i for i in range(len(m)) if m[i] is not None]
+        m = [m[i] for i in indices]
         # Scaling differs from segmentation-only task in
         # that we divide h,s by 2 here, so it's in [-1,1].
-        h = Variable(torch.from_numpy(np.array(h / 2.)))
-        s = Variable(torch.from_numpy(np.array(s / 2.)))
+        h = Variable(torch.from_numpy(np.array(h)/2.))
+        s = Variable(torch.from_numpy(np.array(s)/2.))
         m = Variable(torch.from_numpy(np.array(m)))
         if not args.cpu:
             h = h.cuda(args.gpu_id)
             s = s.cuda(args.gpu_id)
             m = m.cuda(args.gpu_id)
-        return h, s, m
+        return h, s, m, indices
 
     def training_function(engine, batch):
-        batch = prepare_batch(batch)
+        A_real, B_real, M_real, indices = prepare_batch(batch)
         for model_ in model.values():
             model_.train()
-        A_real, B_real, M_real = batch
+        
         # Clear all grad buffers.
         for key in optimizer:
             optimizer[key].zero_grad()
@@ -478,22 +483,20 @@ if __name__ == '__main__':
         # to healthy version, concatenate them, and feed into
         # seg model. If 'detach' mode is enabled, then gradients
         # from the seg model do not feed back into the generator.
-        if args.detach:
-            seg_btoa = btoa.detach()
-        else:
-            seg_btoa = btoa
-        seg_inp = torch.cat((B_real, seg_btoa), dim=1)
-        seg_out = model['seg'](seg_inp)
         seg_loss = 0.
-        for i in range(len(loss_functions)):
-            seg_loss += loss_functions[i](seg_out, M_real)
-        seg_loss /= len(loss_functions) # average
-        if args.detach:
-            seg_loss.backward()
-            g_tot_loss.backward()
-        else:
-            g_tot_loss += seg_loss
-            g_tot_loss.backward()
+        seg_out = Variable(torch.FloatTensor())
+        if len(M_real):
+            if args.detach:
+                seg_btoa = btoa.detach()
+            else:
+                seg_btoa = btoa
+            seg_inp = torch.cat((B_real, seg_btoa), dim=1)[indices]
+            seg_out = model['seg'](seg_inp)
+            for i in range(len(loss_functions)):
+                seg_loss += loss_functions[i](seg_out, M_real)
+            seg_loss /= len(loss_functions) # average
+        g_tot_loss += seg_loss
+        g_tot_loss.backward()
         # Update discriminator.
         d_a_loss, d_b_loss = compute_d_losses(A_real, atob, B_real, btoa)
         d_a_loss.backward()
@@ -509,21 +512,22 @@ if __name__ == '__main__':
             'd_a_loss': d_a_loss.data.item(),
             'd_b_loss': d_b_loss.data.item()
         }
-        with torch.no_grad():
-            this_metrics.update(metrics['train'](seg_out, M_real))
-        return seg_loss.item(), \
-            batch, \
-            (B_real, M_real, seg_out.detach(), btoa.detach()), \
-            this_metrics
+        if len(M_real):
+            with torch.no_grad():
+                this_metrics.update(metrics['train'](seg_out, M_real))
+        return (seg_loss if seg_loss==0 else seg_loss.item(),
+                batch,
+                (B_real[indices], M_real,
+                 seg_out.detach(), btoa[indices].detach()),
+                this_metrics)
 
     trainer = Trainer(training_function)
 
     def validation_function(engine, batch):
-        batch = prepare_batch(batch)
+        A_real, B_real, M_real, indices = prepare_batch(batch)
         for model_ in model.values():
             model_.eval()
         with torch.no_grad():
-            A_real, B_real, M_real = batch
             hh, ww = A_real.shape[-2], A_real.shape[-1]
             atob = model['g_atob'](A_real)[:, :, 0:hh, 0:ww]
             atob_btoa = model['g_btoa'](atob)[:, :, 0:hh, 0:ww]
@@ -534,12 +538,14 @@ if __name__ == '__main__':
             btoa_atob = model['g_atob'](btoa)[:, :, 0:hh, 0:ww]
             btoa_gen_loss, cycle_bab = compute_g_losses_bab(
                 B_real, btoa, btoa_atob)
-            seg_inp = torch.cat((B_real, btoa), dim=1)
-            seg_out = model['seg'](seg_inp)
             seg_loss = 0.
-            for i in range(len(loss_functions)):
-                seg_loss += loss_functions[i](seg_out, M_real)
-            seg_loss /= len(loss_functions) # average
+            seg_out = Variable(torch.FloatTensor())
+            if len(M_real):
+                seg_inp = torch.cat((B_real, btoa), dim=1)[indices]
+                seg_out = model['seg'](seg_inp)
+                for i in range(len(loss_functions)):
+                    seg_loss += loss_functions[i](seg_out, M_real)
+                seg_loss /= len(loss_functions) # average
             d_a_loss, d_b_loss = compute_d_losses(A_real, atob, B_real, btoa)
         this_metrics = OrderedDict({
             'atob_gen_loss': atob_gen_loss.data.item(),
@@ -549,11 +555,13 @@ if __name__ == '__main__':
             'd_a_loss': d_a_loss.data.item(),
             'd_b_loss': d_b_loss.data.item()
         })
-        this_metrics.update(metrics['valid'](seg_out, M_real))
-        return seg_loss.item(), \
-            batch, \
-            (B_real, M_real, seg_out.detach(), btoa.detach()), \
-            this_metrics
+        if len(M_real):
+            this_metrics.update(metrics['valid'](seg_out, M_real))
+        return (seg_loss if seg_loss==0 else seg_loss.item(),
+                batch,
+                (B_real[indices], M_real,
+                 seg_out.detach(), btoa[indices].detach()),
+                this_metrics)
     evaluator = Evaluator(validation_function)
 
     '''
