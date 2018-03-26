@@ -26,9 +26,9 @@ from utils.ignite import (progress_report,
                           scoring_function)
 from utils.metrics import (dice_loss,
                            accuracy)
-from utils.data import data_flow_sampler
-from utils.data import prepare_data_brats
-from utils.data import preprocessor_brats
+from utils.data import (data_flow_sampler,
+                        prepare_data_brats,
+                        preprocessor_brats)
 from util import count_params
 import configs
 from fcn_maker.model import assemble_resunet
@@ -49,8 +49,10 @@ def parse_args():
     parser.add_argument('--data_dir', type=str, default='/home/eugene/data/')
     parser.add_argument('--save_path', type=str, default='./experiments')
     # TODO: do proper mutual exclusion
-    parser.add_argument('--t_model_from', type=str, default='configs_cyclegan/dilated_fcn.py')
-    parser.add_argument('--s_model_from', type=str, default='configs/resunet_hybrid.py')
+    parser.add_argument('--t_model_from', type=str,
+                        default='configs_cyclegan/dilated_fcn.py')
+    parser.add_argument('--s_model_from', type=str,
+                        default='configs/resunet_hybrid.py')
     parser.add_argument('--resume', type=str, default=None)
     parser.add_argument('--vis_freq', type=float, default=0.5)
     parser.add_argument('-e', '--evaluate', action='store_true')
@@ -109,7 +111,8 @@ def setup_optimizers(name, g_params, d_a_params, d_b_params, seg_params, lr):
 Save images on validation.
 '''
 class image_saver(object):
-    def __init__(self, save_path, epoch_length, save_every=1, score_function=None):
+    def __init__(self, save_path, epoch_length, save_every=1,
+                 score_function=None):
         self.save_path = save_path
         self.epoch_length = epoch_length
         self.score_function = score_function
@@ -219,20 +222,20 @@ if __name__ == '__main__':
                  'warp_grid_size': 3}
     preprocessor_train = preprocessor_brats(data_augmentation_kwargs=da_kwargs)
     loader_train = data_flow_sampler(data_train,
-                                       sample_random=True,
-                                       batch_size=args.batch_size_train,
-                                       preprocessor=preprocessor_train,
-                                       nb_io_workers=args.nb_io_workers,
-                                       nb_proc_workers=args.nb_proc_workers,
-                                       rng=np.random.RandomState(42))
+                                     sample_random=True,
+                                     batch_size=args.batch_size_train,
+                                     preprocessor=preprocessor_train,
+                                     nb_io_workers=args.nb_io_workers,
+                                     nb_proc_workers=args.nb_proc_workers,
+                                     rng=np.random.RandomState(42))
     preprocessor_valid = preprocessor_brats(data_augmentation_kwargs=None)
     loader_valid = data_flow_sampler(data_valid,
-                                       sample_random=True,
-                                       batch_size=args.batch_size_valid,
-                                       preprocessor=preprocessor_valid,
-                                       nb_io_workers=args.nb_io_workers,
-                                       nb_proc_workers=args.nb_proc_workers,
-                                       rng=np.random.RandomState(42))
+                                     sample_random=True,
+                                     batch_size=args.batch_size_valid,
+                                     preprocessor=preprocessor_valid,
+                                     nb_io_workers=args.nb_io_workers,
+                                     nb_proc_workers=args.nb_proc_workers,
+                                     rng=np.random.RandomState(42))
 
     epoch_length = lambda ds, bs : len(ds)//bs + int(len(ds)%bs>0)
     
