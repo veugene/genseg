@@ -11,7 +11,7 @@ from skimage import transform
 from data_tools.wrap import (delayed_view,
                              multi_source_array)
 from data_tools.io import data_flow
-from data_tools.data_augmentation import image_stack_random_transform
+from data_tools.data_augmentation import image_random_transform
 
 
 def resize_stack(arr, size, interp='bilinear'):
@@ -83,13 +83,16 @@ class data_flow_sampler(data_flow):
         return super(data_flow_sampler, self).flow()
 
 
-def prepare_data_brats(path_hgg, path_lgg, orientations=None):
+def prepare_data_brats(path_hgg, path_lgg,
+                       masked_fraction=0, orientations=None):
     """
     Convenience function to prepare brats data as multi_source_array objects,
     split into training and validation subsets.
     
     path_hgg (string) : Path of the h5py file containing the HGG data.
     path_lgg (string) : Path of the h5py file containing the LGG data.
+    masked_fraction (float) : The fraction in [0, 1.] of segmentation masks
+        in the training set to return as None.
     orientations (list) : A list of integers in {1, 2, 3}, specifying the
         axes along which to slice image volumes.
     
@@ -162,106 +165,142 @@ def prepare_data_brats(path_hgg, path_lgg, orientations=None):
     data['valid']['s'] = msa(data_hgg[3]+data_lgg[3], no_shape=True)
     data['train']['m'] = msa(data_hgg[4]+data_lgg[4], no_shape=True)
     data['valid']['m'] = msa(data_hgg[5]+data_lgg[5], no_shape=True)
+    if masked_fraction > 0:
+        data['train']['m'] = masked_view(data['train']['m'],
+                                         masked_fraction=masked_fraction)
         
     return data
 
 
-def preprocessor_brats(data_augmentation_kwargs=None):
+def preprocessor_brats(data_augmentation_kwargs=None,
+                       h_idx=0, s_idx=1, m_idx=2):
     """
     Preprocessor function to pass to a data_flow, for BRATS data.
-    """
     
-    def f(batch):
-        # Expecting two or three sources in the batch, with np.float32 dtype
-        # unless there is a segmentation in which case it is expected to have
-        # type np.int64.
-        assert len(batch) in [2, 3]
-        has_segmentations = False
-        if len(batch)==2:
-            assert batch[0][0].dtype==np.float32
-            assert batch[1][0].dtype==np.float32 or batch[1][0].dtype==np.int64
-            if batch[1][0].dtype==np.int64:
-                has_segmentations = True
-        if len(batch)==3:
-            assert batch[0][0].dtype==np.float32
-            assert batch[1][0].dtype==np.float32
-            assert batch[2][0].dtype==np.float32 or batch[2][0].dtype==np.int64
-            if batch[2][0].dtype==np.int64:
-                has_segmentations = True
+    data_augmentation_kwargs : Dictionary of keyword arguments to pass to
+        the data augmentation code (image_stack_random_transform).
+    h_idx : The batch index for the healthy slices (None if not in batch).
+    s_idx : The batch index for the sick slices (None if not in batch).
+    m_idx : The batch index for the segmentation masks (None if not in batch).
+    """
         
+    def process_element(h, s, m, max_shape):
+        inputs = [h, s, m]
+        
+        # Center slices onto empty buffers with a size equal to the largest.
+        elem = []
+        for im in [h, s, m]:
+            if im is None:
+                elem.append(None)
+                continue
+            elem_im = np.zeros((len(im),)+max_shape, dtype=np.float32)
+            elem_im[...] = np.inf   # To be replaced with background intensity.
+            im_shape = np.shape(im)[1:]
+            offset = np.subtract(max_shape, im_shape)//2
+            index_slices = [slice(None, None),
+                            slice(offset[0], offset[0]+im_shape[0]),
+                            slice(offset[1], offset[1]+im_shape[1])]
+            elem_im[index_slices] = im[...]
+            elem.append(elem_im)
+        h, s, m = elem
+        
+        # Data augmentation.
+        if data_augmentation_kwargs is not None:
+            if h is not None:
+                h = image_random_transform(h, **data_augmentation_kwargs)
+            if s is not None:
+                _ = image_random_transform(s, m, **data_augmentation_kwargs)
+            if m is not None:
+                assert s is not None
+                s, m = _
+            else:
+                s = _
+                        
+        # Set background intensity.
+        for im, im_orig in zip([h, s, m], inputs):
+            if im is None:
+                continue
+            # HACK: Assuming corner pixel is always outside of the brain.
+            background = im_orig[0,0,0]
+            im[im==np.inf] = background
+                    
+        # Remove distant outlier intensities.
+        hs = []
+        for im in [h, s]:
+            if im is None:
+                hs.append(None)
+                continue
+            im = np.clip(im, -2., 2.)
+            hs.append(im)
+        h, s = hs
+        
+        # Set dtype (all output buffers are float32 to support inf).
+        elem = []
+        for im, im_orig in zip([h, s, m], inputs):
+            if im is None:
+                elem.append(None)
+                continue
+            im = im.astype(im_orig.dtype)
+            elem.append(im)
+            
+        return elem
+        
+    def process_batch(batch):        
         # Find the largest slice.
         max_shape = (0,0)
         for b in batch:
             for im in b:
+                if im is None:
+                    continue
                 im_shape = np.shape(im)[1:]
                 max_shape = (max(im_shape[0], max_shape[0]),
                              max(im_shape[1], max_shape[1]))
-        
-        # Center all slices onto empty buffers with a size equal to the
-        # largest.
-        out_batch = []
-        for b in batch:
-            # Create buffer and center images into it.
-            out_b = np.zeros((len(b),len(b[0]))+max_shape, dtype=np.float32)
-            out_b[...] = np.inf     # To be replaced with background intensity.
-            for i, im in enumerate(b):
-                im_shape = np.shape(im)[1:]
-                offset = np.subtract(max_shape, im_shape)//2
-                index_slices = [slice(None, None),
-                                slice(offset[0], offset[0]+im_shape[0]),
-                                slice(offset[1], offset[1]+im_shape[1])]
-                out_b[i][index_slices] = im[...]
-            out_batch.append(out_b)
-        
-        # Data augmentation.
-        if data_augmentation_kwargs is not None:
                 
-            # Segmentation setup : sick, segmentations
-            if len(batch)==2 and has_segmentations:
-                out_batch = image_stack_random_transform(out_batch[0],
-                                                         y=out_batch[1],
-                                                    **data_augmentation_kwargs)
+        # Process every element.
+        elements = []
+        for i in range(len(batch[0])):
+            h = None if h_idx is None else batch[h_idx][i]
+            s = None if s_idx is None else batch[s_idx][i]
+            m = None if m_idx is None else batch[m_idx][i]
+            elem = process_element(h=h, s=s, m=m, max_shape=max_shape)
+            elements.append(elem)
             
-            # Translation setup : healthy, sick, (segmentations)
-            else:
-                b0 = out_batch[0]
-                b1 = out_batch[1]
-                b2 = None
-                if len(out_batch)==3:
-                    b2 = out_batch[2]
-                    
-                b0 = image_stack_random_transform(b0,
-                                                  **data_augmentation_kwargs)
-                b_ = image_stack_random_transform(b1, y=b2,
-                                                  **data_augmentation_kwargs)
-                if b2 is None:
-                    b1 = b_
-                    out_batch = (b0, b1)
-                else:
-                    b1, b2 = b_
-                    out_batch = (b0, b1, b2)
-                        
-        # Set background intensity in output buffers.
-        for b, out_b in zip(batch, out_batch):
-            for i, im in enumerate(b):
-                # HACK: Assuming corner pixel is always outside of the brain.
-                background = im[:,0,0]
-                for j in range(len(im)):
-                    im_buff = out_b[i,j]
-                    im_buff[im_buff==np.inf] = background[j]
-                    
-        # Remove distant outlier intensities.
-        out_batch = list(out_batch)
-        out_batch[0] = np.clip(out_batch[0], -2.0, 2.0)
-        if len(batch)==3:
-            out_batch[1] = np.clip(out_batch[1], -2.0, 2.0)
-        if not has_segmentations:
-            out_batch[-1] = np.clip(out_batch[-1], -2.0, 2.0)
-        
-        # Set dtype.
-        n = len(batch)
-        out_batch = [out_batch[i].astype(batch[i][0].dtype) for i in range(n)]
-                        
+        out_batch = list(zip(*elements))
         return out_batch
-    return f
+    
+    return process_batch
         
+
+class masked_view(delayed_view):
+    """
+    Given an array, mask some random subset of indices, returning `None`
+    for at these indices.
+    
+    arr : The source array.
+    masked_fraction : Fraction of elements to mask (length axis), in [0, 1.0].
+    rng : A numpy random number generator.
+    """
+    
+    def __init__(self, arr, masked_fraction, rng=None):
+        super(masked_view, self).__init__(arr=arr, shuffle=False, rng=rng)
+        if 0 > masked_fraction or masked_fraction > 1:
+            raise ValueError("In `masked_view`, `masked_fraction` must be set "
+                             "to a value in [0, 1.0] but was set to {}."
+                             "".format(masked_fraction))
+        self.masked_fraction = masked_fraction
+        num_masked_indices = int(min(self.num_items,
+                                     masked_fraction*self.num_items+0.5))
+        self.masked_indices = self.rng.choice(self.num_items,
+                                              size=num_masked_indices,
+                                              replace=False)
+        
+    def _get_element(self, int_key, key_remainder=None):
+        if not isinstance(int_key, (int, np.integer)):
+            raise IndexError("cannot index with {}".format(type(int_key)))
+        if int_key in self.masked_indices:
+            return None
+        idx = self.arr_indices[int_key]
+        if key_remainder is not None:
+            idx = (idx,)+key_remainder
+        idx = int(idx)  # Some libraries don't like np.integer
+        return self.arr[idx]
