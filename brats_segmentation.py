@@ -19,15 +19,17 @@ from ignite.engines import (Events,
                             Evaluator)
 from ignite.handlers import ModelCheckpoint
 
+from data_tools.wrap import delayed_view
 from architectures.image2image import DilatedFCN
 from utils.ignite import (progress_report,
                           metrics_handler,
                           scoring_function)
 from utils.metrics import (dice_loss,
                            accuracy)
-from utils.data import data_flow_sampler
-from utils.data import prepare_data_brats
-from utils.data import preprocessor_brats
+from utils.data import (data_flow_sampler,
+                        prepare_data_brats,
+                        preprocessor_brats,
+                        masked_view)
 from util import count_params
 import configs
 from fcn_maker.model import assemble_resunet
@@ -47,6 +49,7 @@ def parse_args():
     g_load.add_argument('--resume', type=str, default=None)
     parser.add_argument('-e', '--evaluate', action='store_true')
     parser.add_argument('--weight_decay', type=float, default=1e-4)
+    parser.add_argument('--masked_fraction', type=float, default=0)
     parser.add_argument('--batch_size_train', type=int, default=80)
     parser.add_argument('--batch_size_valid', type=int, default=400)
     parser.add_argument('--epochs', type=int, default=200)
@@ -161,6 +164,21 @@ if __name__ == '__main__':
                               path_lgg=os.path.join(args.data_dir, "lgg.h5"))
     data_train = [data['train']['s'], data['train']['m']]
     data_valid = [data['valid']['s'], data['valid']['m']]
+    # Remove "masked" data.
+    if args.masked_fraction < 0 or args.masked_fraction > 1:
+        raise ValueError("`masked_fraction` must be in [0, 1].")
+    if args.masked_fraction > 0:
+        # HACK: using the masking indices created by masked_view without
+        #       using masked_view directly.
+        mview = masked_view(data_train[1],
+                            masked_fraction=args.masked_fraction)
+        def get_subset(arr, indices):
+            out = delayed_view(arr)
+            out.arr_indices = indices
+            out.num_items = len(indices)
+            return out
+        data_train = [get_subset(d, mview.masked_indices) for d in data_train]
+        
     # Prepare data augmentation and data loaders.
     da_kwargs = {'rotation_range': 3.,
                  'zoom_range': 0.1,

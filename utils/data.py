@@ -84,7 +84,7 @@ class data_flow_sampler(data_flow):
 
 
 def prepare_data_brats(path_hgg, path_lgg,
-                       masked_fraction=0, orientations=None):
+                       masked_fraction=0, orientations=None, rng=None):
     """
     Convenience function to prepare brats data as multi_source_array objects,
     split into training and validation subsets.
@@ -102,7 +102,7 @@ def prepare_data_brats(path_hgg, path_lgg,
     
     if orientations is None:
         orientations = [1,2,3]
-    
+        
     # Random 20% data split.
     validation_indices = {'hgg': [60,54,182,64,166,190,184,143,6,75,169,183,
                                   202,166,189,41,158,69,133,180,16,41,0,198,
@@ -264,8 +264,13 @@ def preprocessor_brats(data_augmentation_kwargs=None,
             m = None if m_idx is None else batch[m_idx][i]
             elem = process_element(h=h, s=s, m=m, max_shape=max_shape)
             elements.append(elem)
-            
         out_batch = list(zip(*elements))
+        
+        # Drop batch indices that are passed as `None`.
+        out_batch = [out_batch[i] \
+                     for i, elem_idx in enumerate([h_idx, s_idx, m_idx]) \
+                     if elem_idx is not None]
+        
         return out_batch
     
     return process_batch
