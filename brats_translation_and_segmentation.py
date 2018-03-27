@@ -82,6 +82,12 @@ def _get_optimizer(name, params, lr):
                                         betas=(0.5,0.999),
                                         weight_decay=args.weight_decay)
         return optimizer
+    elif name == 'RMSprop':
+        optimizer = torch.optim.RMSprop(params=params,
+                                        lr=lr,
+                                        alpha=0.9,
+                                        weight_decay=args.weight_decay)
+        return optimizer
     else:
         raise NotImplemented("Optimizer {} not supported."
                             "".format(args.optimizer))
@@ -143,6 +149,9 @@ class image_saver(object):
         if self._current_batch_num==self.epoch_length:
             self._current_epoch += 1
             self._current_batch_num = 0
+
+        if this_batch_size == 0:
+            return
 
         # Make directory.
         save_dir = os.path.join(self.save_path, str(self._current_epoch))
@@ -362,7 +371,7 @@ if __name__ == '__main__':
         if not hasattr(target, '__len__'):
             target = torch.ones_like(prediction)*target
             if prediction.is_cuda:
-                target = target.cuda()
+                target = target.cuda(args.gpu_id)
             target = Variable(target)
         return torch.nn.MSELoss()(prediction, target)
 
@@ -503,6 +512,8 @@ if __name__ == '__main__':
         g_tot_loss += seg_loss
         g_tot_loss.backward()
         # Update discriminator.
+        optimizer['d_a'].zero_grad()
+        optimizer['d_b'].zero_grad()
         d_a_loss, d_b_loss = compute_d_losses(A_real, atob, B_real, btoa)
         d_a_loss.backward()
         d_b_loss.backward()
