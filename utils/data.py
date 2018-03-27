@@ -84,7 +84,7 @@ class data_flow_sampler(data_flow):
 
 
 def prepare_data_brats(path_hgg, path_lgg,
-                       masked_fraction=0, orientations=None):
+                       masked_fraction=0, orientations=None, rng=None):
     """
     Convenience function to prepare brats data as multi_source_array objects,
     split into training and validation subsets.
@@ -95,6 +95,7 @@ def prepare_data_brats(path_hgg, path_lgg,
         in the training set to return as None.
     orientations (list) : A list of integers in {1, 2, 3}, specifying the
         axes along which to slice image volumes.
+    rng (numpy RandomState) : rng for masked_view
     
     Returns six arrays: healthy slices, sick slices, and segmentations for 
     the training and validation subsets.
@@ -102,6 +103,9 @@ def prepare_data_brats(path_hgg, path_lgg,
     
     if orientations is None:
         orientations = [1,2,3]
+        
+    if rng is None:
+        rng = np.random.RandomState()
     
     # Random 20% data split.
     validation_indices = {'hgg': [60,54,182,64,166,190,184,143,6,75,169,183,
@@ -167,7 +171,8 @@ def prepare_data_brats(path_hgg, path_lgg,
     data['valid']['m'] = msa(data_hgg[5]+data_lgg[5], no_shape=True)
     if masked_fraction > 0:
         data['train']['m'] = masked_view(data['train']['m'],
-                                         masked_fraction=masked_fraction)
+                                         masked_fraction=masked_fraction,
+                                         rng=rng)
         
     return data
 
@@ -264,8 +269,13 @@ def preprocessor_brats(data_augmentation_kwargs=None,
             m = None if m_idx is None else batch[m_idx][i]
             elem = process_element(h=h, s=s, m=m, max_shape=max_shape)
             elements.append(elem)
-            
         out_batch = list(zip(*elements))
+        
+        # Drop batch indices that are passed as `None`.
+        out_batch = [out_batch[i] \
+                     for i, elem_idx in enumerate([h_idx, s_idx, m_idx]) \
+                     if elem_idx is not None]
+        
         return out_batch
     
     return process_batch
