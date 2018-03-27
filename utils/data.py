@@ -95,6 +95,7 @@ def prepare_data_brats(path_hgg, path_lgg,
         in the training set to return as None.
     orientations (list) : A list of integers in {1, 2, 3}, specifying the
         axes along which to slice image volumes.
+    rng (numpy RandomState) : rng for masked_view
     
     Returns six arrays: healthy slices, sick slices, and segmentations for 
     the training and validation subsets.
@@ -103,6 +104,9 @@ def prepare_data_brats(path_hgg, path_lgg,
     if orientations is None:
         orientations = [1,2,3]
         
+    if rng is None:
+        rng = np.random.RandomState()
+    
     # Random 20% data split.
     validation_indices = {'hgg': [60,54,182,64,166,190,184,143,6,75,169,183,
                                   202,166,189,41,158,69,133,180,16,41,0,198,
@@ -167,7 +171,8 @@ def prepare_data_brats(path_hgg, path_lgg,
     data['valid']['m'] = msa(data_hgg[5]+data_lgg[5], no_shape=True)
     if masked_fraction > 0:
         data['train']['m'] = masked_view(data['train']['m'],
-                                         masked_fraction=masked_fraction)
+                                         masked_fraction=masked_fraction,
+                                         rng=rng)
         
     return data
 

@@ -70,6 +70,7 @@ def parse_args():
     parser.add_argument('--gpu_id', type=int, default=0)
     parser.add_argument('--nb_io_workers', type=int, default=1)
     parser.add_argument('--nb_proc_workers', type=int, default=0)
+    parser.add_argument('--rseed', type=int, default=42)
     args = parser.parse_args()
     return args
 
@@ -209,7 +210,8 @@ if __name__ == '__main__':
     # Load
     data = prepare_data_brats(path_hgg=os.path.join(args.data_dir, "hgg.h5"),
                               path_lgg=os.path.join(args.data_dir, "lgg.h5"),
-                              masked_fraction=args.masked_fraction)
+                              masked_fraction=args.masked_fraction,
+                              rng=np.random.RandomState(args.rseed))
     data_train = [data['train']['h'], data['train']['s'], data['train']['m']]
     data_valid = [data['valid']['h'], data['valid']['s'], data['valid']['m']]
     # Prepare data augmentation and data loaders.
@@ -227,7 +229,7 @@ if __name__ == '__main__':
                                      preprocessor=preprocessor_train,
                                      nb_io_workers=args.nb_io_workers,
                                      nb_proc_workers=args.nb_proc_workers,
-                                     rng=np.random.RandomState(42))
+                                     rng=np.random.RandomState(args.rseed))
     preprocessor_valid = preprocessor_brats(data_augmentation_kwargs=None)
     loader_valid = data_flow_sampler(data_valid,
                                      sample_random=True,
@@ -235,7 +237,7 @@ if __name__ == '__main__':
                                      preprocessor=preprocessor_valid,
                                      nb_io_workers=args.nb_io_workers,
                                      nb_proc_workers=args.nb_proc_workers,
-                                     rng=np.random.RandomState(42))
+                                     rng=np.random.RandomState(args.rseed))
 
     epoch_length = lambda ds, bs : len(ds)//bs + int(len(ds)%bs>0)
     

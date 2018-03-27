@@ -59,6 +59,7 @@ def parse_args():
     parser.add_argument('--gpu_id', type=int, default=None)
     parser.add_argument('--nb_io_workers', type=int, default=1)
     parser.add_argument('--nb_proc_workers', type=int, default=2)
+    parser.add_argument('--rseed', type=int, default=42)
     args = parser.parse_args()
     return args
 
@@ -171,7 +172,8 @@ if __name__ == '__main__':
         # HACK: using the masking indices created by masked_view without
         #       using masked_view directly.
         mview = masked_view(data_train[1],
-                            masked_fraction=args.masked_fraction)
+                            masked_fraction=args.masked_fraction,
+                            rng=np.random.RandomState(args.rseed))
         def get_subset(arr, indices):
             out = delayed_view(arr)
             out.arr_indices = indices
@@ -195,7 +197,7 @@ if __name__ == '__main__':
                                      preprocessor=preprocessor_train,
                                      nb_io_workers=args.nb_io_workers,
                                      nb_proc_workers=args.nb_proc_workers,
-                                     rng=np.random.RandomState(42))
+                                     rng=np.random.RandomState(args.rseed))
     preprocessor_valid = preprocessor_brats(data_augmentation_kwargs=None,
                                             h_idx=None, s_idx=0, m_idx=1)
     loader_valid = data_flow_sampler(data_valid,
@@ -204,7 +206,7 @@ if __name__ == '__main__':
                                      preprocessor=preprocessor_valid,
                                      nb_io_workers=args.nb_io_workers,
                                      nb_proc_workers=0,
-                                     rng=np.random.RandomState(42))
+                                     rng=np.random.RandomState(args.rseed))
 
     '''
     Prepare model. The `resume` arg is able to restore the model,
