@@ -51,6 +51,7 @@ def parse_args():
     parser.add_argument('--masked_fraction', type=float, default=0)
     parser.add_argument('--batch_size_train', type=int, default=80)
     parser.add_argument('--batch_size_valid', type=int, default=400)
+    parser.add_argument('--validate_every', type=int, default=1)
     parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument('--learning_rate', type=float, default=0.001)
     parser.add_argument('--optimizer', type=str, default='RMSprop')
@@ -351,8 +352,10 @@ if __name__ == '__main__':
                                      log_path=os.path.join(path,
                                                            "log_valid.txt"))
     trainer.add_event_handler(Events.ITERATION_COMPLETED, progress_train)
-    trainer.add_event_handler(Events.EPOCH_COMPLETED,
-                              lambda _: evaluator.run(loader_valid))
+    def evaluator_handler(engine):
+        if engine.state.epoch % args.validate_every == 0:
+            evaluator.run(loader_valid)
+    trainer.add_event_handler(Events.EPOCH_COMPLETED, evaluator_handler)
     evaluator.add_event_handler(Events.ITERATION_COMPLETED, progress_valid)
     evaluator.add_event_handler(Events.ITERATION_COMPLETED, image_saver_valid)
     
