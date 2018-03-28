@@ -583,7 +583,7 @@ if __name__ == '__main__':
     '''
     Reset global Dice score counts every epoch (or validation run).
     '''
-    for l in labels:
+    for l in ['1', '2', '4', '124']:
         func = lambda key : \
             metrics[key].measure_functions['dice{}'.format(l)].reset_counts
         trainer.add_event_handler(Events.EPOCH_STARTED, func('train'))
