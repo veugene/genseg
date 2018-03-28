@@ -19,7 +19,6 @@ from ignite.engines import (Events,
                             Evaluator)
 from ignite.handlers import ModelCheckpoint
 
-from data_tools.wrap import delayed_view
 from architectures.image2image import DilatedFCN
 from utils.ignite import (progress_report,
                           metrics_handler,
@@ -162,24 +161,12 @@ if __name__ == '__main__':
     '''
     # Load
     data = prepare_data_brats(path_hgg=os.path.join(args.data_dir, "hgg.h5"),
-                              path_lgg=os.path.join(args.data_dir, "lgg.h5"))
+                              path_lgg=os.path.join(args.data_dir, "lgg.h5"),
+                              masked_fraction=args.masked_fraction,
+                              drop_masked=True,
+                              rng=np.random.RandomState(args.rseed))
     data_train = [data['train']['s'], data['train']['m']]
     data_valid = [data['valid']['s'], data['valid']['m']]
-    # Remove "masked" data.
-    if args.masked_fraction < 0 or args.masked_fraction > 1:
-        raise ValueError("`masked_fraction` must be in [0, 1].")
-    if args.masked_fraction > 0:
-        # HACK: using the masking indices created by masked_view without
-        #       using masked_view directly.
-        mview = masked_view(data_train[1],
-                            masked_fraction=args.masked_fraction,
-                            rng=np.random.RandomState(args.rseed))
-        def get_subset(arr, indices):
-            out = delayed_view(arr)
-            out.arr_indices = indices
-            out.num_items = len(indices)
-            return out
-        data_train = [get_subset(d, mview.masked_indices) for d in data_train]
         
     # Prepare data augmentation and data loaders.
     da_kwargs = {'rotation_range': 3.,

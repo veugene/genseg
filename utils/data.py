@@ -83,19 +83,21 @@ class data_flow_sampler(data_flow):
         return super(data_flow_sampler, self).flow()
 
 
-def prepare_data_brats(path_hgg, path_lgg,
-                       masked_fraction=0, orientations=None, rng=None):
+def prepare_data_brats(path_hgg, path_lgg, masked_fraction=0,
+                       drop_masked=False, orientations=None, rng=None):
     """
     Convenience function to prepare brats data as multi_source_array objects,
     split into training and validation subsets.
     
     path_hgg (string) : Path of the h5py file containing the HGG data.
     path_lgg (string) : Path of the h5py file containing the LGG data.
-    masked_fraction (float) : The fraction in [0, 1.] of segmentation masks
+    masked_fraction (float) : The fraction in [0, 1.] of volumes for which 
+        to return segmentation masks as None.
         in the training set to return as None.
+    drop_masked (bool) : Whether to omit volumes with "masked" segmentations.
     orientations (list) : A list of integers in {1, 2, 3}, specifying the
         axes along which to slice image volumes.
-    rng (numpy RandomState) : rng for masked_view
+    rng (numpy RandomState) : Random number generator.
     
     Returns six arrays: healthy slices, sick slices, and segmentations for 
     the training and validation subsets.
@@ -103,9 +105,10 @@ def prepare_data_brats(path_hgg, path_lgg,
     
     if orientations is None:
         orientations = [1,2,3]
-        
     if rng is None:
         rng = np.random.RandomState()
+    if masked_fraction < 0 or masked_fraction > 1:
+        raise ValueError("`masked_fraction` must be in [0, 1].")
     
     # Random 20% data split.
     validation_indices = {'hgg': [60,54,182,64,166,190,184,143,6,75,169,183,
@@ -114,8 +117,31 @@ def prepare_data_brats(path_hgg, path_lgg,
                                   88,204,149,119,152,65],
                           'lgg': [25,14,25,4,54,56,56,54,59,1,38,6,24,23,53]}
     
+    # The rest is training data.
+    num_hgg = 210
+    num_lgg = 75
+    training_indices = {'hgg': [i for i in range(num_hgg) \
+                                if i not in validation_indices['hgg']],
+                        'lgg': [i for i in range(num_lgg) \
+                                if i not in validation_indices['lgg']]}
     
-    def _prepare(path, axis, validation_indices):
+    # Volumes with these indices will either be dropped from the training_set
+    # or have their segmentations set to None.
+    masked_indices = {
+        'hgg': rng.choice(num_hgg,
+                          size=int(min(num_hgg, masked_fraction*num_hgg+0.5)),
+                          replace=False),
+        'lgg': rng.choice(num_lgg,
+                          size=int(min(num_lgg, masked_fraction*num_lgg+0.5)),
+                          replace=False)
+        }
+    if drop_masked:
+        for key in masked_indices.keys():
+            training_indices[key] = [i for i in training_indices[key] \
+                                     if i not in masked_indices[key]]
+            masked_indices[key] = []
+    
+    def _prepare(path, axis, key):
         # Open h5py file.
         try:
             h5py_file = h5py.File(path, mode='r')
@@ -127,22 +153,22 @@ def prepare_data_brats(path_hgg, path_lgg,
         volumes_h = []
         volumes_s = []
         segmentations = []
-        for key in h5py_file.keys():   # Per patient.
-            group_p = h5py_file[key]
+        for _key in h5py_file.keys():   # Per patient.
+            group_p = h5py_file[_key]
             volumes_h.append(group_p['healthy/axis_{}'.format(str(axis))])
             volumes_s.append(group_p['sick/axis_{}'.format(str(axis))])
             segmentations.append(\
                         group_p['segmentation/axis_{}'.format(str(axis))])
         
         # Split data into training and validation.
-        training_indices = [i for i in range(len(segmentations)) \
-                            if i not in validation_indices]
-        h_train = [volumes_h[i] for i in training_indices]
-        h_valid = [volumes_h[i] for i in validation_indices]
-        s_train = [volumes_s[i] for i in training_indices]
-        s_valid = [volumes_s[i] for i in validation_indices]
-        m_train = [segmentations[i] for i in training_indices]
-        m_valid = [segmentations[i] for i in validation_indices]
+        h_train = [volumes_h[i] for i in training_indices[key]]
+        h_valid = [volumes_h[i] for i in validation_indices[key]]
+        s_train = [volumes_s[i] for i in training_indices[key]]
+        s_valid = [volumes_s[i] for i in validation_indices[key]]
+        m_train = [segmentations[i] if i not in masked_indices[key]
+                   else np.array([None]*len(segmentations[i]))
+                   for i in training_indices[key]]
+        m_valid = [segmentations[i] for i in validation_indices[key]]
         
         return h_train, h_valid, s_train, s_valid, m_train, m_valid
     
@@ -157,8 +183,8 @@ def prepare_data_brats(path_hgg, path_lgg,
     data_hgg = []
     data_lgg = []
     for axis in orientations:
-        _extend(data_hgg, _prepare(path_hgg, axis, validation_indices['hgg']))
-        _extend(data_lgg, _prepare(path_lgg, axis, validation_indices['lgg']))
+        _extend(data_hgg, _prepare(path_hgg, axis=axis, key='hgg'))
+        _extend(data_lgg, _prepare(path_lgg, axis=axis, key='lgg'))
     
     data = OrderedDict([('train', OrderedDict()),
                         ('valid', OrderedDict())])
@@ -169,10 +195,6 @@ def prepare_data_brats(path_hgg, path_lgg,
     data['valid']['s'] = msa(data_hgg[3]+data_lgg[3], no_shape=True)
     data['train']['m'] = msa(data_hgg[4]+data_lgg[4], no_shape=True)
     data['valid']['m'] = msa(data_hgg[5]+data_lgg[5], no_shape=True)
-    if masked_fraction > 0:
-        data['train']['m'] = masked_view(data['train']['m'],
-                                         masked_fraction=masked_fraction,
-                                         rng=rng)
         
     return data
 
