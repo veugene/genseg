@@ -19,7 +19,6 @@ from ignite.engines import (Events,
                             Evaluator)
 from ignite.handlers import ModelCheckpoint
 
-from data_tools.wrap import delayed_view
 from architectures.image2image import DilatedFCN
 from utils.ignite import (progress_report,
                           metrics_handler,
@@ -52,6 +51,7 @@ def parse_args():
     parser.add_argument('--masked_fraction', type=float, default=0)
     parser.add_argument('--batch_size_train', type=int, default=80)
     parser.add_argument('--batch_size_valid', type=int, default=400)
+    parser.add_argument('--validate_every', type=int, default=1)
     parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument('--learning_rate', type=float, default=0.001)
     parser.add_argument('--optimizer', type=str, default='RMSprop')
@@ -162,24 +162,12 @@ if __name__ == '__main__':
     '''
     # Load
     data = prepare_data_brats(path_hgg=os.path.join(args.data_dir, "hgg.h5"),
-                              path_lgg=os.path.join(args.data_dir, "lgg.h5"))
+                              path_lgg=os.path.join(args.data_dir, "lgg.h5"),
+                              masked_fraction=args.masked_fraction,
+                              drop_masked=True,
+                              rng=np.random.RandomState(args.rseed))
     data_train = [data['train']['s'], data['train']['m']]
     data_valid = [data['valid']['s'], data['valid']['m']]
-    # Remove "masked" data.
-    if args.masked_fraction < 0 or args.masked_fraction > 1:
-        raise ValueError("`masked_fraction` must be in [0, 1].")
-    if args.masked_fraction > 0:
-        # HACK: using the masking indices created by masked_view without
-        #       using masked_view directly.
-        mview = masked_view(data_train[1],
-                            masked_fraction=args.masked_fraction,
-                            rng=np.random.RandomState(args.rseed))
-        def get_subset(arr, indices):
-            out = delayed_view(arr)
-            out.arr_indices = indices
-            out.num_items = len(indices)
-            return out
-        data_train = [get_subset(d, mview.masked_indices) for d in data_train]
         
     # Prepare data augmentation and data loaders.
     da_kwargs = {'rotation_range': 3.,
@@ -364,8 +352,10 @@ if __name__ == '__main__':
                                      log_path=os.path.join(path,
                                                            "log_valid.txt"))
     trainer.add_event_handler(Events.ITERATION_COMPLETED, progress_train)
-    trainer.add_event_handler(Events.EPOCH_COMPLETED,
-                              lambda _: evaluator.run(loader_valid))
+    def evaluator_handler(engine):
+        if engine.state.epoch % args.validate_every == 0:
+            evaluator.run(loader_valid)
+    trainer.add_event_handler(Events.EPOCH_COMPLETED, evaluator_handler)
     evaluator.add_event_handler(Events.ITERATION_COMPLETED, progress_valid)
     evaluator.add_event_handler(Events.ITERATION_COMPLETED, image_saver_valid)
     
