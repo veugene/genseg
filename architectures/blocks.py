@@ -237,7 +237,8 @@ class _rev_block_function(Function):
 
     @staticmethod
     def forward(ctx, x, in_channels, out_channels, f_modules, g_modules,
-                backprop_buffer, subsample=False, ndim=2, *args):
+                backprop_buffer, grad_enabled, subsample=False, ndim=2,
+                *args):
         """
         Compute forward pass including boilerplate code.
 
@@ -259,7 +260,8 @@ class _rev_block_function(Function):
         
         # if subsampling, information is lost and we need to save the input
         if subsample:
-            backprop_buffer['activations'].append(x)
+            if grad_enabled:
+                backprop_buffer['activations'].append(x)
             ctx.load_input = True
         else:
             ctx.load_input = False
@@ -280,7 +282,8 @@ class _rev_block_function(Function):
                                          subsample,
                                          ndim)
         
-        backprop_buffer['forward_passes'][-1] += 1
+        if grad_enabled:
+            backprop_buffer['forward_passes'][-1] += 1
 
         return y
 
@@ -314,7 +317,7 @@ class _rev_block_function(Function):
             ctx.backprop_buffer['forward_passes'].pop()
             ctx.backprop_buffer['activations'].pop()
 
-        return (dx,) + (None,)*7 + tuple(dfw) + tuple(dgw)
+        return (dx,) + (None,)*8 + tuple(dfw) + tuple(dgw)
 
 
 class rev_block(nn.Module):
@@ -414,6 +417,7 @@ class rev_block(nn.Module):
                                          self.f_modules,
                                          self.g_modules,
                                          self.backprop_buffer,
+                                         torch.is_grad_enabled(),
                                          self.subsample,
                                          self.ndim,
                                          *f_params,
@@ -720,10 +724,12 @@ class dilated_rev_block(block_abstract):
     def forward(self, x):
         if self.subsample:
             x = self.subsample_op(x)
-        self._backprop_buffer['forward_passes'].append(0)
+        if torch.is_grad_enabled():
+            self._backprop_buffer['forward_passes'].append(0)
         for layer in self.layers:
             x = layer(x)
-        self._backprop_buffer['activations'].append(x)
+        if torch.is_grad_enabled():
+            self._backprop_buffer['activations'].append(x)
         if self.upsample:
             x = self.upsample_op(x)
         return x    
