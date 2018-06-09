@@ -82,9 +82,39 @@ class data_flow_sampler(data_flow):
                 self.data[i].arr.re_shuffle()
         return super(data_flow_sampler, self).flow()
 
+def prepare_data_brats17(path_hgg, path_lgg,
+                         masked_fraction=0, drop_masked=False,
+                         orientations=None,
+                         rng=None):
+    # Random 20% data split.
+    validation_indices = {'hgg': [60,54,182,64,166,190,184,143,6,75,169,183,
+                                  202,166,189,41,158,69,133,180,16,41,0,198,
+                                  101,120,5,185,203,151,100,149,44,48,151,34,
+                                  88,204,149,119,152,65],
+                          'lgg': [25,14,25,4,54,56,56,54,59,1,38,6,24,23,53]}
+    return _prepare_data_brats(path_hgg, path_lgg,
+                               masked_fraction=masked_fraction,
+                               validation_indices=validation_indices,
+                               drop_masked=drop_masked,
+                               orientations=orientations,
+                               rng=rng)
 
-def prepare_data_brats(path_hgg, path_lgg, masked_fraction=0,
-                       drop_masked=False, orientations=None, rng=None):
+def prepare_data_brats13s(path_hgg, path_lgg,
+                          masked_fraction=0, drop_masked=False,
+                          orientations=None,
+                          rng=None):
+    validation_indices = {'hgg': [0,1,2], 'lgg': [0,1,2]}
+    return _prepare_data_brats(path_hgg, path_lgg,
+                               masked_fraction=masked_fraction,
+                               validation_indices=validation_indices,
+                               drop_masked=drop_masked,
+                               orientations=orientations,
+                               rng=rng)
+
+def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
+                        masked_fraction=0, drop_masked=False,
+                        orientations=None,
+                        rng=None):
     """
     Convenience function to prepare brats data as multi_source_array objects,
     split into training and validation subsets.
@@ -109,17 +139,23 @@ def prepare_data_brats(path_hgg, path_lgg, masked_fraction=0,
         rng = np.random.RandomState()
     if masked_fraction < 0 or masked_fraction > 1:
         raise ValueError("`masked_fraction` must be in [0, 1].")
-    
-    # Random 20% data split.
-    validation_indices = {'hgg': [60,54,182,64,166,190,184,143,6,75,169,183,
-                                  202,166,189,41,158,69,133,180,16,41,0,198,
-                                  101,120,5,185,203,151,100,149,44,48,151,34,
-                                  88,204,149,119,152,65],
-                          'lgg': [25,14,25,4,54,56,56,54,59,1,38,6,24,23,53]}
-    
+        
     # The rest is training data.
-    num_hgg = 210
-    num_lgg = 75
+    with h5py.File(path_lgg, 'r') as f:
+        num_lgg = len(f.keys())
+    with h5py.File(path_hgg, 'r') as f:
+        num_hgg = len(f.keys())
+    # Check if any of the validation indices exceeds
+    # the length of the # of examples.
+    max_hgg_idx = max(validation_indices['hgg'])
+    if max_hgg_idx >= num_hgg:
+        raise Exception("Max validation index is {} but len(hgg) is {}".
+                        format(max_hgg_idx, num_hgg))
+    max_lgg_idx = max(validation_indices['lgg'])
+    if max_lgg_idx >= num_lgg:
+        raise Exception("Max validation index is {} but len(lgg) is {}".
+                        format(max_lgg_idx, num_lgg))
+    
     training_indices = {'hgg': [i for i in range(num_hgg) \
                                 if i not in validation_indices['hgg']],
                         'lgg': [i for i in range(num_lgg) \
