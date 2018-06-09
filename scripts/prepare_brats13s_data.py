@@ -1,3 +1,7 @@
+"""
+Original code by Joseph Cohen
+"""
+
 import glob, os
 import re
 import medpy
@@ -11,9 +15,10 @@ def parse_args():
     parser.add_argument('--data_dir', type=str,
                         default="/data/lisa/data/BRATS2013")
     parser.add_argument('--out_dir', type=str, 
-	default="/data/milatmp1/beckhamc/tmp_data/genseg")
+	                default="/data/milatmp1/beckhamc/tmp_data/genseg")
     parser.add_argument('--b_thresh', type=float, default=0.30)
     parser.add_argument('--t_thresh', type=float, default=0.01)
+    parser.add_argument('--debug', action='store_true')
     return parser.parse_args()
 
 args = parse_args()
@@ -36,19 +41,24 @@ def get_data(glob_pattern, is_labels=False):
         image_data = image_data.T
         
         if (is_labels):
-            image_data = np.round(image_data) #clean up labels
+            image_data = np.round(image_data) # clean up labels
             
-        image_data = image_data[:,:,128:] #crop right side
+        image_data = image_data[:,:,128:] # crop right side
         data[name] = image_data
         c += 1
-        #if c == 4:
-        #    break
+        if args.debug:
+            # If debug flag is enabled, we generate
+            # a smaller version of the dataset.
+            if c == 10:
+                break
     return data
 
 def normalize_data(data):
     max_val = np.asarray(data.values()).max()
     for k,v in data.iteritems():
-        data[k] = v/max_val
+        # Want to norm data into [0,1], and then
+        # scale so that it's in range [-2, 2].
+        data[k] = (((v / max_val) - 0.5) / 0.5) * 2.
     new_max_val = np.asarray(data.values()).max()
 
 def get_labels(rightside):
@@ -60,10 +70,13 @@ def get_labels(rightside):
     return met
 
 def convert_mask(mask_):
-    # Mask can be either [0,1,2,...,5],
-    # but anything > 2 is tumour, so it's
-    # actually a 3-class segmentation problem
-    # (3,4,5).
+    """
+    Mask can be either [0,1,2,...,5], but anything > 2
+      is actually a tumour, so it's really a 3-class
+      segmentation problem. To be in line with how
+      we do things for BRATS17, re-assign the classes
+      (3,4,5) to be (1,2,4), respectively.
+    """
     mask = np.copy(mask_)
     # These classes don't matter.
     mask[mask==1.] = 0.
@@ -71,7 +84,7 @@ def convert_mask(mask_):
     # Re-order these integers.
     mask[mask==3.] = 1.
     mask[mask==4.] = 2.
-    mask[mask==5.] = 3.
+    mask[mask==5.] = 4.
     return mask
 
 for grade in ['HG', 'LG']:
