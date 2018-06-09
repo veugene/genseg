@@ -636,11 +636,6 @@ if __name__ == '__main__':
                                     progress_valid)
         evaluator.add_event_handler(Events.ITERATION_COMPLETED,
                                     image_saver_valid)
-    
-    trainer.add_event_handler(Events.EPOCH_COMPLETED,
-                              lambda _: evaluator.run(loader_valid))
-    evaluator.add_event_handler(Events.ITERATION_COMPLETED, progress_valid)
-    evaluator.add_event_handler(Events.ITERATION_COMPLETED, image_saver_valid)
 
     cpt_handler = ModelCheckpoint(dirname=path,
                                   filename_prefix='weights',
