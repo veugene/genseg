@@ -225,12 +225,29 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
     data = OrderedDict([('train', OrderedDict()),
                         ('valid', OrderedDict())])
     msa = multi_source_array
-    data['train']['h'] = msa(data_hgg[0]+data_lgg[0], no_shape=True)
-    data['valid']['h'] = msa(data_hgg[1]+data_lgg[1], no_shape=True)
-    data['train']['s'] = msa(data_hgg[2]+data_lgg[2], no_shape=True)
-    data['valid']['s'] = msa(data_hgg[3]+data_lgg[3], no_shape=True)
-    data['train']['m'] = msa(data_hgg[4]+data_lgg[4], no_shape=True)
-    data['valid']['m'] = msa(data_hgg[5]+data_lgg[5], no_shape=True)
+    train_h = data_hgg[0]+data_lgg[0]
+    valid_h = data_hgg[1]+data_lgg[1]
+    train_s = data_hgg[2]+data_lgg[2]
+    valid_s = data_hgg[3]+data_lgg[3]
+    train_m = data_hgg[4]+data_lgg[4]
+    valid_m = data_hgg[5]+data_lgg[5]
+
+    # HACK: we may have a situation where the number of sick examples
+    # is greater than the number of healthy. In that case, we should
+    # duplicate the healthy set M times so that it has a bigger size
+    # than the sick set.
+    m = 1
+    len_h = sum([ len(elem) for elem in train_h])
+    len_s = sum([ len(elem) for elem in train_s])
+    if len_h < len_s:
+        m = int(np.ceil(len_s / len_h))
+        
+    data['train']['h'] = msa(train_h*m, no_shape=True)
+    data['valid']['h'] = msa(valid_h*m, no_shape=True)
+    data['train']['s'] = msa(train_s, no_shape=True)
+    data['valid']['s'] = msa(valid_s, no_shape=True)
+    data['train']['m'] = msa(train_m, no_shape=True)
+    data['valid']['m'] = msa(valid_m, no_shape=True)
         
     return data
 
