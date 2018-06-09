@@ -118,19 +118,23 @@ class DatasetFromFolder(Dataset):
 class ImagePool():
     """
     Used to implement a replay buffer for CycleGAN.
-
     Notes
     -----
     Original code:
     https://github.com/togheppi/CycleGAN/blob/master/utils.py
+    Unlike the original implementation, the buffer's images
+      are stored on the CPU, not the GPU. I am not sure whether
+      this is really worth the effort -- you'd be doing a bit of
+      back and forth copying to/fro the GPU which could really
+      slow down the training loop I suspect.
     """
-    def __init__(self, pool_size, use_cuda=False):
+    def __init__(self, pool_size, unequal_sizes=False):
         """
         use_cuda: if `True`, store the buffer on GPU. This is
           not recommended for large models!!!
         """
         self.pool_size = pool_size
-        self.use_cuda = use_cuda
+        self.unequal_sizes = unequal_sizes
         if self.pool_size > 0:
             self.num_imgs = 0
             self.images = [] # stored on cpu, NOT gpu
@@ -138,7 +142,7 @@ class ImagePool():
     def query(self, images):
         from torch.autograd import Variable
         if self.pool_size == 0:
-            return Variable(images.data)
+            return images.detach()
         return_images = []
         for image in images.data:
             image = torch.unsqueeze(image, 0)
@@ -152,10 +156,14 @@ class ImagePool():
                     random_id = np.random.randint(0, self.pool_size-1)
                     tmp = self.images[random_id].clone()
                     self.images[random_id] = image.cpu()
-                    return_images.append(tmp)
+                    # since tmp is on cpu, cuda it when
+                    # we append it to return images
+                    return_images.append(tmp.cuda())
                 else:
-                    return_images.append(image.cpu())
+                    return_images.append(image)
+        if self.unequal_sizes:
+            # HACK: only return one image
+            np.random.shuffle(return_images)
+            return_images = return_images[0:1]
         return_images = torch.cat(return_images, 0)
-        if self.use_cuda:
-            return_images.cuda()
         return Variable(return_images)
