@@ -149,7 +149,8 @@ class image_saver(object):
                 return
 
         # Unpack inputs, outputs.
-        inputs, target, prediction, translation = engine.state.output[2]
+        inputs, target, prediction, translation, cycle = \
+            engine.state.output[2]
         
         # Current batch size.
         this_batch_size = len(target)
@@ -187,7 +188,7 @@ class image_saver(object):
             # inputs
             im_i = []
             for x in inputs[i]:
-                im_i.append(self._process_slice((x+0.5)*0.5))
+                im_i.append(self._process_slice(x*0.5 + 0.5))
 
             # target
             im_t = [self._process_slice(target[i]/4.)]
@@ -204,9 +205,15 @@ class image_saver(object):
             # translation
             im_tr = []
             for x in translation[i]:
-                im_tr.append( x*0.5 + 0.5 )
+                im_tr.append(x*0.5 + 0.5)
 
-            out_image = np.concatenate(im_i+im_t+im_p+im_tr, axis=1)
+            # cycle
+            im_cyc = []
+            for x in cycle[i]:
+                im_cyc.append(self._process_slice(x*0.5 + 0.5))
+                            
+            out_image = np.concatenate(im_i+im_t+im_p+im_tr+im_cyc,
+                                       axis=1)
             all_imgs.append(out_image)
         imsave(os.path.join(save_dir,
                             "{}.jpg".format(self._current_batch_num)),
@@ -458,7 +465,7 @@ if __name__ == '__main__':
         epoch_length(data['train']['s'], args.batch_size_train),
         epoch_length(data['train']['h'], args.batch_size_train)
     )
-    train_save_freq = int(args.vis_freq*num_batches_train)
+    train_save_freq = int(np.ceil(args.vis_freq*num_batches_train))
     image_saver_train = image_saver(save_path=os.path.join(path, "train"),
                                     epoch_length=num_batches_train,
                                     save_every=train_save_freq)
@@ -470,7 +477,7 @@ if __name__ == '__main__':
         epoch_length(data['valid']['s'], args.batch_size_valid),
         epoch_length(data['valid']['h'], args.batch_size_valid)
     )
-    valid_save_freq = int(args.vis_freq*num_batches_valid)
+    valid_save_freq = int(np.ceil(args.vis_freq*num_batches_valid))
     image_saver_valid = image_saver(save_path=os.path.join(path, "valid"),
                                     epoch_length=num_batches_valid,
                                     save_every=valid_save_freq)
@@ -560,7 +567,8 @@ if __name__ == '__main__':
         return (seg_loss if seg_loss==0 else seg_loss.item(),
                 batch,
                 (B_real[indices], M_real,
-                 seg_out.detach(), btoa[indices].detach()),
+                 seg_out.detach(), btoa[indices].detach(),
+                 btoa_atob[indices].detach()),
                 this_metrics)
 
     trainer = Trainer(training_function)
@@ -602,7 +610,8 @@ if __name__ == '__main__':
         return (seg_loss if seg_loss==0 else seg_loss.item(),
                 batch,
                 (B_real[indices], M_real,
-                 seg_out.detach(), btoa[indices].detach()),
+                 seg_out.detach(), btoa[indices].detach(),
+                 btoa_atob[indices].detach()),
                 this_metrics)
     evaluator = Evaluator(validation_function)
 

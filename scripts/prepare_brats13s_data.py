@@ -4,8 +4,23 @@ import medpy
 import medpy.io
 import numpy as np
 import h5py
+import argparse
 
-basepath = "/data/lisa/data/BRATS2013"
+def parse_args():
+    parser = argparse.ArgumentParser(description="")
+    parser.add_argument('--data_dir', type=str,
+                        default="/data/lisa/data/BRATS2013")
+    parser.add_argument('--out_dir', type=str, 
+	default="/data/milatmp1/beckhamc/tmp_data/genseg")
+    parser.add_argument('--b_thresh', type=float, default=0.30)
+    parser.add_argument('--t_thresh', type=float, default=0.01)
+    return parser.parse_args()
+
+args = parse_args()
+basepath = args.data_dir
+print(basepath)
+if not os.path.exists(args.out_dir):
+    os.makedirs(args.out_dir)
 
 def get_data(glob_pattern, is_labels=False):
     data = {}
@@ -35,14 +50,13 @@ def normalize_data(data):
     for k,v in data.iteritems():
         data[k] = v/max_val
     new_max_val = np.asarray(data.values()).max()
-    print "normalize", max_val, "->", new_max_val
 
 def get_labels(rightside):
     met = {}
     met["brain"]    = (1.*(rightside!= 0).sum()/(rightside == 0).sum())
     met["tumor"]    = (1.*(rightside > 2).sum()/((rightside != 0).sum() + 1e-10))
-    met["has_enough_brain"] = met["brain"]     > 0.30
-    met["has_tumor"]        = met["tumor"]     > 0.01
+    met["has_enough_brain"] = met["brain"]     > args.b_thresh
+    met["has_tumor"]        = met["tumor"]     > args.t_thresh
     return met
 
 def convert_mask(mask_):
@@ -76,7 +90,8 @@ for grade in ['HG', 'LG']:
     labels = dat['labels']
     patients = dat['labels'].keys()
 
-    h5f = h5py.File('brats13.%s.h5' % grade, 'w')    
+    gd = 'lgg' if grade == 'LG' else 'hgg'
+    h5f = h5py.File('%s/%s.h5' % (args.out_dir, gd), 'w')
     counter = {'s': 0, 'h': 0}
     modes = ['flair', 't1', 't1c', 't2']
     for patient in patients:
@@ -109,8 +124,8 @@ for grade in ['HG', 'LG']:
         h5f[patient].create_group('segmentation')
         h5f[patient]['sick'].create_dataset(
             'axis_1', data=sick_slices)
-        h5f[patient]['healthy'].create_dataset(
-            'axis_1', data=healthy_slices)
         h5f[patient]['segmentation'].create_dataset(
             'axis_1', data=masks[:,np.newaxis,:,:])
+        h5f[patient]['healthy'].create_dataset(
+            'axis_1', data=healthy_slices)
     h5f.close()
