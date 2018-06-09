@@ -136,7 +136,7 @@ class image_saver(object):
         # Current batch_num, epoch.
         self._current_batch_num += 1
 
-        if self._current_batch_num == self.epoch_length:
+        if self._current_batch_num==self.epoch_length:
             self._current_epoch += 1
             self._current_batch_num = 0
         
@@ -154,13 +154,6 @@ class image_saver(object):
         
         # Current batch size.
         this_batch_size = len(target)
-
-        # Current batch_num, epoch.
-        self._current_batch_num += 1
-
-        if self._current_batch_num==self.epoch_length:
-            self._current_epoch += 1
-            self._current_batch_num = 0
 
         if this_batch_size == 0:
             return
