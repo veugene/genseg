@@ -149,11 +149,11 @@ class image_saver(object):
                 return
 
         # Unpack inputs, outputs.
-        inputs, target, prediction, translation, cycle = \
+        inputs, target_, prediction_, translation, cycle, indices = \
             engine.state.output[2]
         
         # Current batch size.
-        this_batch_size = len(target)
+        this_batch_size = len(inputs)
 
         if this_batch_size == 0:
             return
@@ -169,10 +169,21 @@ class image_saver(object):
             return
             
         # Variables to numpy.
-        inputs = inputs.cpu().numpy()
-        target = target.cpu().numpy()
-        prediction = prediction.detach().cpu().numpy()
-        translation = translation.detach().cpu().numpy()
+        inputs = inputs.cpu().numpy() # full
+        target_ = target_.cpu().numpy() # label only
+        target = [np.zeros_like(inputs[0][0])]*this_batch_size
+        for i in range(len(indices)):
+            target[indices[i]] = target_[i]
+        target = np.asarray(target)
+        
+        prediction_ = prediction_.cpu().numpy() # label only
+        prediction = [np.zeros_like(inputs[0])]*this_batch_size
+        for i in range(len(indices)):
+            prediction[indices[i]] = prediction_[i]
+        prediction = np.asarray(prediction)
+        
+        translation = translation.cpu().numpy() # full
+        cycle = cycle.cpu().numpy() # full
 
         # Visualize.
         all_imgs = []
@@ -204,7 +215,7 @@ class image_saver(object):
             im_cyc = []
             for x in cycle[i]:
                 im_cyc.append(self._process_slice(x*0.5 + 0.5))
-                            
+                
             out_image = np.concatenate(im_i+im_t+im_p+im_tr+im_cyc,
                                        axis=1)
             all_imgs.append(out_image)
@@ -559,9 +570,9 @@ if __name__ == '__main__':
                 this_metrics.update(metrics['train'](seg_out, M_real))
         return (seg_loss if seg_loss==0 else seg_loss.item(),
                 batch,
-                (B_real[indices], M_real,
-                 seg_out.detach(), btoa[indices].detach(),
-                 btoa_atob[indices].detach()),
+                (B_real, M_real,
+                 seg_out.detach(), btoa.detach(),
+                 btoa_atob.detach(), indices),
                 this_metrics)
 
     trainer = Trainer(training_function)
@@ -602,9 +613,9 @@ if __name__ == '__main__':
             this_metrics.update(metrics['valid'](seg_out, M_real))
         return (seg_loss if seg_loss==0 else seg_loss.item(),
                 batch,
-                (B_real[indices], M_real,
-                 seg_out.detach(), btoa[indices].detach(),
-                 btoa_atob[indices].detach()),
+                (B_real, M_real,
+                 seg_out.detach(), btoa.detach(),
+                 btoa_atob.detach(), indices),
                 this_metrics)
     evaluator = Evaluator(validation_function)
 
