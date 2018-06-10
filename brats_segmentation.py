@@ -26,7 +26,6 @@ from utils.ignite import (progress_report,
 from utils.metrics import (dice_loss,
                            accuracy)
 from utils.data import (data_flow_sampler,
-                        prepare_data_brats,
                         preprocessor_brats,
                         masked_view)
 from util import count_params
@@ -41,6 +40,7 @@ Process arguments.
 def parse_args():
     parser = argparse.ArgumentParser(description="Segmentation on BRATS 2017.")
     parser.add_argument('--name', type=str, default="brats_seg")
+    parser.add_argument('--dataset', type=str, default='brats17')
     parser.add_argument('--data_dir', type=str, default='/home/eugene/data/')
     parser.add_argument('--save_path', type=str, default='./experiments')
     g_load = parser.add_mutually_exclusive_group(required=False)
@@ -49,6 +49,7 @@ def parse_args():
     parser.add_argument('-e', '--evaluate', action='store_true')
     parser.add_argument('--weight_decay', type=float, default=1e-4)
     parser.add_argument('--masked_fraction', type=float, default=0)
+    parser.add_argument('--orientation', type=int, default=None)
     parser.add_argument('--batch_size_train', type=int, default=80)
     parser.add_argument('--batch_size_valid', type=int, default=400)
     parser.add_argument('--validate_every', type=int, default=1)
@@ -59,6 +60,7 @@ def parse_args():
     parser.add_argument('--gpu_id', type=int, default=None)
     parser.add_argument('--nb_io_workers', type=int, default=1)
     parser.add_argument('--nb_proc_workers', type=int, default=2)
+    parser.add_argument('--no_timestamp', action='store_true')
     parser.add_argument('--rseed', type=int, default=42)
     args = parser.parse_args()
     return args
@@ -157,6 +159,21 @@ class image_saver(object):
 if __name__ == '__main__':
     args = parse_args()
 
+    if args.dataset not in ['brats17', 'brats13s']:
+        raise Exception("Dataset must be either brats17 or " +
+                        "brats13")
+    else:
+        if args.dataset == 'brats17':
+            from utils.data import prepare_data_brats17 as \
+                prepare_data_brats
+        else:
+            from utils.data import prepare_data_brats13s as \
+                prepare_data_brats
+
+    orientation = None
+    if type(args.orientation) == int:
+        orientation = [args.orientation]
+            
     '''
     Prepare data -- load, standardize, add channel dim., shuffle, split.
     '''
@@ -164,6 +181,7 @@ if __name__ == '__main__':
     data = prepare_data_brats(path_hgg=os.path.join(args.data_dir, "hgg.h5"),
                               path_lgg=os.path.join(args.data_dir, "lgg.h5"),
                               masked_fraction=args.masked_fraction,
+                              orientations=orientation,
                               drop_masked=True,
                               rng=np.random.RandomState(args.rseed))
     data_train = [data['train']['s'], data['train']['m']]
@@ -245,7 +263,9 @@ if __name__ == '__main__':
     '''
     exp_time = "{0:%Y-%m-%d}_{0:%H-%M-%S}".format(datetime.now())
     if exp_id is None:
-        exp_id = "{}_{}".format(args.name, exp_time)
+        exp_id = args.name
+        if not args.no_timestamp:
+            exp_id += "_{}".format(args.name, exp_time)
     path = os.path.join(args.save_path, exp_id)
     if not os.path.exists(path):
         os.makedirs(path)
