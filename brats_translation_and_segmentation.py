@@ -60,6 +60,7 @@ def parse_args():
     parser.add_argument('--masked_fraction', type=float, default=0)
     parser.add_argument('--orientation', type=int, default=None)
     parser.add_argument('--num_pool', type=int, default=0)
+    parser.add_argument('--beta', type=float, default=5.)
     parser.add_argument('--lamb', type=float, default=10.)
     parser.add_argument('--detach', action='store_true', default=False)
     parser.add_argument('--no_valid', default=False, action='store_true')
@@ -416,13 +417,17 @@ if __name__ == '__main__':
         """Return all the losses related to generation"""
         atob_gen_loss = mse(model['d_b'](atob), 1)
         cycle_aba = torch.mean(torch.abs(A_real - atob_btoa))
-        return atob_gen_loss, cycle_aba
+        cycle_id_a = torch.mean(
+            torch.abs(A_real - model['g_btoa'](A_real)))
+        return atob_gen_loss, cycle_aba, cycle_id_a
 
     def compute_g_losses_bab(B_real, btoa, btoa_atob):
         """Return all the losses related to generation"""
         btoa_gen_loss = mse(model['d_a'](btoa), 1)
         cycle_bab = torch.mean(torch.abs(B_real - btoa_atob))
-        return btoa_gen_loss, cycle_bab
+        cycle_id_b = torch.mean(
+            torch.abs(B_real - model['g_atob'](B_real)))
+        return btoa_gen_loss, cycle_bab, cycle_id_b
 
     def compute_d_losses(A_real, atob, B_real, btoa):
         """Return all losses related to discriminator"""
@@ -509,7 +514,6 @@ if __name__ == '__main__':
         A_real, B_real, M_real, indices = prepare_batch(batch)
         for model_ in model.values():
             model_.train()
-        
         # Clear all grad buffers.
         for key in optimizer:
             optimizer[key].zero_grad()
@@ -519,8 +523,9 @@ if __name__ == '__main__':
         atob = model['g_atob'](A_real)[:, :, 0:hh, 0:ww]
         atob_btoa = model['g_btoa'](atob)[:, :, 0:hh, 0:ww]
         # Compute loss for A -> B and cycle.
-        atob_gen_loss, cycle_aba = compute_g_losses_aba(A_real, atob, atob_btoa)
-        g_tot_loss = atob_gen_loss + args.lamb*cycle_aba
+        atob_gen_loss, cycle_aba, cycle_id_a = \
+            compute_g_losses_aba(A_real, atob, atob_btoa)
+        g_tot_loss = atob_gen_loss + args.lamb*cycle_aba + args.beta*cycle_id_a
         g_tot_loss.backward()
         # CycleGAN: optimize mapping from B -> A,
         # and from B -> A -> B (cycle).
@@ -528,8 +533,9 @@ if __name__ == '__main__':
         btoa = model['g_btoa'](B_real)[:, :, 0:hh, 0:ww]
         btoa_atob = model['g_atob'](btoa)[:, :, 0:hh, 0:ww]
         # Compute loss for B -> A and cycle.
-        btoa_gen_loss, cycle_bab = compute_g_losses_bab(B_real, btoa, btoa_atob)
-        g_tot_loss = btoa_gen_loss + args.lamb*cycle_bab
+        btoa_gen_loss, cycle_bab, cycle_id_b = \
+            compute_g_losses_bab(B_real, btoa, btoa_atob)
+        g_tot_loss = btoa_gen_loss + args.lamb*cycle_bab + args.beta*cycle_id_b
         # Segmentation: take the real sick and the translated
         # to healthy version, concatenate them, and feed into
         # seg model. If 'detach' mode is enabled, then gradients
@@ -560,8 +566,10 @@ if __name__ == '__main__':
         this_metrics = {
             'atob_gen_loss': atob_gen_loss.data.item(),
             'cycle_aba': cycle_aba.data.item(),
+            'cycle_id_a': cycle_id_a.data.item(),
             'btoa_gen_loss': btoa_gen_loss.data.item(),
             'cycle_bab': cycle_bab.data.item(),
+            'cycle_id_b': cycle_id_b.data.item(),
             'd_a_loss': d_a_loss.data.item(),
             'd_b_loss': d_b_loss.data.item()
         }
@@ -585,12 +593,12 @@ if __name__ == '__main__':
             hh, ww = A_real.shape[-2], A_real.shape[-1]
             atob = model['g_atob'](A_real)[:, :, 0:hh, 0:ww]
             atob_btoa = model['g_btoa'](atob)[:, :, 0:hh, 0:ww]
-            atob_gen_loss, cycle_aba = compute_g_losses_aba(
+            atob_gen_loss, cycle_aba, _ = compute_g_losses_aba(
                 A_real, atob, atob_btoa)
             hh, ww = B_real.shape[-2], B_real.shape[-1]
             btoa = model['g_btoa'](B_real)[:, :, 0:hh, 0:ww]
             btoa_atob = model['g_atob'](btoa)[:, :, 0:hh, 0:ww]
-            btoa_gen_loss, cycle_bab = compute_g_losses_bab(
+            btoa_gen_loss, cycle_bab, _ = compute_g_losses_bab(
                 B_real, btoa, btoa_atob)
             seg_loss = 0.
             seg_out = Variable(torch.FloatTensor())
