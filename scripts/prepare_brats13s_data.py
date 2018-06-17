@@ -10,6 +10,7 @@ import numpy as np
 import h5py
 import argparse
 
+
 def parse_args():
     parser = argparse.ArgumentParser(description="")
     parser.add_argument('--data_dir', type=str,
@@ -18,6 +19,10 @@ def parse_args():
 	                default="/data/milatmp1/beckhamc/tmp_data/genseg")
     parser.add_argument('--b_thresh', type=float, default=0.30)
     parser.add_argument('--t_thresh', type=float, default=0.01)
+    parser.add_argument('--both_hemispheres', action='store_true',
+                        help='Create examples also from left side of brain')
+    parser.add_argument('--max_examples', type=int, default=-1,
+                        help='Max examples to process. Use only for debugging')
     parser.add_argument('--debug', action='store_true')
     return parser.parse_args()
 
@@ -42,14 +47,20 @@ def get_data(glob_pattern, is_labels=False):
         
         if (is_labels):
             image_data = np.round(image_data) # clean up labels
-            
-        image_data = image_data[:,:,128:] # crop right side
-        data[name] = image_data
+
+        if not args.both_hemispheres:
+            image_data = image_data[:,:,128:] # crop right side
+            data[name] = image_data
+        else:
+            image_data_left = image_data[:,:,0:128]
+            image_data_right = image_data[:,:,128:]
+            data[name + "_left"] = image_data_left
+            data[name + " _right"] = image_data_right
         c += 1
-        if args.debug:
+        if args.max_examples != -1:
             # If debug flag is enabled, we generate
             # a smaller version of the dataset.
-            if c == 10:
+            if c == args.max_examples:
                 break
     return data
 
@@ -61,12 +72,14 @@ def normalize_data(data):
         data[k] = (((v / max_val) - 0.5) / 0.5) * 2.
     new_max_val = np.asarray(data.values()).max()
 
-def get_labels(rightside):
+def get_labels(side):
     met = {}
-    met["brain"]    = (1.*(rightside!= 0).sum()/(rightside == 0).sum())
-    met["tumor"]    = (1.*(rightside > 2).sum()/((rightside != 0).sum() + 1e-10))
+    met["brain"]    = (1.*(side!= 0).sum()) / np.prod(side.shape)
+    met["tumor"]    = (1.*(side > 2).sum()) / ((side != 0).sum() + 1e-10)
     met["has_enough_brain"] = met["brain"]     > args.b_thresh
     met["has_tumor"]        = met["tumor"]     > args.t_thresh
+    if args.debug:
+        print("this side metadata:", met)
     return met
 
 def convert_mask(mask_):
