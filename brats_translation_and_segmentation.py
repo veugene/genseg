@@ -35,7 +35,6 @@ from fcn_maker.blocks import (tiny_block,
                               basic_block)
 
 from architectures import image2image
-from util import ImagePool
 import itertools
 
 
@@ -59,7 +58,6 @@ def parse_args():
     parser.add_argument('--weight_decay', type=float, default=1e-4)
     parser.add_argument('--masked_fraction', type=float, default=0)
     parser.add_argument('--orientation', type=int, default=None)
-    parser.add_argument('--num_pool', type=int, default=0)
     parser.add_argument('--beta', type=float, default=5.)
     parser.add_argument('--lamb', type=float, default=10.)
     parser.add_argument('--detach', action='store_true', default=False)
@@ -381,10 +379,6 @@ if __name__ == '__main__':
                                      model['seg'].parameters(),
                                      args.learning_rate)
 
-    # Note: currently, contents of the image pool
-    # are not saved with the model.
-    fake_A_pool = ImagePool(args.num_pool)
-    fake_B_pool = ImagePool(args.num_pool)
     for key in model:
         print("Number of parameters for {}: {}".format(
             key, count_params(model[key])))
@@ -432,9 +426,9 @@ if __name__ == '__main__':
     def compute_d_losses(A_real, atob, B_real, btoa):
         """Return all losses related to discriminator"""
         d_a_loss = 0.5*(mse(model['d_a'](A_real), 1) +
-                        mse(model['d_a'](fake_A_pool.query(btoa)), 0))
+                        mse(model['d_a'](btoa.detach()), 0))
         d_b_loss = 0.5*(mse(model['d_b'](B_real), 1) +
-                        mse(model['d_b'](fake_B_pool.query(atob)), 0))
+                        mse(model['d_b'](atob.detach()), 0))
         return d_a_loss, d_b_loss
 
     '''
