@@ -52,6 +52,8 @@ def parse_args():
                         default='configs_cyclegan/dilated_fcn.py')
     parser.add_argument('--s_model_from', type=str,
                         default='configs/resunet_hybrid.py')
+    parser.add_argument('--classes', type=str, default='1,2,4',
+                        help='Comma-separated list of class labels')
     parser.add_argument('--resume', type=str, default=None)
     parser.add_argument('--vis_freq', type=float, default=0.5)
     parser.add_argument('-e', '--evaluate', action='store_true')
@@ -435,7 +437,8 @@ if __name__ == '__main__':
     Set up loss functions and metrics. Since this is a multiclass problem,
     set up a metrics handler for each output map.
     '''
-    labels = [0,1,2,4] # 4 classes
+    labels_str = args.classes.split(",")
+    labels = [0] + [int(x) for x in labels_str]
     loss_functions = []
     metrics = {'train': None, 'valid': None}
     for key in metrics.keys():
@@ -453,7 +456,8 @@ if __name__ == '__main__':
             metrics_dict['dice{}'.format(l)] = g_dice
             
         # Overall tumour Dice.
-        g_dice = dice_loss(target_class=[1,2,4], target_index=[1,2,3],
+        g_dice = dice_loss(target_class=labels[1::],
+                           target_index=list(range(labels[1],len(labels))),
                            accumulate=True)
         if not args.cpu:
             g_dice = g_dice.cuda(args.gpu_id)
