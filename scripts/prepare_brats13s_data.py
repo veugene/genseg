@@ -28,6 +28,7 @@ def parse_args():
     return parser.parse_args()
 
 args = parse_args()
+assert args.normalize in ['max', 'zmuv']
 basepath = args.data_dir
 print(basepath)
 if not os.path.exists(args.out_dir):
@@ -90,24 +91,6 @@ def get_labels(side):
         print("this side metadata:", met)
     return met
 
-def convert_mask(mask_):
-    """
-    Mask can be either [0,1,2,...,5], but anything > 2
-      is actually a tumour, so it's really a 3-class
-      segmentation problem. To be in line with how
-      we do things for BRATS17, re-assign the classes
-      (3,4,5) to be (1,2,4), respectively.
-    """
-    mask = np.copy(mask_)
-    # These classes don't matter.
-    mask[mask==1.] = 0.
-    mask[mask==2.] = 0.
-    # Re-order these integers.
-    mask[mask==3.] = 1.
-    mask[mask==4.] = 2.
-    mask[mask==5.] = 4.
-    return mask
-
 for grade in ['HG', 'LG']:
 
     print("Processing grade: %s" % grade)
@@ -152,7 +135,7 @@ for grade in ['HG', 'LG']:
         # X_slices has shape (n, 4, h, w) now.
         healthy_slices = np.asarray(healthy_slices).swapaxes(0,1)
         sick_slices = np.asarray(sick_slices).swapaxes(0,1)
-        masks = convert_mask(labels[patient][s_idxs])
+        masks = labels[patient][s_idxs]
         h5f[patient].create_group('healthy')
         h5f[patient].create_group('sick')
         h5f[patient].create_group('segmentation')
