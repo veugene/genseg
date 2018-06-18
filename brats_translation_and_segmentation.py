@@ -122,8 +122,10 @@ def setup_optimizers(name, g_params, d_a_params, d_b_params, seg_params, lr):
 Save images on validation.
 '''
 class image_saver(object):
-    def __init__(self, save_path, epoch_length, save_every=1,
+    def __init__(self, labels,
+                 save_path, epoch_length, save_every=1,
                  score_function=None):
+        self.labels = labels
         self.save_path = save_path
         self.epoch_length = epoch_length
         self.score_function = score_function
@@ -178,7 +180,8 @@ class image_saver(object):
         target = np.asarray(target)
         
         prediction_ = prediction_.cpu().numpy() # label only
-        prediction = [np.zeros_like(inputs[0])]*this_batch_size
+        pred_shape = tuple([len(self.labels)+1] + list(inputs[0][0].shape))
+        prediction = [np.zeros(pred_shape)]*this_batch_size
         for i in range(len(indices)):
             prediction[indices[i]] = prediction_[i]
         prediction = np.asarray(prediction)
@@ -196,16 +199,15 @@ class image_saver(object):
                 im_i.append(self._process_slice(x*0.5 + 0.5))
 
             # target
-            im_t = [self._process_slice(target[i]/4.)]
+            im_t = [self._process_slice(target[i]/max(self.labels))]
 
             # prediction
             p = prediction[i]
             p[0] = 0
-            p[1] *= 1
-            p[2] *= 2
-            p[3] *= 4
+            for j in range(len(self.labels)):
+                p[j+1] *= self.labels[j]
             p = p.max(axis=0)
-            im_p = [self._process_slice(p/4.)]
+            im_p = [self._process_slice(p/max(self.labels))]
 
             # translation
             im_tr = []
@@ -267,6 +269,7 @@ if __name__ == '__main__':
                  'zoom_range': 0.1,
                  'horizontal_flip': True,
                  'vertical_flip': True,
+                 'fill_mode': 'reflect',
                  'spline_warp': True,
                  'warp_sigma': 5,
                  'warp_grid_size': 3}
@@ -456,12 +459,12 @@ if __name__ == '__main__':
             metrics_dict['dice{}'.format(l)] = g_dice
             
         # Overall tumour Dice.
-        g_dice = dice_loss(target_class=labels[1::],
+        g_dice = dice_loss(target_class=labels[1:],
                            target_index=list(range(labels[1],len(labels))),
                            accumulate=True)
         if not args.cpu:
             g_dice = g_dice.cuda(args.gpu_id)
-        metrics_dict['dice124'] = g_dice
+        metrics_dict['dice_tot'] = g_dice
         
         metrics[key] = metrics_handler(metrics_dict)
        
@@ -473,7 +476,8 @@ if __name__ == '__main__':
         epoch_length(data['train']['h'], args.batch_size_train)
     )
     train_save_freq = int(np.ceil(args.vis_freq*num_batches_train))
-    image_saver_train = image_saver(save_path=os.path.join(path, "train"),
+    image_saver_train = image_saver(labels=labels[1:],
+                                    save_path=os.path.join(path, "train"),
                                     epoch_length=num_batches_train,
                                     save_every=train_save_freq)
 
@@ -485,7 +489,8 @@ if __name__ == '__main__':
         epoch_length(data['valid']['h'], args.batch_size_valid)
     )
     valid_save_freq = int(np.ceil(args.vis_freq*num_batches_valid))
-    image_saver_valid = image_saver(save_path=os.path.join(path, "valid"),
+    image_saver_valid = image_saver(labels=labels[1:],
+                                    save_path=os.path.join(path, "valid"),
                                     epoch_length=num_batches_valid,
                                     save_every=valid_save_freq)
 
@@ -628,7 +633,7 @@ if __name__ == '__main__':
     '''
     Reset global Dice score counts every epoch (or validation run).
     '''
-    for l in ['1', '2', '4', '124']:
+    for l in [str(x) for x in labels[1:]] + ['_tot']:
         func = lambda key : \
             metrics[key].measure_functions['dice{}'.format(l)].reset_counts
         trainer.add_event_handler(Events.EPOCH_STARTED, func('train'))

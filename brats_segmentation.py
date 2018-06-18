@@ -46,6 +46,8 @@ def parse_args():
     g_load = parser.add_mutually_exclusive_group(required=False)
     g_load.add_argument('--model_from', type=str, default='configs/resunet.py')
     g_load.add_argument('--resume', type=str, default=None)
+    parser.add_argument('--classes', type=str, default='1,2,4',
+                        help='Comma-separated list of class labels')
     parser.add_argument('-e', '--evaluate', action='store_true')
     parser.add_argument('--weight_decay', type=float, default=1e-4)
     parser.add_argument('--masked_fraction', type=float, default=0)
@@ -276,7 +278,8 @@ if __name__ == '__main__':
     Set up loss functions and metrics. Since this is a multiclass problem,
     set up a metrics handler for each output map.
     '''
-    labels = [0,1,2,4] # 4 classes
+    labels_str = args.classes.split(",")
+    labels = [0] + [int(x) for x in labels_str]
     loss_functions = []
     metrics = {'train': None, 'valid': None}
     for key in metrics.keys():
@@ -294,11 +297,12 @@ if __name__ == '__main__':
             metrics_dict['dice{}'.format(l)] = g_dice
             
         # Overall tumour Dice.
-        g_dice = dice_loss(target_class=[1,2,4], target_index=[1,2,3],
+        g_dice = dice_loss(target_class=labels[1:],
+                           target_index=list(range(labels[1],len(labels))),
                            accumulate=True)
         if not args.cpu:
             g_dice = g_dice.cuda(args.gpu_id)
-        metrics_dict['dice124'] = g_dice
+        metrics_dict['dice_tot'] = g_dice
         
         metrics[key] = metrics_handler(metrics_dict)
     
@@ -356,7 +360,7 @@ if __name__ == '__main__':
     '''
     Reset global Dice score counts every epoch (or validation run).
     '''
-    for l in ['1', '2', '4', '124']:
+    for l in [str(x) for x in labels[1:]] + ['_tot']:
         func = lambda key : \
             metrics[key].measure_functions['dice{}'.format(l)].reset_counts
         trainer.add_event_handler(Events.EPOCH_STARTED, func('train'))
@@ -393,7 +397,8 @@ if __name__ == '__main__':
                                 score_function=scoring_function("val_metrics"),
                                 atomic=True,
                                 exist_ok=True,
-                                create_dir=True)
+                                create_dir=True,
+                                require_empty=False)
     evaluator.add_event_handler(Events.COMPLETED,
                                 checkpoint_best_handler,
                                 checkpoint_kwargs)
@@ -404,7 +409,8 @@ if __name__ == '__main__':
                                 save_interval=1,
                                 atomic=True,
                                 exist_ok=True,
-                                create_dir=True)
+                                create_dir=True,
+                                require_empty=False)
     evaluator.add_event_handler(Events.COMPLETED,
                                 checkpoint_last_handler,
                                 checkpoint_kwargs)
