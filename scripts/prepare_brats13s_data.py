@@ -23,6 +23,7 @@ def parse_args():
                         help='Create examples also from left side of brain')
     parser.add_argument('--max_examples', type=int, default=-1,
                         help='Max examples to process. Use only for debugging')
+    parser.add_argument('--normalize', type=str, default='max')
     parser.add_argument('--debug', action='store_true')
     return parser.parse_args()
 
@@ -65,12 +66,19 @@ def get_data(glob_pattern, is_labels=False):
     return data
 
 def normalize_data(data):
-    max_val = np.asarray(data.values()).max()
-    for k,v in data.iteritems():
+    if args.normalize == 'max':
         # Want to norm data into [0,1], and then
         # scale so that it's in range [-2, 2].
-        data[k] = (((v / max_val) - 0.5) / 0.5) * 2.
-    new_max_val = np.asarray(data.values()).max()
+        max_val = np.asarray(data.values()).max()
+        for k,v in data.iteritems():
+            data[k] = (((v / max_val) - 0.5) / 0.5) * 2.
+    else:
+        # Want to norm data by subtracting mean and
+        # dividing by standard deviation.
+        for k,v in data.iteritems():
+            data_nonzero_view = data[k][data[k]>0]
+            data[k] -= data_nonzero_view.mean()
+            data[k] /= data_nonzero_view.std()
 
 def get_labels(side):
     met = {}
