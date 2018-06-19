@@ -87,11 +87,13 @@ def prepare_data_brats17(path_hgg, path_lgg,
                          orientations=None,
                          rng=None):
     # Random 20% data split.
-    validation_indices = {'hgg': [60,54,182,64,166,190,184,143,6,75,169,183,
-                                  202,166,189,41,158,69,133,180,16,41,0,198,
-                                  101,120,5,185,203,151,100,149,44,48,151,34,
-                                  88,204,149,119,152,65],
-                          'lgg': [25,14,25,4,54,56,56,54,59,1,38,6,24,23,53]}
+    validation_indices = {
+        'hgg': [0,  5,  6,  16,  33,  34,  41,  44,  48,  54,  60,  64,
+                65,  66,  69,  75,  88,  100,  101,  110,  119,  120,
+                125,  133,  143,  149,  151,  152,  158,  166,  169,
+                180,  182,  183,  184,  185,  189,  190,  198,  202,
+                203,  204],
+        'lgg': [0, 1, 4, 6, 14, 23, 24, 25, 38, 40, 41, 53, 54, 56, 59]}
     return _prepare_data_brats(path_hgg, path_lgg,
                                masked_fraction=masked_fraction,
                                validation_indices=validation_indices,
@@ -103,7 +105,14 @@ def prepare_data_brats13s(path_hgg, path_lgg,
                           masked_fraction=0, drop_masked=False,
                           orientations=None,
                           rng=None):
-    validation_indices = {'hgg': [0,1,2], 'lgg': [0,1,2]}
+    rnd_state = np.random.RandomState(0)
+    hgg_indices = np.arange(0, 25)
+    lgg_indices = np.arange(0, 25)
+    rnd_state.shuffle(hgg_indices)
+    rnd_state.shuffle(lgg_indices)
+    hgg_val = hgg_indices[0:int(0.2*25)]
+    lgg_val = lgg_indices[0:int(0.2*25)]
+    validation_indices = {'hgg': hgg_val, 'lgg': lgg_val}
     return _prepare_data_brats(path_hgg, path_lgg,
                                masked_fraction=masked_fraction,
                                validation_indices=validation_indices,
@@ -145,6 +154,7 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
         num_lgg = len(f.keys())
     with h5py.File(path_hgg, 'r') as f:
         num_hgg = len(f.keys())
+    
     # Check if any of the validation indices exceeds
     # the length of the # of examples.
     max_hgg_idx = max(validation_indices['hgg'])
@@ -241,7 +251,6 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
     len_s = sum([ len(elem) for elem in train_s])
     if len_h < len_s:
         m = int(np.ceil(len_s / len_h))
-        
     data['train']['h'] = msa(train_h*m, no_shape=True)
     data['valid']['h'] = msa(valid_h*m, no_shape=True)
     data['train']['s'] = msa(train_s, no_shape=True)

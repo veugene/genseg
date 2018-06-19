@@ -9,19 +9,23 @@ from tqdm import tqdm
 
 class progress_report(object):
     def __init__(self, epoch_length=None, prefix=None, progress_bar=True,
-                 log_path=None):
+                 log_path=None, append=False):
         self.epoch_length = epoch_length
         self.prefix = prefix
         self.progress_bar = progress_bar
         self.log_path = log_path
         self._pbar = None
         self.metrics = None
+        if log_path is not None and not append:
+            # If we're not resuming the experiment,
+            # make the log file blank.
+            open(log_path, 'w').close()
 
     def log_string(self, desc, metrics, file=None):
         mstr = " ".join(["{}={:.3}".format(*x) for x in metrics.items()])
         desc = "{}: {}".format(desc, mstr) if len(desc) else mstr
         print(desc, file=file)
-       
+
     def __call__(self, engine):
         if self.epoch_length is None:
             # If no epoch length is defined, see if we can pull it

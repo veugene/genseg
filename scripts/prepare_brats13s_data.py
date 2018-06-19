@@ -1,5 +1,6 @@
 """
-Original code by Joseph Cohen
+Copyright 2018 Joseph Cohen
+Copyright 2018 Chris Beckham
 """
 
 import glob, os
@@ -16,7 +17,7 @@ def parse_args():
     parser.add_argument('--data_dir', type=str,
                         default="/data/lisa/data/BRATS2013")
     parser.add_argument('--out_dir', type=str, 
-	                default="/data/milatmp1/beckhamc/tmp_data/genseg")
+                        default="/data/milatmp1/beckhamc/tmp_data/genseg")
     parser.add_argument('--b_thresh', type=float, default=0.30)
     parser.add_argument('--t_thresh', type=float, default=0.01)
     parser.add_argument('--both_hemispheres', action='store_true',
@@ -56,8 +57,8 @@ def get_data(glob_pattern, is_labels=False):
         else:
             image_data_left = image_data[:,:,0:128]
             image_data_right = image_data[:,:,128:]
-            data[name + "_left"] = image_data_left
-            data[name + " _right"] = image_data_right
+            data[name] = np.vstack((image_data_left,
+                                    image_data_right))
         c += 1
         if args.max_examples != -1:
             # If debug flag is enabled, we generate
