@@ -27,7 +27,7 @@ from utils.metrics import (dice_loss,
                            accuracy)
 from utils.data import (data_flow_sampler,
                         preprocessor_brats)
-from util import count_params
+from utils.pytorch import count_params
 from model import configs
 from fcn_maker.model import assemble_resunet
 from fcn_maker.blocks import (tiny_block,
