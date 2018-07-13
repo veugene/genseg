@@ -370,9 +370,11 @@ if __name__ == '__main__':
     Set up logging to screen.
     '''
     progress_train = progress_report(prefix=None,
+                                     append=args.resume is not None,
                                      log_path=os.path.join(path,
                                                            "log_train.txt"))
     progress_valid = progress_report(prefix="val",
+                                     append=args.resume is not None,
                                      log_path=os.path.join(path,
                                                            "log_valid.txt"))
     trainer.add_event_handler(Events.ITERATION_COMPLETED, progress_train)
