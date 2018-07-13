@@ -24,12 +24,12 @@ def parse_args():
                         help='Create examples also from left side of brain')
     parser.add_argument('--max_examples', type=int, default=-1,
                         help='Max examples to process. Use only for debugging')
-    parser.add_argument('--normalize', type=str, default='max')
+    parser.add_argument('--normalize', type=str, choices=['max', 'canonical'],
+                        default='max')
     parser.add_argument('--debug', action='store_true')
     return parser.parse_args()
 
 args = parse_args()
-assert args.normalize in ['max', 'zmuv']
 basepath = args.data_dir
 print(basepath)
 if not os.path.exists(args.out_dir):
@@ -74,13 +74,15 @@ def normalize_data(data):
         max_val = np.asarray(data.values()).max()
         for k,v in data.iteritems():
             data[k] = (((v / max_val) - 0.5) / 0.5) * 2.
-    else:
+    elif args.normalize == 'canonical':
         # Want to norm data by subtracting mean and
         # dividing by standard deviation.
         for k,v in data.iteritems():
             data_nonzero_view = data[k][data[k]>0]
             data[k] -= data_nonzero_view.mean()
             data[k] /= data_nonzero_view.std()
+    else:
+        raise ValueError("`normalize` should only be 'max' or 'canonical'")
 
 def get_labels(side):
     met = {}

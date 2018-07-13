@@ -40,7 +40,8 @@ Process arguments.
 def parse_args():
     parser = argparse.ArgumentParser(description="Segmentation on BRATS 2017.")
     parser.add_argument('--name', type=str, default="brats_seg")
-    parser.add_argument('--dataset', type=str, default='brats17')
+    parser.add_argument('--dataset', type=str, choices=['brats17', 'brats13s'],
+                        default='brats17')
     parser.add_argument('--data_dir', type=str, default='/home/eugene/data/')
     parser.add_argument('--save_path', type=str, default='./experiments')
     g_load = parser.add_mutually_exclusive_group(required=False)
@@ -160,17 +161,12 @@ class image_saver(object):
 
 if __name__ == '__main__':
     args = parse_args()
-
-    if args.dataset not in ['brats17', 'brats13s']:
-        raise Exception("Dataset must be either brats17 or " +
-                        "brats13")
+    if args.dataset == 'brats17':
+        from utils.data import prepare_data_brats17 as prepare_data_brats
+    elif args.dataset == 'brats13s':
+        from utils.data import prepare_data_brats13s as prepare_data_brats
     else:
-        if args.dataset == 'brats17':
-            from utils.data import prepare_data_brats17 as \
-                prepare_data_brats
-        else:
-            from utils.data import prepare_data_brats13s as \
-                prepare_data_brats
+        raise ValueError("`dataset` must only be 'brats17' or 'brats13s'")
 
     orientation = None
     if type(args.orientation) == int:
