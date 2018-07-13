@@ -19,7 +19,6 @@ from ignite.engines import (Events,
                             Evaluator)
 from ignite.handlers import ModelCheckpoint
 
-from architectures.image2image import DilatedFCN
 from utils.ignite import (progress_report,
                           metrics_handler,
                           scoring_function)
@@ -29,7 +28,7 @@ from utils.data import (data_flow_sampler,
                         preprocessor_brats,
                         masked_view)
 from util import count_params
-import configs
+from model import configs
 from fcn_maker.model import assemble_resunet
 from fcn_maker.blocks import (tiny_block,
                               basic_block)

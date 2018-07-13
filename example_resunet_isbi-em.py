@@ -13,8 +13,8 @@ from ignite.engines import (Events,
                             Evaluator)
 from torch.autograd import Variable
 
-from architectures.revnet import dilated_fcn_hybrid
-from architectures.blocks import reversible_basic_block
+from model.revnet import (dilated_fcn_hybrid,
+                          reversible_basic_block)
 from data_tools.io import data_flow
 from data_tools.data_augmentation import image_stack_random_transform
 

@@ -15,7 +15,7 @@ from torch.autograd import Variable
 import torchvision
 import numpy as np
 
-from architectures import revnet
+from model import revnet
 from data_tools.io import data_flow
 from data_tools.data_augmentation import image_stack_random_transform
 
