@@ -8,10 +8,9 @@ import numpy as np
 import tifffile
 import torch
 import ignite
-from ignite.trainer import Trainer
-from ignite.evaluator import Evaluator
-from ignite.engine import Events
-from ignite.handlers import Evaluate
+from ignite.engines import (Events,
+                            Trainer,
+                            Evaluator)
 from torch.autograd import Variable
 
 from architectures.revnet import dilated_fcn_hybrid
@@ -48,7 +47,7 @@ model_kwargs = OrderedDict((
     ('ndim', 2),
     ('verbose', True),
     ))
-batch_size = 1
+batch_size = 4
 
 
 '''
@@ -118,13 +117,17 @@ if __name__=='__main__':
     optimizer = torch.optim.RMSprop(params=model.parameters(),
                                     lr=0.001, alpha=0.9,
                                     weight_decay=1e-4)
-    loss_function = dice_loss().cuda()
+    loss_function = dice_loss(target_class=1,
+                              target_index=0).cuda()
     
     '''
     Set up metrics.
     '''
-    metrics = metrics_handler({'dice_loss': dice_loss(),
-                               'accuracy': accuracy})
+    metrics = {}
+    for key in ['train', 'valid']:
+        metrics[key] = metrics_handler({'dice_loss': dice_loss(target_class=1,
+                                                               target_index=0),
+                                        'accuracy': accuracy})
     
     '''
     Set up training and evaluation functions.
@@ -135,7 +138,7 @@ if __name__=='__main__':
         b1 = Variable(torch.from_numpy(np.array(b1))).cuda()
         return b0, b1
     
-    def training_function(batch):
+    def training_function(engine, batch):
         batch = prepare_batch(batch)
         model.train()
         optimizer.zero_grad()
@@ -143,17 +146,18 @@ if __name__=='__main__':
         loss = loss_function(output, batch[1])
         loss.backward()
         optimizer.step()
-        return loss.data, metrics(output, batch[1])
+        return loss.item(), metrics['train'](output.detach(), batch[1])
     trainer = Trainer(training_function)
         
-    def validation_function(batch):
+    def validation_function(engine, batch):
         batch = prepare_batch(batch)
         model.eval()
-        output = model(batch[0])
-        loss = loss_function(output, batch[1])
-        correct = batch[1].view_as(output).sum()
-        accuracy = correct.float()/batch[1].nelement()
-        return loss.data, metrics(output, batch[1])
+        with torch.no_grad():
+            output = model(batch[0])
+            loss = loss_function(output, batch[1])
+            correct = batch[1].view_as(output).sum()
+            accuracy = correct.float()/batch[1].nelement()
+        return loss.item(), metrics['valid'](output, batch[1])
     evaluator = Evaluator(validation_function)
     
     '''
@@ -167,8 +171,7 @@ if __name__=='__main__':
                                      progress_bar=False)
     trainer.add_event_handler(Events.ITERATION_COMPLETED, progress_train)
     trainer.add_event_handler(Events.EPOCH_COMPLETED,
-                              Evaluate(evaluator, loader_valid,
-                                       epoch_interval=1))
+                              lambda _ : evaluator.run(loader_valid))
     evaluator.add_event_handler(Events.ITERATION_COMPLETED, progress_valid)
     
     '''
