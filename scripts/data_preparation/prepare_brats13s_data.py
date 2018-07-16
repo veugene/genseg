@@ -3,7 +3,10 @@ Copyright 2018 Joseph Cohen
 Copyright 2018 Chris Beckham
 """
 
-import glob, os
+from __future__ import (print_function,
+                        division)
+import os
+import glob
 import re
 import medpy
 import medpy.io
@@ -71,13 +74,12 @@ def normalize_data(data):
     if args.normalize == 'max':
         # Want to norm data into [0,1], and then
         # scale so that it's in range [-2, 2].
-        max_val = np.asarray(data.values()).max()
-        for k,v in data.iteritems():
-            data[k] = (((v / max_val) - 0.5) / 0.5) * 2.
+        for k,v in data.items():
+            data[k] = (((v / np.max(v)) - 0.5) / 0.5) * 2.
     elif args.normalize == 'canonical':
         # Want to norm data by subtracting mean and
         # dividing by standard deviation.
-        for k,v in data.iteritems():
+        for k,v in data.items():
             data_nonzero_view = data[k][data[k]>0]
             data[k] -= data_nonzero_view.mean()
             data[k] /= data_nonzero_view.std()
