@@ -1,6 +1,6 @@
 """
-Copyright 2018 Joseph Cohen
-Copyright 2018 Chris Beckham
+Based on script by Joseph Cohen (Copyright 2018).
+Modified by Chris Beckham (Copyright 2018).
 """
 
 from __future__ import (print_function,
@@ -12,15 +12,12 @@ import argparse
 import SimpleITK as sitk
 import numpy as np
 import h5py
-import argparse
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="")
-    parser.add_argument('--data_dir', type=str,
-                        default="/data/lisa/data/BRATS2013")
-    parser.add_argument('--out_dir', type=str, 
-                        default="/data/milatmp1/beckhamc/tmp_data/genseg")
+    parser.add_argument('--data_dir', type=str, required=True)
+    parser.add_argument('--out_dir', type=str, required=True)
     parser.add_argument('--b_thresh', type=float, default=0.30)
     parser.add_argument('--t_thresh', type=float, default=0.01)
     parser.add_argument('--both_hemispheres', action='store_true',
@@ -33,8 +30,6 @@ def parse_args():
     return parser.parse_args()
 
 args = parse_args()
-basepath = args.data_dir
-print(basepath)
 if not os.path.exists(args.out_dir):
     os.makedirs(args.out_dir)
 
@@ -87,10 +82,10 @@ def normalize_data(data):
 
 def get_labels(side):
     met = {}
-    met["brain"]    = (1.*(side!= 0).sum()) / np.prod(side.shape)
-    met["tumor"]    = (1.*(side > 2).sum()) / ((side != 0).sum() + 1e-10)
-    met["has_enough_brain"] = met["brain"]     > args.b_thresh
-    met["has_tumor"]        = met["tumor"]     > args.t_thresh
+    met["brain"] = (1.*(side!= 0).sum()) / np.prod(side.shape)
+    met["tumor"] = (1.*(side > 2).sum()) / ((side != 0).sum() + 1e-10)
+    met["has_enough_brain"] = met["brain"] > args.b_thresh
+    met["has_tumor"]        = met["tumor"] > args.t_thresh
     if args.debug:
         print("this side metadata:", met)
     return met
@@ -100,13 +95,14 @@ for grade in ['HG', 'LG']:
     print("Processing grade: %s" % grade)
 
     dat = {}
-    dat['flair'] = get_data(basepath + "/Synthetic_Data/%s/*/*/*Flair.*N4ITK.mha" % grade)
-    dat['t1'] = get_data(basepath + "/Synthetic_Data/%s/*/*/*T1.*N4ITK.mha" % grade)
-    dat['t1c'] = get_data(basepath + "/Synthetic_Data/%s/*/*/*T1c.*N4ITK.mha" % grade)
-    dat['t2'] = get_data(basepath + "/Synthetic_Data/%s/*/*/*T2.*N4ITK.mha" % grade)
+    basepath = os.path.join(args.data_dir, "Synthetic_Data")
+    dat['flair'] = get_data(basepath+"/{}/*/*/*Flair.*N4ITK.mha".format(grade))
+    dat['t1'] = get_data(basepath+"/{}/*/*/*T1.*N4ITK.mha".format(grade))
+    dat['t1c'] = get_data(basepath+"/{}/*/*/*T1c.*N4ITK.mha".format(grade))
+    dat['t2'] = get_data(basepath+"/{}/*/*/*T2.*N4ITK.mha".format(grade))
     for key in dat.keys():
         normalize_data(dat[key])
-    dat['labels'] = get_data(basepath + "/Synthetic_Data/%s/*/*/*5more*N4ITK.mha" % grade,
+    dat['labels'] = get_data(basepath+"/{}/*/*/*5more*N4ITK.mha".format(grade),
                              is_labels=True)
     labels = dat['labels']
     patients = dat['labels'].keys()
