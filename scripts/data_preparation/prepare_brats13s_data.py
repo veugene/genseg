@@ -8,8 +8,8 @@ from __future__ import (print_function,
 import os
 import glob
 import re
-import medpy
-import medpy.io
+import argparse
+import SimpleITK as sitk
 import numpy as np
 import h5py
 import argparse
@@ -28,7 +28,7 @@ def parse_args():
     parser.add_argument('--max_examples', type=int, default=-1,
                         help='Max examples to process. Use only for debugging')
     parser.add_argument('--normalize', type=str, choices=['max', 'canonical'],
-                        default='max')
+                        default='canonical')
     parser.add_argument('--debug', action='store_true')
     return parser.parse_args()
 
@@ -48,8 +48,7 @@ def get_data(glob_pattern, is_labels=False):
         level = list(reversed(path))[3]
         name = level+number
 
-        image_data, image_header = medpy.io.load(filename)
-        image_data = image_data.T
+        image_data = sitk.GetArrayFromImage(sitk.ReadImage(filename))
         
         if (is_labels):
             image_data = np.round(image_data) # clean up labels
