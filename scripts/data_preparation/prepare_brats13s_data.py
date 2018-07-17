@@ -1,23 +1,23 @@
 """
-Copyright 2018 Joseph Cohen
-Copyright 2018 Chris Beckham
+Based on script by Joseph Cohen (Copyright 2018).
+Modified by Chris Beckham (Copyright 2018).
 """
 
-import glob, os
+from __future__ import (print_function,
+                        division)
+import os
+import glob
 import re
-import medpy
-import medpy.io
+import argparse
+import SimpleITK as sitk
 import numpy as np
 import h5py
-import argparse
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="")
-    parser.add_argument('--data_dir', type=str,
-                        default="/data/lisa/data/BRATS2013")
-    parser.add_argument('--out_dir', type=str, 
-                        default="/data/milatmp1/beckhamc/tmp_data/genseg")
+    parser.add_argument('--data_dir', type=str, required=True)
+    parser.add_argument('--out_dir', type=str, required=True)
     parser.add_argument('--b_thresh', type=float, default=0.30)
     parser.add_argument('--t_thresh', type=float, default=0.01)
     parser.add_argument('--both_hemispheres', action='store_true',
@@ -25,13 +25,11 @@ def parse_args():
     parser.add_argument('--max_examples', type=int, default=-1,
                         help='Max examples to process. Use only for debugging')
     parser.add_argument('--normalize', type=str, choices=['max', 'canonical'],
-                        default='max')
+                        default='canonical')
     parser.add_argument('--debug', action='store_true')
     return parser.parse_args()
 
 args = parse_args()
-basepath = args.data_dir
-print(basepath)
 if not os.path.exists(args.out_dir):
     os.makedirs(args.out_dir)
 
@@ -45,8 +43,7 @@ def get_data(glob_pattern, is_labels=False):
         level = list(reversed(path))[3]
         name = level+number
 
-        image_data, image_header = medpy.io.load(filename)
-        image_data = image_data.T
+        image_data = sitk.GetArrayFromImage(sitk.ReadImage(filename))
         
         if (is_labels):
             image_data = np.round(image_data) # clean up labels
@@ -71,13 +68,12 @@ def normalize_data(data):
     if args.normalize == 'max':
         # Want to norm data into [0,1], and then
         # scale so that it's in range [-2, 2].
-        max_val = np.asarray(data.values()).max()
-        for k,v in data.iteritems():
-            data[k] = (((v / max_val) - 0.5) / 0.5) * 2.
+        for k,v in data.items():
+            data[k] = (((v / np.max(v)) - 0.5) / 0.5) * 2.
     elif args.normalize == 'canonical':
         # Want to norm data by subtracting mean and
         # dividing by standard deviation.
-        for k,v in data.iteritems():
+        for k,v in data.items():
             data_nonzero_view = data[k][data[k]>0]
             data[k] -= data_nonzero_view.mean()
             data[k] /= data_nonzero_view.std()
@@ -86,10 +82,10 @@ def normalize_data(data):
 
 def get_labels(side):
     met = {}
-    met["brain"]    = (1.*(side!= 0).sum()) / np.prod(side.shape)
-    met["tumor"]    = (1.*(side > 2).sum()) / ((side != 0).sum() + 1e-10)
-    met["has_enough_brain"] = met["brain"]     > args.b_thresh
-    met["has_tumor"]        = met["tumor"]     > args.t_thresh
+    met["brain"] = (1.*(side!= 0).sum()) / np.prod(side.shape)
+    met["tumor"] = (1.*(side > 2).sum()) / ((side != 0).sum() + 1e-10)
+    met["has_enough_brain"] = met["brain"] > args.b_thresh
+    met["has_tumor"]        = met["tumor"] > args.t_thresh
     if args.debug:
         print("this side metadata:", met)
     return met
@@ -99,13 +95,14 @@ for grade in ['HG', 'LG']:
     print("Processing grade: %s" % grade)
 
     dat = {}
-    dat['flair'] = get_data(basepath + "/Synthetic_Data/%s/*/*/*Flair.*N4ITK.mha" % grade)
-    dat['t1'] = get_data(basepath + "/Synthetic_Data/%s/*/*/*T1.*N4ITK.mha" % grade)
-    dat['t1c'] = get_data(basepath + "/Synthetic_Data/%s/*/*/*T1c.*N4ITK.mha" % grade)
-    dat['t2'] = get_data(basepath + "/Synthetic_Data/%s/*/*/*T2.*N4ITK.mha" % grade)
+    basepath = os.path.join(args.data_dir, "Synthetic_Data")
+    dat['flair'] = get_data(basepath+"/{}/*/*/*Flair.*N4ITK.mha".format(grade))
+    dat['t1'] = get_data(basepath+"/{}/*/*/*T1.*N4ITK.mha".format(grade))
+    dat['t1c'] = get_data(basepath+"/{}/*/*/*T1c.*N4ITK.mha".format(grade))
+    dat['t2'] = get_data(basepath+"/{}/*/*/*T2.*N4ITK.mha".format(grade))
     for key in dat.keys():
         normalize_data(dat[key])
-    dat['labels'] = get_data(basepath + "/Synthetic_Data/%s/*/*/*5more*N4ITK.mha" % grade,
+    dat['labels'] = get_data(basepath+"/{}/*/*/*5more*N4ITK.mha".format(grade),
                              is_labels=True)
     labels = dat['labels']
     patients = dat['labels'].keys()
