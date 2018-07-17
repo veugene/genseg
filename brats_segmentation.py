@@ -14,9 +14,8 @@ from scipy.misc import imsave
 import torch
 from torch.autograd import Variable
 import ignite
-from ignite.engines import (Events,
-                            Trainer,
-                            Evaluator)
+from ignite.engine import (Events,
+                           Engine)
 from ignite.handlers import ModelCheckpoint
 
 from utils.ignite import (progress_report,
@@ -44,7 +43,8 @@ def parse_args():
     parser.add_argument('--data_dir', type=str, default='/home/eugene/data/')
     parser.add_argument('--save_path', type=str, default='./experiments')
     g_load = parser.add_mutually_exclusive_group(required=False)
-    g_load.add_argument('--model_from', type=str, default='configs/resunet.py')
+    g_load.add_argument('--model_from', type=str,
+                        default='model/configs/resunet_001.py')
     g_load.add_argument('--resume', type=str, default=None)
     parser.add_argument('--classes', type=str, default='1,2,4',
                         help='Comma-separated list of class labels')
@@ -337,7 +337,7 @@ if __name__ == '__main__':
         with torch.no_grad():
             metrics_dict = metrics['train'](output.detach(), batch[1])
         return loss.item(), batch, output.detach(), metrics_dict
-    trainer = Trainer(training_function)
+    trainer = Engine(training_function)
 
     def validation_function(engine, batch):
         model.eval()
@@ -350,7 +350,7 @@ if __name__ == '__main__':
             loss /= len(loss_functions) # average
             metrics_dict = metrics['valid'](output, batch[1])
         return loss.item(), batch, output.detach(), metrics_dict
-    evaluator = Evaluator(validation_function)
+    evaluator = Engine(validation_function)
     
     '''
     Reset global Dice score counts every epoch (or validation run).
@@ -393,7 +393,6 @@ if __name__ == '__main__':
                                 n_saved=2,
                                 score_function=scoring_function("val_metrics"),
                                 atomic=True,
-                                exist_ok=True,
                                 create_dir=True,
                                 require_empty=False)
     evaluator.add_event_handler(Events.COMPLETED,
@@ -405,7 +404,6 @@ if __name__ == '__main__':
                                 n_saved=1,
                                 save_interval=1,
                                 atomic=True,
-                                exist_ok=True,
                                 create_dir=True,
                                 require_empty=False)
     evaluator.add_event_handler(Events.COMPLETED,

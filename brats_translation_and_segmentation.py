@@ -15,9 +15,8 @@ import torch
 from torch.autograd import Variable
 import ignite
 
-from ignite.engines import (Events,
-                            Trainer,
-                            Evaluator)
+from ignite.engine import (Events,
+                           Engine)
 from ignite.handlers import ModelCheckpoint
 
 from utils.ignite import (progress_report,
@@ -49,7 +48,7 @@ def parse_args():
     parser.add_argument('--t_model_from', type=str,
                         default='configs_cyclegan/dilated_fcn.py')
     parser.add_argument('--s_model_from', type=str,
-                        default='configs/resunet_hybrid.py')
+                        default='model/configs/resunet_hybrid.py')
     parser.add_argument('--classes', type=str, default='1,2,4',
                         help='Comma-separated list of class labels')
     parser.add_argument('--resume', type=str, default=None)
@@ -584,7 +583,7 @@ if __name__ == '__main__':
                  btoa_atob.detach(), indices),
                 this_metrics)
 
-    trainer = Trainer(training_function)
+    trainer = Engine(training_function)
 
     def validation_function(engine, batch):
         A_real, B_real, M_real, indices = prepare_batch(batch)
@@ -626,7 +625,7 @@ if __name__ == '__main__':
                  seg_out.detach(), btoa.detach(),
                  btoa_atob.detach(), indices),
                 this_metrics)
-    evaluator = Evaluator(validation_function)
+    evaluator = Engine(validation_function)
 
     '''
     Reset global Dice score counts every epoch (or validation run).
@@ -664,7 +663,6 @@ if __name__ == '__main__':
                                   n_saved=5,
                                   save_interval=1,
                                   atomic=False,
-                                  exist_ok=True,
                                   create_dir=True,
                                   require_empty=False)
     model_dict = {
