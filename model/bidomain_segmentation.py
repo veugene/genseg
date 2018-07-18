@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 from torch.autograd import Variable
 
 
@@ -36,7 +37,7 @@ def mse(prediction, target):
 class segmentation_model(object):
     def __init__(self, f_factor, f_common, f_residual, f_unique,
                  g_common, g_residual, g_unique, g_output,
-                 disc_a, disc_B, mutual_information, loss_segmentation,
+                 disc_A, disc_B, mutual_information, loss_segmentation,
                  z_size=50, z_constant=0, lambda_disc=1, lambda_x_id=10,
                  lambda_z_id=1, lambda_const=1, lambda_cyc=0, lambda_mi=1,
                  lambda_seg=1):
@@ -216,64 +217,100 @@ class segmentation_model(object):
         loss_disc_B.backward()
 
 
-if __name__=='__main__':
-    import torch
+def _run_mine():
     from torch import nn
+    from matplotlib import pyplot as plt
+    import time
+    
+    n_hidden = 400
+    n_iter = 10000
     
     # Data parameters.
-    N = 20000
-    sigma = 1
+    N = 10000
+    size = 5
+    covariance = 0.4
+    
+    # Covariance matrix.
+    cov = np.eye(size*2)
+    cov[size:, :size] += np.eye(size)*covariance
+    cov[:size, size:] += np.eye(size)*covariance
+    
+    # Data.
+    def sample_data():
+        sample = np.random.multivariate_normal(mean=[1]*size*2,
+                                               cov=cov,
+                                               size=(N,))
+        x = sample[:,:size]
+        z = sample[:,size:]
+        return x, z
+    
+    # Theoretical mutual information.
+    sx = np.linalg.det(cov[:size, :size])
+    sz = np.linalg.det(cov[size:, size:])
+    s  = np.linalg.det(cov)
+    mi_real = 0.5*np.log(sx*sz/s)
     
     # Mutual information estimator.
     class mi_estimation_network(nn.Module):
         def __init__(self, n_hidden):
             super(mi_estimation_network, self).__init__()
             self.n_hidden = n_hidden
-            self.layer_x = nn.Linear(1, self.n_hidden, bias=False)
-            self.layer_z = nn.Linear(1, self.n_hidden)
-            self.layer_out = nn.Linear(self.n_hidden, 1)
-            #self.layer_x.weight.data.uniform_(-0.1, 0.1)
-            #self.layer_z.weight.data.uniform_(-0.1, 0.1)
-            #self.layer_out.weight.data.uniform_(-0.1, 0.1)
+            modules = []
+            modules.append(nn.Linear(size*2, self.n_hidden))
+            modules.append(nn.ReLU())
+            for i in range(1):
+                modules.append(nn.Linear(self.n_hidden, self.n_hidden))
+                modules.append(nn.ReLU())
+            modules.append(nn.Linear(self.n_hidden, 1))
+            self.model = nn.Sequential(*tuple(modules))
         
         def forward(self, x, z):
-            hid_x = self.layer_x(x)
-            hid_z = self.layer_z(z)
-            out = self.layer_out(nn.functional.relu(hid_x+hid_z))
+            out = self.model(torch.cat([x, z], dim=-1))
             return out
-        
-    def compute_mi(x, z):
-        p_z_x = np.exp(-(z-x)**2/(2*sigma))
-        p_z_x_minus = np.exp(-(z+1)**2/(2*sigma))
-        p_z_x_plus  = np.exp(-(z-1)**2/(2*sigma))
-        mi = np.average(np.log(p_z_x/(0.5*p_z_x_minus+0.5*p_z_x_plus)))
-        return mi
-        
-    mi_estimator = mine(mi_estimation_network(n_hidden=10))
-    model = mi_estimator.estimation_network
     
-    # Data.
-    def sample_data():
-        x = np.sign(np.random.normal(0., 1., [N,1]))
-        z = x+np.random.normal(0., np.sqrt(sigma), [N,1])
-        return x, z
+    mi_estimator = mine(mi_estimation_network(n_hidden=n_hidden))
+    model = mi_estimator.estimation_network
     
     # Train
     optimizer = torch.optim.Adam(params=model.parameters(),
-                                 lr=0.1,
+                                 lr=0.001,
+                                 eps=1e-7,
                                  amsgrad=True)
-    #optimizer = torch.optim.SGD(params=model.parameters(),
-                                #lr=0.1)
+    lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, 0.999)
+    model.cuda()
     model.train()
-    for i in range(1000):
+    fig, ax = plt.subplots(1,1)
+    ax.axhline(mi_real, color='red', linestyle='dashed')
+    fig.show()
+    fig.canvas.draw()
+    loss_history = []
+    for i in range(n_iter):
         optimizer.zero_grad()
         x, z = sample_data()
         _, z_marginal = sample_data()
-        x = torch.from_numpy(x.astype(np.float32))
-        z = torch.from_numpy(z.astype(np.float32))
-        z_marginal = torch.from_numpy(z_marginal.astype(np.float32))
+        x = torch.from_numpy(x.astype(np.float32)).cuda()
+        z = torch.from_numpy(z.astype(np.float32)).cuda()
+        z_marginal = torch.from_numpy(z_marginal.astype(np.float32)).cuda()
         loss = mi_estimator.evaluate(x, z, z_marginal)
         loss.backward()
+        nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.001)
         optimizer.step()
-        print("Iteration {} - lower_bound={} (real {})"
-              "".format(i, -loss.item(), compute_mi(x, z)))
+        lr_scheduler.step()
+        print("Iteration {} - lower_bound={:.2f} (real {:.2f}) lr={}"
+              "".format(i, -loss.item(), mi_real, lr_scheduler.get_lr()[0]))
+        loss_history.append(-loss.item())
+        if (i+1)%100==0:
+            plt.scatter(range(i+1), loss_history, c='black', s=2)
+            fig.canvas.draw()
+        
+        
+def _run_segmentation_model():
+    #from fcn_maker import assemble_model
+    pass
+
+
+if __name__=='__main__':
+    print("\nRUNNING MINE\n")
+    _run_mine()
+    print("\nRUNNING SEGMENTATION MODEL\n")
+    _run_segmentation_model()
