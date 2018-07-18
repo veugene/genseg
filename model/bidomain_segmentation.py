@@ -13,11 +13,12 @@ class mine(object):
         self.estimation_network = estimation_network
         self.rng = rng if rng else np.random.RandomState()
         
-    def evaluate(x, z):
-        permutation = self.rng.permutation(len(z))
-        z_shuffled = z[permutation]
+    def evaluate(self, x, z, z_marginal=None):
+        if z_marginal is None:
+            permutation = self.rng.permutation(len(z))
+            z_marginal = z[permutation]
         joint = self.estimation_network(x, z)
-        marginal = self.estimation_network(x, z_shuffled)
+        marginal = self.estimation_network(x, z_marginal)
         lower_bound = (  torch.mean(joint)
                        - torch.log(torch.mean(torch.exp(marginal))))
         return -lower_bound
@@ -145,10 +146,10 @@ class segmentation_model(object):
         
         # Cycle.
         z_ABA = {'common'  : s_AB['common'],
-                 'residual': s_A['residual',
+                 'residual': s_A['residual'],
                  'unique'  : s_A['unique']}
         z_BAB = {'common'  : s_BA['common'],
-                 'residual': s_B['residual',
+                 'residual': s_B['residual'],
                  'unique'  : s_B['unique']}
         x_ABA = self.decode(**z_ABA)
         x_BAB = self.decode(**z_BAB)
@@ -162,7 +163,7 @@ class segmentation_model(object):
         loss_recon_zAB = {'common':   dist(s_AB['common'],
                                            z_AB['common'].detach()),
                           'residual': dist(s_AB['residual'],
-                                           z_AB['residual'],  # detached
+                                           z_AB['residual']), # detached
                           'unique':   dist(s_AB['unique'],
                                            z_AB['unique'])}   # detached
         loss_recon_zBA = {'common':   dist(s_BA['common'],
@@ -213,3 +214,66 @@ class segmentation_model(object):
                        + mse(self.disc_B(x_AB.detach()), 0))
         loss_disc_A.backward()
         loss_disc_B.backward()
+
+
+if __name__=='__main__':
+    import torch
+    from torch import nn
+    
+    # Data parameters.
+    N = 20000
+    sigma = 1
+    
+    # Mutual information estimator.
+    class mi_estimation_network(nn.Module):
+        def __init__(self, n_hidden):
+            super(mi_estimation_network, self).__init__()
+            self.n_hidden = n_hidden
+            self.layer_x = nn.Linear(1, self.n_hidden, bias=False)
+            self.layer_z = nn.Linear(1, self.n_hidden)
+            self.layer_out = nn.Linear(self.n_hidden, 1)
+            #self.layer_x.weight.data.uniform_(-0.1, 0.1)
+            #self.layer_z.weight.data.uniform_(-0.1, 0.1)
+            #self.layer_out.weight.data.uniform_(-0.1, 0.1)
+        
+        def forward(self, x, z):
+            hid_x = self.layer_x(x)
+            hid_z = self.layer_z(z)
+            out = self.layer_out(nn.functional.relu(hid_x+hid_z))
+            return out
+        
+    def compute_mi(x, z):
+        p_z_x = np.exp(-(z-x)**2/(2*sigma))
+        p_z_x_minus = np.exp(-(z+1)**2/(2*sigma))
+        p_z_x_plus  = np.exp(-(z-1)**2/(2*sigma))
+        mi = np.average(np.log(p_z_x/(0.5*p_z_x_minus+0.5*p_z_x_plus)))
+        return mi
+        
+    mi_estimator = mine(mi_estimation_network(n_hidden=10))
+    model = mi_estimator.estimation_network
+    
+    # Data.
+    def sample_data():
+        x = np.sign(np.random.normal(0., 1., [N,1]))
+        z = x+np.random.normal(0., np.sqrt(sigma), [N,1])
+        return x, z
+    
+    # Train
+    optimizer = torch.optim.Adam(params=model.parameters(),
+                                 lr=0.1,
+                                 amsgrad=True)
+    #optimizer = torch.optim.SGD(params=model.parameters(),
+                                #lr=0.1)
+    model.train()
+    for i in range(1000):
+        optimizer.zero_grad()
+        x, z = sample_data()
+        _, z_marginal = sample_data()
+        x = torch.from_numpy(x.astype(np.float32))
+        z = torch.from_numpy(z.astype(np.float32))
+        z_marginal = torch.from_numpy(z_marginal.astype(np.float32))
+        loss = mi_estimator.evaluate(x, z, z_marginal)
+        loss.backward()
+        optimizer.step()
+        print("Iteration {} - lower_bound={} (real {})"
+              "".format(i, -loss.item(), compute_mi(x, z)))
