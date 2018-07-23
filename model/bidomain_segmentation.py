@@ -223,12 +223,12 @@ def _run_mine():
     import time
     
     n_hidden = 400
-    n_iter = 10000
+    n_iter = 4000
     
     # Data parameters.
     N = 10000
-    size = 5
-    covariance = 0.4
+    size = 20
+    covariance = 0.9
     
     # Covariance matrix.
     cov = np.eye(size*2)
@@ -237,7 +237,7 @@ def _run_mine():
     
     # Data.
     def sample_data():
-        sample = np.random.multivariate_normal(mean=[1]*size*2,
+        sample = np.random.multivariate_normal(mean=[0]*size*2,
                                                cov=cov,
                                                size=(N,))
         x = sample[:,:size]
@@ -258,7 +258,7 @@ def _run_mine():
             modules = []
             modules.append(nn.Linear(size*2, self.n_hidden))
             modules.append(nn.ReLU())
-            for i in range(1):
+            for i in range(2):
                 modules.append(nn.Linear(self.n_hidden, self.n_hidden))
                 modules.append(nn.ReLU())
             modules.append(nn.Linear(self.n_hidden, 1))
@@ -275,6 +275,7 @@ def _run_mine():
     optimizer = torch.optim.Adam(params=model.parameters(),
                                  lr=0.001,
                                  eps=1e-7,
+                                 weight_decay=0.01,
                                  amsgrad=True)
     lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, 0.999)
     model.cuda()
@@ -293,15 +294,27 @@ def _run_mine():
         z_marginal = torch.from_numpy(z_marginal.astype(np.float32)).cuda()
         loss = mi_estimator.evaluate(x, z, z_marginal)
         loss.backward()
-        nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.001)
+        norm = nn.utils.clip_grad_norm_(model.parameters(), max_norm=1)
         optimizer.step()
-        lr_scheduler.step()
-        print("Iteration {} - lower_bound={:.2f} (real {:.2f}) lr={}"
-              "".format(i, -loss.item(), mi_real, lr_scheduler.get_lr()[0]))
+        #lr_scheduler.step()
+        print("Iteration {} - lower_bound={:.2f} (real {:.2f}) lr={}, norm={}"
+              "".format(i, -loss.item(), mi_real, lr_scheduler.get_lr()[0],
+                        norm))
         loss_history.append(-loss.item())
-        if (i+1)%100==0:
+        if (i)%100==0:
             plt.scatter(range(i+1), loss_history, c='black', s=2)
             fig.canvas.draw()
+            
+            def get_sv(layer):
+                _, s, _ = np.linalg.svd(layer.weight.data.cpu().numpy())
+                return np.mean(s), np.min(s), np.max(s)
+            for i, m in enumerate(model.model):
+                if isinstance(m, nn.Linear):
+                    print("Singular values at layer {}: mean={:.2f}, "
+                          "min={:.2f}, max={:.2f}".format(i, *get_sv(m)))
+                
+            
+    plt.show(block=True)    # Keep figure until it's closed.
         
         
 def _run_segmentation_model():
