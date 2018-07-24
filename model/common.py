@@ -203,7 +203,7 @@ class image_to_vector(nn.Module):
                                  nonlinearity=self.nonlinearity)
             self.layers.append(layer)
             shape = get_output_shape(layer._modules['fc'], shape)
-        
+            
     def forward(self, input):
         out = input
         for m in self.blocks:
@@ -215,5 +215,99 @@ class image_to_vector(nn.Module):
     
 
 class vector_to_image(nn.Module):
-    pass
-
+    def __init__(self, output_shape, num_conv_blocks, num_fc_layers,
+                 block_type, num_channels_list, short_skip=True, dropout=0.,
+                 normalization=instance_normalization, norm_kwargs=None,
+                 conv_padding=True, init='kaiming_normal',
+                 nonlinearity='ReLU', ndim=2):
+        super(vector_to_image, self).__init__()
+        
+        # ndim must be only 2 or 3.
+        if ndim not in [2, 3]:
+            raise ValueError("`ndim` must be either 2 or 3")
+        
+        # num_channels should be specified once for every block.
+        if len(num_channels)!=num_conv_blocks+num_fc_layers:
+            raise ValueError("`num_channels_list` must have the same number "
+                             "of entries as there are blocks and fc layers")
+        
+        self.output_shape = output_shape
+        self.num_conv_blocks = num_conv_blocks
+        self.num_fc_layers = num_fc_layers
+        self.block_type = block_type
+        self.num_channels_list = num_channels_list
+        self.short_skip = short_skip
+        self.dropout = dropout
+        self.normalization = normalization
+        self.norm_kwargs = {} if norm_kwargs is None else norm_kwargs
+        self.conv_padding = conv_padding
+        self.init = init
+        self.nonlinearity = nonlinearity
+        self.ndim = ndim
+        
+        self.in_channels = num_channels_list[0]
+        self.out_channels = output_shape[0]
+        
+        # Compute all intermediate conv shapes by working backward from the 
+        # output shape.
+        s = np.array(self.output_shape[1:])
+        self._conv_shapes = [self.output_shape]
+        for i in range(1, self.num_conv_blocks+1):
+            shape = (self.num_channels_list[-i],)+tuple((s+s%2)//2**i)
+            self._conv_shapes.append(shape)
+        conv_in_channels = (            self._conv_shapes[-1][0]
+                            -np.product(self._conv_shapes[-1][1:]))
+        self._conv_shapes[-1] = (conv_in_channels,)+self._conv_shapes[-1][1:]
+        self._conv_shapes = self._conv_shapes[::-1]
+        
+        '''
+        Set up blocks.
+        '''
+        self.layers = nn.ModuleList()
+        self.blocks = nn.ModuleList()
+        shape = (self.in_channels,)
+        last_channels = self.in_channels
+        for i in range(self.num_fc_layers):
+            layer = norm_nlin_fc(in_channels=last_channels,
+                                 out_channels=self.num_channels_list[i],
+                                 normalization=self.normalization,
+                                 norm_kwargs=self.norm_kwargs,
+                                 init=self.init,
+                                 nonlinearity=self.nonlinearity)
+            self.layers.append(layer)
+            shape = get_output_shape(layer._modules['fc'], shape)
+            last_channels = self.num_channels_list[i]
+        last_channels = conv_in_channels
+        for i in range(self.num_fc_layers,
+                       self.num_fc_layers+self.num_conv_blocks):
+            block = self.block_type(in_channels=last_channels,
+                                    num_filters=self.num_channels_list[i],
+                                    upsample=bool(i>0),
+                                    skip=self.short_skip,
+                                    dropout=self.dropout,
+                                    normalization=self.normalization,
+                                    norm_kwargs=self.norm_kwargs,
+                                    conv_padding=self.conv_padding,
+                                    init=self.init,
+                                    nonlinearity=self.nonlinearity,
+                                    ndim=self.ndim)
+            self.blocks.append(block)
+            shape = get_output_shape(block, shape)
+            last_channels = self.num_channels_list[i]
+        
+    def forward(self, input):
+        out = input
+        for m in self.layers:
+            out = m(out)
+        out = out.view(out.size(0), *self._conv_shapes[0])
+        for m, shape in zip(self.blocks, self._conv_shapes[1:]):
+            out = m(out)
+            if not np.equal(out.size()[2:], shape[1:]):
+                # Crop if needed.
+                indices = [slice(None, None)]*self.ndim
+                for dim in range(2, self.ndim+2):
+                    if out.size()[dim] > shape[dim-1]:
+                        offset = (out.size()[dim]-shape[dim-1])//2
+                        indices[dim] = slice(offset, shape[dim-1]+offset)
+                out = out[tuple(indices)]
+        return out
