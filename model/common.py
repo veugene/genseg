@@ -156,6 +156,9 @@ class norm_nlin_fc(torch.nn.Module):
         self._modules['nlin'] = get_nonlinearity(nonlinearity)
         self._modules['fc'] = nn.Linear(in_features=self.in_features,
                                         out_features=self.out_features)
+        if init is not None:
+            self._modules['fc'].weight.data = \
+                get_initializer(init)(self._modules['fc'].weight.data)
 
     def forward(self, input):
         out = input
