@@ -1,0 +1,180 @@
+from __future__ import (print_function,
+                        division)
+from functools import partial
+from collections import OrderedDict
+import sys
+import os
+import shutil
+import argparse
+from datetime import datetime
+import warnings
+#import imp
+
+import numpy as np
+from scipy.misc import imsave
+import torch
+from torch.autograd import Variable
+import ignite
+
+from ignite.engine import (Events,
+                           Engine)
+from ignite.handlers import ModelCheckpoint
+
+from utils.common import experiment
+from utils.ignite import (metrics_handler,
+                          scoring_function)
+from utils.metrics import (dice_loss,
+                           accuracy)
+from utils.data import (setup_mnist_data,
+                        autorewind)
+from model import configs
+
+import itertools
+
+
+'''
+Process arguments.
+'''
+def get_parser():
+    parser = argparse.ArgumentParser(description="Cluttered MNIST bi-domain "
+                                                 "segmentation.")
+    parser.add_argument('--name', type=str, default="")
+    parser.add_argument('--data_dir', type=str, default='./data/mnist')
+    parser.add_argument('--save_path', type=str, default='./experiments')
+    mutex_parser = parser.add_mutually_exclusive_group()
+    mutex_parser.add_argument('--model_from', type=str,
+                              default="./model/configs/"
+                                      "bidomain_segmentation_001.py")
+    mutex_parser.add_argument('--resume_from', type=str, default=None)
+    parser.add_argument('-e', '--evaluate', action='store_true')
+    parser.add_argument('--weight_decay', type=float, default=1e-4)
+    parser.add_argument('--labeled_fraction', type=float, default=0.1)
+    parser.add_argument('--batch_size_train', type=int, default=20)
+    parser.add_argument('--batch_size_valid', type=int, default=20)
+    parser.add_argument('--epoch_length', type=int, default=200)
+    parser.add_argument('--epochs', type=int, default=200)
+    parser.add_argument('--learning_rate', type=float, default=0.001)
+    parser.add_argument('--optimizer', type=str, default='amsgrad',
+                        choices=['adam', 'amsgrad', 'rmsprop'])
+    parser.add_argument('--n_clutter', type=int, default=8)
+    parser.add_argument('--size_clutter', type=int, default=10)
+    parser.add_argument('--size_output', type=int, default=100)
+    parser.add_argument('--frac_clutter_foreground', type=float, default=0.)
+    parser.add_argument('--n_valid', type=int, default=500)
+    parser.add_argument('--n_test', type=int, default=500)
+    parser.add_argument('--cpu', default=False, action='store_true')
+    parser.add_argument('--nb_io_workers', type=int, default=1)
+    parser.add_argument('--nb_proc_workers', type=int, default=0)
+    parser.add_argument('--rseed', type=int, default=None)
+    return parser
+
+
+if __name__ == '__main__':
+    # Disable buggy profiler.
+    torch.backends.cudnn.benchmark = False
+    
+    # Set up experiment.
+    experiment_state = experiment(name="mnist", parser=get_parser())
+    args = experiment_state.args
+    if not args.cpu:
+        experiment_state.model.cuda()
+    assert args.labeled_fraction > 0
+    
+    # Prepare data.
+    rng = np.random.RandomState(args.rseed)
+    data = setup_mnist_data(
+        data_dir='./data/mnist',
+        n_valid=args.n_valid,
+        n_test=args.n_test,
+        n_clutter=args.n_clutter,
+        size_clutter=args.size_clutter,
+        size_output=args.size_output,
+        frac_clutter_foreground=args.frac_clutter_foreground,
+        verbose=True,
+        rng=rng)
+    loader_train = autorewind(partial(data.gen_train,
+                                      args.batch_size_train,
+                                      args.epoch_length))
+    loader_valid = autorewind(partial(data.gen_valid, args.batch_size_valid))
+    loader_test  = autorewind(partial(data.gen_test, args.batch_size_valid))
+    
+    def prepare_batch(batch, labeled_fraction=1.):
+        s, h, m, _ = zip(*batch)
+        # Select labels to use.
+        indices = rng.choice(len(m),
+                             size=int(len(m)*labeled_fraction),
+                             replace=False)
+        # Prepare for pytorch.
+        h = Variable(torch.from_numpy(np.expand_dims(h, 1)))
+        s = Variable(torch.from_numpy(np.expand_dims(s, 1)))
+        m = Variable(torch.from_numpy(np.expand_dims(m, 1)))
+        if not args.cpu:
+            h = h.cuda()
+            s = s.cuda()
+            m = m.cuda()
+        return h, s, m, indices
+    
+    # Set up metrics.
+    metrics = {'train': None, 'valid': None}
+    for key in ['train', 'valid']:
+        metrics_dict = OrderedDict((
+            ('dice',   dice_loss(1, 0)),
+            ('g_dice', dice_loss(1, 0, accumulate=True))
+            ))
+        metrics[key] = metrics_handler(metrics_dict)
+    
+    ## TODO validation epoch length
+    #epoch_length = lambda ds, bs : len(ds)//bs + int(len(ds)%bs>0)
+    
+    # Training loop.
+    def training_function(engine, batch):
+        experiment_state.model.train()
+        experiment_state.optimizer.zero_grad()
+        A, B, M, indices = prepare_batch(batch, args.labeled_fraction)
+        losses, outputs = experiment_state.model.evaluate(A, B, M, indices,
+                                                          compute_grad=True)
+        experiment_state.optimizer.step()
+        metrics_dict = metrics['train'](outputs['x_AM'], M[indices])   
+        setattr(engine.state, 'metrics', metrics_dict)
+        return losses['seg'].item(), losses, metrics_dict
+    
+    # Validation loop.
+    def validation_function(engine, batch):
+        experiment_state.model.eval()
+        A, B, M, indices = prepare_batch(batch)
+        losses, outputs = experiment_state.model.evaluate(A, B, M, indices,
+                                                          compute_grad=False)
+        metrics_dict = metrics['train'](outputs['x_AM'], M)     
+        setattr(engine.state, 'metrics', metrics_dict)
+        return losses['seg'].item(), losses, metrics_dict
+    
+    # Get engines.
+    append = bool(args.resume_from is not None)
+    trainer   = experiment_state.setup_engine(training_function,
+                                              append=append,
+                                              epoch_length=args.epoch_length)
+    epoch_length_val =(     len(data._validation_set)//args.batch_size_valid
+                       +int(len(data._validation_set)%args.batch_size_valid>0))
+    evaluator = experiment_state.setup_engine(validation_function,
+                                              prefix='val',
+                                              append=append,
+                                              epoch_length=epoch_length_val)
+    
+    # Reset global Dice score counts every epoch (or validation run).
+    func = lambda key : metrics[key].measure_functions['g_dice'].reset_counts
+    trainer.add_event_handler(Events.EPOCH_STARTED, func('train'))
+    trainer.add_event_handler(Events.EPOCH_COMPLETED, func('valid'))
+
+    # Set up validation.
+    trainer.add_event_handler(Events.EPOCH_COMPLETED,
+                              lambda _: evaluator.run(loader_valid))
+
+    # Set up model checkpointing.
+    score_function = scoring_function('metrics', 'g_dice')
+    experiment_state.setup_checkpoints(trainer, evaluator,
+                                       score_function=score_function)
+    
+    '''
+    Train.
+    '''
+    trainer.run(loader_train, max_epochs=args.epochs)
