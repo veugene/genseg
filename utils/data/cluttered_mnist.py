@@ -128,7 +128,7 @@ class setup_mnist_data(object):
         # Prepare files from downloaded data if necessary.
         if not os.path.exists(path_unpacked):
             os.makedirs(path_unpacked)
-            self._print('Processing data.')
+            self._print('Preparing data.')
             d_train = (
                 self._read_image_file(os.path.join(self.data_dir, 'raw',
                                                    'train-images-idx3-ubyte')),
@@ -145,8 +145,7 @@ class setup_mnist_data(object):
                 np.savez_compressed(f,
                                     x_train=d_train[0], y_train=d_train[1],
                                     x_test=d_test[0], y_test=d_test[1])
-
-        self._print('Done!')
+            self._print('Done!')
         
     def _get_int(self, b):
         return int(codecs.encode(b, 'hex'), 16)
