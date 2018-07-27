@@ -199,13 +199,22 @@ class setup_mnist_data(object):
                 image[crop_target] = self._x[fold][idx][crop_source]
         
         # Generate output with clutter in the background and foreground.
+        x_crop_indices = random_crop(self.size_output, 28)
         n_clutter_background = int(self.n_clutter*self.frac_clutter_foreground)
         n_clutter_foreground = self.n_clutter-n_clutter_background
         add_clutter(x_out, num=n_clutter_background)
-        x_out[random_crop(self.size_output, 28)][x>0] = x[x>0]
+        x_out[x_crop_indices][x>0] = x[x>0]
         add_clutter(x_out, num=n_clutter_foreground)
         
-        return (x_out, y)
+        # Generate clutter images without x.
+        clutter = np.zeros_like(x_out, dtype=np.float32)
+        add_clutter(clutter, num=self.n_clutter)
+        
+        # Create segmentation mask for x.
+        mask = np.zeros_like(x_out, dtype=np.float32)
+        mask[x_crop_indices][x>0.5] = 1
+        
+        return (x_out, clutter, mask, y)
         
     def _generate_cluttered(self, num, fold):
         output_list = []
@@ -252,18 +261,22 @@ if __name__=='__main__':
                 'test':  mnist_data.gen_test(batch_size=batch_size)}
     
     import matplotlib.pyplot as plt
-    fig = plt.figure()
+    def make_panel(batch, axis, ax_handle):
+        precat = [np.concatenate(list(zip(*batch['train'][:]))[axis], axis=0),
+                  np.concatenate(list(zip(*batch['valid'][:]))[axis], axis=0),
+                  np.concatenate(list(zip(*batch['test'][:]))[axis], axis=0)]
+        cat = np.concatenate(precat, axis=1)
+        cat[range(0, cat.shape[0], 100), :] = 1
+        cat[:, range(0, cat.shape[1], 100)] = 1
+        ax_handle.imshow(cat)
+    fig, ax = plt.subplots(1, 3)
     plt.gray()
     for i in range(n_data):
         batch = dict([(key, next(data_gen[key])) for key in data_gen])
         print("batch {}: shape_train={}, shape_valid={}, shape_test={}"
               "".format(i, len(batch['train']), len(batch['valid']),
                         len(batch['test'])))
-        precat = [np.concatenate(list(zip(*batch['train'][:]))[0], axis=0),
-                  np.concatenate(list(zip(*batch['valid'][:]))[0], axis=0),
-                  np.concatenate(list(zip(*batch['test'][:]))[0], axis=0)]
-        cat = np.concatenate(precat, axis=1)
-        cat[range(0, cat.shape[0], 100), :] = 1
-        cat[:, range(0, cat.shape[1], 100)] = 1
-        plt.imshow(cat)
+        make_panel(batch, 0, ax[0])
+        make_panel(batch, 1, ax[1])
+        make_panel(batch, 2, ax[2])
         plt.show(block=True)
