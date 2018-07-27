@@ -238,6 +238,13 @@ class setup_mnist_data(object):
             yield batch
 
 
+class autorewind(object):
+    def __init__(self, generator_function):
+        self.generator_function = generator_function
+    def __iter__(self):
+        return self.generator_function()
+
+
 if __name__=='__main__':
     """
     Interactive debug code.
