@@ -91,7 +91,7 @@ class experiment(object):
                                     atomic=True,
                                     create_dir=True,
                                     require_empty=False)
-        trainer.add_event_handler(Events.EPOCH_COMPLETED,
+        evaluator.add_event_handler(Events.EPOCH_COMPLETED,
                                     checkpoint_best_handler,
                                     self.model_dict)
         
