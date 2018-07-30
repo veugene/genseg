@@ -102,9 +102,10 @@ if __name__ == '__main__':
     def prepare_batch(batch, labeled_fraction=1.):
         s, h, m, _ = zip(*batch)
         # Select labels to use.
-        indices = rng.choice(len(m),
-                             size=int(len(m)*labeled_fraction),
-                             replace=False)
+        indices = sorted(rng.choice(len(m),
+                                    size=int(len(m)*labeled_fraction),
+                                    replace=False))
+        
         # Prepare for pytorch.
         s = Variable(torch.from_numpy(np.expand_dims(s, 1)))
         h = Variable(torch.from_numpy(np.expand_dims(h, 1)))
@@ -140,11 +141,11 @@ if __name__ == '__main__':
     # Validation loop.
     def validation_function(engine, batch):
         experiment_state.model.eval()
-        A, B, M, indices = prepare_batch(batch)
+        A, B, M, _ = prepare_batch(batch)
         with torch.no_grad():
             losses, outputs = experiment_state.model.evaluate(
-                                        A, B, M, indices, compute_grad=False)
-            metrics_dict = metrics['train'](outputs['x_AM'], M[indices])
+                                        A, B, M, _, compute_grad=False)
+            metrics_dict = metrics['train'](outputs['x_AM'], M)
         setattr(engine.state, 'metrics', metrics_dict)
         
         # Prepare images to save to disk.
