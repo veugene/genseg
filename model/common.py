@@ -167,32 +167,35 @@ class norm_nlin_fc(torch.nn.Module):
         return out
 
 
-class image_to_vector(nn.Module):
+class encoder(nn.Module):
     def __init__(self, input_shape, num_conv_blocks, block_type,
-                 num_channels_list, short_skip=True, dropout=0.,
+                 num_channels_list, skip=True, dropout=0.,
                  normalization=batch_normalization, norm_kwargs=None,
-                 conv_padding=True, init='kaiming_normal_',
+                 conv_padding=True, vector_out=False, init='kaiming_normal_',
                  nonlinearity='ReLU', ndim=2):
-        super(image_to_vector, self).__init__()
+        super(encoder, self).__init__()
         
         # ndim must be only 2 or 3.
         if ndim not in [2, 3]:
             raise ValueError("`ndim` must be either 2 or 3")
         
         # num_channels should be specified once for every block.
-        if len(num_channels_list)!=num_conv_blocks+1:
+        if len(num_channels_list)!=num_conv_blocks+int(vector_out==True):
+            print(len(num_channels_list), num_conv_blocks, vector_out)
             raise ValueError("`num_channels_list` must have the same number "
-                             "of entries as there are blocks + 1")
+                             "of entries as there are blocks "
+                             "(+1 if `vector_out==True`).")
         
         self.input_shape = input_shape
         self.num_conv_blocks = num_conv_blocks
         self.block_type = block_type
         self.num_channels_list = num_channels_list
-        self.short_skip = short_skip
+        self.skip = skip
         self.dropout = dropout
         self.normalization = normalization
         self.norm_kwargs = {} if norm_kwargs is None else norm_kwargs
         self.conv_padding = conv_padding
+        self.vector_out = vector_out
         self.init = init
         self.nonlinearity = nonlinearity
         self.ndim = ndim
@@ -212,7 +215,7 @@ class image_to_vector(nn.Module):
             block = self.block_type(in_channels=last_channels,
                                     num_filters=self.num_channels_list[i],
                                     subsample=bool(i>0),
-                                    skip=self.short_skip,
+                                    skip=self.skip,
                                     dropout=self.dropout,
                                     normalization=normalization,
                                     norm_kwargs=self.norm_kwargs,
@@ -227,56 +230,60 @@ class image_to_vector(nn.Module):
             block = normalization(ndim=self.ndim,
                                   num_features=last_channels,
                                   **self.norm_kwargs)
-        self.fc = norm_nlin_fc(in_features=int(np.product(shape)),
-                               out_features=self.num_channels_list[-1],
-                               normalization=None,
-                               norm_kwargs=self.norm_kwargs,
-                               init=self.init,
-                               nonlinearity=self.nonlinearity)
-        shape = get_output_shape(self.fc._modules['fc'], shape)
+        if self.vector_out:
+            self.fc = norm_nlin_fc(in_features=int(np.product(shape)),
+                                   out_features=self.num_channels_list[-1],
+                                   normalization=None,
+                                   norm_kwargs=self.norm_kwargs,
+                                   init=self.init,
+                                   nonlinearity=self.nonlinearity)
+            shape = get_output_shape(self.fc._modules['fc'], shape)
             
     def forward(self, input):
         out = input
         for m in self.blocks:
             out = m(out)
-        out = out.view(out.size(0), -1)
-        out = self.fc(out)
+        if self.vector_out:
+            out = out.view(out.size(0), -1)
+            out = self.fc(out)
         return out
     
 
-class vector_to_image(nn.Module):
-    def __init__(self, input_len, output_shape, num_conv_blocks, block_type,
-                 num_channels_list, short_skip=True, dropout=0.,
+class decoder(nn.Module):
+    def __init__(self, input_shape, output_shape, num_conv_blocks, block_type,
+                 num_channels_list, skip=True, dropout=0.,
                  normalization=batch_normalization, norm_kwargs=None,
-                 conv_padding=True, upsample_mode='conv',
+                 conv_padding=True, vector_in=False, upsample_mode='conv',
                  init='kaiming_normal_', nonlinearity='ReLU', ndim=2):
-        super(vector_to_image, self).__init__()
+        super(decoder, self).__init__()
         
         # ndim must be only 2 or 3.
         if ndim not in [2, 3]:
             raise ValueError("`ndim` must be either 2 or 3")
         
         # num_channels should be specified once for every block.
-        if len(num_channels_list)!=num_conv_blocks+1:
+        if len(num_channels_list)!=num_conv_blocks+int(vector_in==True):
             raise ValueError("`num_channels_list` must have the same number "
-                             "of entries as there are blocks + 1")
+                             "of entries as there are blocks "
+                             "(+1 if `vector_in==True`).")
         
-        self.input_len = input_len
+        self.input_shape = input_shape
         self.output_shape = output_shape
         self.num_conv_blocks = num_conv_blocks
         self.block_type = block_type
         self.num_channels_list = num_channels_list
-        self.short_skip = short_skip
+        self.skip = skip
         self.dropout = dropout
         self.normalization = normalization
         self.norm_kwargs = {} if norm_kwargs is None else norm_kwargs
         self.conv_padding = conv_padding
+        self.vector_in = vector_in
         self.upsample_mode = upsample_mode
         self.init = init
         self.nonlinearity = nonlinearity
         self.ndim = ndim
         
-        self.in_channels = self.input_len
+        self.in_channels = self.input_shape[0]
         self.out_channels = output_shape[0]
         
         # Compute all intermediate conv shapes by working backward from the 
@@ -286,6 +293,7 @@ class vector_to_image(nn.Module):
         for i in range(0, self.num_conv_blocks):
             shape = (self.num_channels_list[-i],)+tuple((s+s%2)//2**i)
             self._conv_shapes.append(shape)
+        # TODO: make shape deduction generic for all block types.
         self._conv_shapes[-1] = ((self.num_channels_list[0],)
                                  +self._conv_shapes[-1][1:])
         self._conv_shapes = self._conv_shapes[::-1]
@@ -293,27 +301,27 @@ class vector_to_image(nn.Module):
         '''
         Set up blocks.
         '''
-        self.layers = nn.ModuleList()
         self.blocks = nn.ModuleList()
-        shape = (self.in_channels,)
-        out_features = ( self.num_channels_list[0]
-                        *int(np.product(self._conv_shapes[0][1:])))
-        self.fc = norm_nlin_fc(in_features=self.in_channels,
-                               out_features=out_features,
-                               normalization=None,
-                               norm_kwargs=self.norm_kwargs,
-                               init=self.init,
-                               nonlinearity=self.nonlinearity)
-        last_channels = out_features
-        shape = self._conv_shapes[0]
+        shape = self.input_shape
+        if self.vector_in:
+            out_features = ( self.num_channels_list[0]
+                            *int(np.product(self._conv_shapes[0][1:])))
+            self.fc = norm_nlin_fc(in_features=self.in_channels,
+                                   out_features=out_features,
+                                   normalization=None,
+                                   norm_kwargs=self.norm_kwargs,
+                                   init=self.init,
+                                   nonlinearity=self.nonlinearity)
+            last_channels = out_features
+            shape = self._conv_shapes[0]
         last_channels = shape[0]
-        for i in range(1, self.num_conv_blocks+1):
-            upsample = bool(i<self.num_conv_blocks)
+        for i in range(self.num_conv_blocks, 0, -1):
+            upsample = bool(i>1)    # Not on last layer.
             block = self.block_type(in_channels=last_channels,
-                                    num_filters=self.num_channels_list[i],
+                                    num_filters=self.num_channels_list[-i],
                                     upsample=upsample,
                                     upsample_mode=self.upsample_mode,
-                                    skip=self.short_skip,
+                                    skip=self.skip,
                                     dropout=self.dropout,
                                     normalization=self.normalization,
                                     norm_kwargs=self.norm_kwargs,
@@ -323,11 +331,15 @@ class vector_to_image(nn.Module):
                                     ndim=self.ndim)
             self.blocks.append(block)
             shape = get_output_shape(block, shape)
-            last_channels = self.num_channels_list[i]
+            last_channels = self.num_channels_list[-i]
         
-    def forward(self, input):
-        out = self.fc(input)
-        out = out.view(out.size(0), *self._conv_shapes[0])
+    def forward(self, common, residual, unique):
+        #inp = torch.cat([common, residual, unique], dim=1)
+        inp = sum([common, residual, unique])
+        out = inp
+        if self.vector_in:
+            out = self.fc(out)
+            out = out.view(out.size(0), *self._conv_shapes[0])
         for m, shape_in, shape_out in zip(self.blocks,
                                           self._conv_shapes[:-1],
                                           self._conv_shapes[1:]):
@@ -340,57 +352,88 @@ class vector_to_image(nn.Module):
                 out = out.contiguous()
             out = m(out)
             out = adjust_to_size(out, shape_out[1:])
+            if not out.is_contiguous():
+                out = out.contiguous()
         return out
+    
+    
+class mlp(nn.Module):
+    def __init__(self, n_input, n_output, n_layers, n_hidden=None,
+                 init='kaiming_normal_'):
+        super(mlp, self).__init__()
+        assert(n_layers > 0)
+        self.n_input  = n_input
+        self.n_output = n_output
+        self.n_layers = n_layers
+        self.n_hidden = n_hidden
+        # TODO: support `init` argument.
+        if n_hidden is None:
+            self.n_hidden = n_output
+        layers = []
+        if n_layers > 1:
+            layers =  [nn.Linear(in_features=n_input, out_features=n_hidden)]
+            layers += [nn.Linear(in_features=n_hidden,
+                                 out_features=n_hidden)]*max(0, n_layers-2)
+            layers += [nn.Linear(in_features=n_hidden, out_features=n_output)]
+        else:
+            layers = [nn.Linear(in_features=n_input, out_features=n_output)]
+        self.model = nn.Sequential(*tuple(layers))
+        for layer in self.model:
+            if isinstance(layer, nn.Linear) and init is not None:
+                layer.weight.data = get_initializer(init)(layer.weight.data)
+    def forward(self, x):
+        return self.model(x)
     
     
 if __name__=='__main__':
     image_shape = (3, 256, 171, 91)
-    vector_shape = 50
+    vector_len = 50
     batch_size = 2
     
-    # TEST: image_to_vector
-    model = image_to_vector(input_shape=image_shape,
-                            num_conv_blocks=6,
-                            block_type=basic_block,
-                            num_channels_list=[10, 20, 30, 40, 50, 60,
-                                               vector_shape],
-                            short_skip=True,
-                            dropout=0.,
-                            normalization=batch_normalization,
-                            norm_kwargs=None,
-                            conv_padding=True,
-                            init='kaiming_normal_',
-                            nonlinearity='ReLU',
-                            ndim=len(image_shape)-1)
+    # TEST: encoder
+    model = encoder(input_shape=image_shape,
+                    num_conv_blocks=6,
+                    block_type=basic_block,
+                    num_channels_list=[10, 20, 30, 40, 50, 60, vector_len],
+                    skip=True,
+                    dropout=0.,
+                    normalization=batch_normalization,
+                    norm_kwargs=None,
+                    conv_padding=True,
+                    vector_out=True,
+                    init='kaiming_normal_',
+                    nonlinearity='ReLU',
+                    ndim=len(image_shape)-1)
     model = model.cuda()
     test_input = np.random.rand(batch_size, *image_shape).astype(np.float32)
     test_input = torch.autograd.Variable(torch.from_numpy(test_input)).cuda()
     output = model(test_input)
-    print("IMAGE TO VECTOR: {} parameters"
+    print("ENCODER: {} parameters"
           "".format(sum([np.prod(p.size()) for p in model.parameters()])))
-    print("image_to_vector: input_shape={}, output_shape={}"
+    print("encoder: input_shape={}, output_shape={}"
           "".format((batch_size,)+image_shape, tuple(output.size())))
     
-    # TEST: vector_to_image
-    model = vector_to_image(input_len=vector_shape,
-                            output_shape=image_shape,
-                            num_conv_blocks=6,
-                            block_type=basic_block,
-                            num_channels_list=[60, 50, 40, 30, 20, 10, 3],
-                            short_skip=True,
-                            dropout=0.,
-                            normalization=batch_normalization,
-                            norm_kwargs=None,
-                            conv_padding=True,
-                            init='kaiming_normal_',
-                            nonlinearity='ReLU',
-                            ndim=len(image_shape)-1)
+    # TEST: decoder
+    model = decoder(input_shape=(vector_len,),
+                    output_shape=image_shape,
+                    num_conv_blocks=6,
+                    block_type=basic_block,
+                    num_channels_list=[60, 50, 40, 30, 20, 10, 3],
+                    skip=True,
+                    dropout=0.,
+                    normalization=batch_normalization,
+                    norm_kwargs=None,
+                    conv_padding=True,
+                    vector_in=True,
+                    init='kaiming_normal_',
+                    nonlinearity='ReLU',
+                    ndim=len(image_shape)-1)
     model = model.cuda()
-    test_input = np.random.rand(batch_size, vector_shape).astype(np.float32)
+    test_input = np.random.rand(batch_size, vector_len).astype(np.float32)
     test_input = torch.autograd.Variable(torch.from_numpy(test_input)).cuda()
     output = model(test_input)
-    print("VECTOR TO IMAGE: {} parameters"
+    print("DECODER: {} parameters"
           "".format(sum([np.prod(p.size()) for p in model.parameters()])))
-    print("image_to_vector: input_shape={}, output_shape={}"
-          "".format((batch_size, vector_shape), tuple(output.size())))
+    print("decoder: input_shape={}, output_shape={}"
+          "".format((batch_size, vector_len), tuple(output.size())))
     
