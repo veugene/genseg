@@ -152,7 +152,7 @@ if __name__ == '__main__':
         s, h, m, _ = zip(*batch)
         images = (np.array(s), np.array(h), np.array(m))
         images += tuple([np.squeeze(outputs[key].cpu().numpy(), 1)
-                         for key in out_keys])
+                         for key in out_keys if outputs[key] is not None])
         setattr(engine.state, 'save_images', images)
         
         return losses['seg'].item(), losses, metrics_dict

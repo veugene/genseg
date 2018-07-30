@@ -145,82 +145,57 @@ class segmentation_model(torch.nn.Module):
         
         # Encode inputs.
         s_A, a_A, b_A = self.encode(x_A)
-        s_B, a_B, b_B = self.encode(x_B)
+        if (   self.lambda_disc
+            or self.lambda_x_id
+            or self.lambda_z_id
+            or self.lambda_z_const
+            or self.lambda_cyc
+            or self.lambda_mi):
+                s_B, a_B, b_B = self.encode(x_B)
         
         # Reconstruct inputs.
-        z_AA = {'common'  : s_A['common'],
-                'residual': s_A['residual'],
-                'unique'  : s_A['unique']}
-        z_BB = {'common'  : s_B['common'],
-                'residual': s_B['residual'],
-                'unique'  : self._z_constant(batch_size)}
-        x_AA = self.decode(**z_AA)
-        x_BB = self.decode(**z_BB)
+        if self.lambda_x_id:
+            z_AA = {'common'  : s_A['common'],
+                    'residual': s_A['residual'],
+                    'unique'  : s_A['unique']}
+            z_BB = {'common'  : s_B['common'],
+                    'residual': s_B['residual'],
+                    'unique'  : self._z_constant(batch_size)}
+            x_AA = self.decode(**z_AA)
+            x_BB = self.decode(**z_BB)
         
         # Translate.
-        z_AB = {'common'  : s_A['common'],
-                'residual': self._z_sample(batch_size),
-                'unique'  : self._z_constant(batch_size)}
-        z_BA = {'common'  : s_B['common'],
-                'residual': self._z_sample(batch_size),
-                'unique'  : self._z_sample(batch_size)}
-        x_AB = self.decode(**z_AB)
-        x_BA = self.decode(**z_BA)
+        x_AB = x_BA = None
+        if self.lambda_disc or self.lambda_z_id:
+            z_AB = {'common'  : s_A['common'],
+                    'residual': self._z_sample(batch_size),
+                    'unique'  : self._z_constant(batch_size)}
+            z_BA = {'common'  : s_B['common'],
+                    'residual': self._z_sample(batch_size),
+                    'unique'  : self._z_sample(batch_size)}
+            x_AB = self.decode(**z_AB)
+            x_BA = self.decode(**z_BA)
         
         # Reconstruct latent codes.
-        s_AB, a_AB, b_AB = self.encode(x_AB)
-        s_BA, a_BA, b_BA = self.encode(x_BA)
+        if self.lambda_z_id:
+            s_AB, a_AB, b_AB = self.encode(x_AB)
+            s_BA, a_BA, b_BA = self.encode(x_BA)
         
         # Cycle.
-        z_ABA = {'common'  : s_AB['common'],
-                 'residual': s_A['residual'],
-                 'unique'  : s_A['unique']}
-        z_BAB = {'common'  : s_BA['common'],
-                 'residual': s_B['residual'],
-                 'unique'  : s_B['unique']}
-        x_ABA = self.decode(**z_ABA)
-        x_BAB = self.decode(**z_BAB)
-        
-        # Generator losses.
-        dist = torch.nn.L1Loss()
-        loss_discr_AB  = mse(self.disc_B(x_AB), 1)
-        loss_discr_BA  = mse(self.disc_A(x_BA), 1)
-        loss_recon_AA  = dist(x_AA, x_A)
-        loss_recon_BB  = dist(x_BB, x_B)
-        loss_recon_zAB = {'common':   dist(s_AB['common'],
-                                           z_AB['common'].detach()),
-                          'residual': dist(s_AB['residual'],
-                                           z_AB['residual']), # detached
-                          'unique':   dist(s_AB['unique'],
-                                           z_AB['unique'])}   # detached
-        loss_recon_zBA = {'common':   dist(s_BA['common'],
-                                           z_BA['common'].detach()),
-                          'residual': dist(s_BA['residual'],
-                                           z_BA['residual']), # detached
-                          'unique':   dist(s_BA['unique'],
-                                           z_BA['unique'])}   # detached
-        loss_const_zB  = dist(s_B['unique'], self._z_constant(batch_size))
-        loss_cycle_ABA = dist(x_ABA, x_A)
-        loss_cycle_BAB = dist(x_BAB, x_B)
-        loss_MI_A      = self.mi_estimator.evaluate(a_A, b_A)
-        loss_MI_B      = self.mi_estimator.evaluate(a_B, b_B)
-        loss_MI_AB     = self.mi_estimator.evaluate(a_AB, b_AB)
-        loss_MI_BA     = self.mi_estimator.evaluate(a_BA, b_BA)
-        
-        # Total generator loss (before segmentation).
-        loss_G = (  self.lambda_disc  * (loss_discr_AB+loss_discr_BA)
-                  + self.lambda_x_id  * (loss_recon_AA+loss_recon_BB)
-                  + self.lambda_z_id  * ( sum(loss_recon_zAB.values())
-                                         +sum(loss_recon_zBA.values()))
-                  + self.lambda_const * loss_const_zB
-                  + self.lambda_cyc   * (loss_cycle_ABA+loss_cycle_BAB)
-                  + self.lambda_mi    * ( loss_MI_A+loss_MI_B
-                                         +loss_MI_AB+loss_MI_BA))
-        
+        x_ABA = x_BAB = None
+        if self.lambda_cyc:
+            z_ABA = {'common'  : s_AB['common'],
+                     'residual': s_A['residual'],
+                     'unique'  : s_A['unique']}
+            z_BAB = {'common'  : s_BA['common'],
+                     'residual': s_B['residual'],
+                     'unique'  : s_B['unique']}
+            x_ABA = self.decode(**z_ABA)
+            x_BAB = self.decode(**z_BAB)
+            
         # Segment.
         x_AM = None
-        loss_segmentation = 0
-        if mask is not None:
+        if self.lambda_seg and mask is not None:
             if mask_indices is None:
                 mask_indices = list(range(len(mask)))
             num_masks = len(mask_indices)
@@ -228,24 +203,69 @@ class segmentation_model(torch.nn.Module):
                     'residual': self._z_constant(num_masks),
                     'unique'  : s_A['unique'][mask_indices]}
             x_AM = self.decode(**z_AM)
-            s_AM, a_AM, b_AM = self.encode(x_AM)
-            loss_recon_zAM = dist(s_AM['unique'], z_AM['unique'].detach())
-            loss_segmentation = self.loss_segmentation(x_AM,mask[mask_indices])
-            loss_G += ( self.lambda_seg  * loss_segmentation
-                       +self.lambda_z_id * loss_recon_zAM)
+            if self.lambda_z_id:
+                s_AM, a_AM, b_AM = self.encode(x_AM)
+        
+        # Generator losses.
+        loss_G = 0
+        dist = torch.nn.L1Loss()
+        if self.lambda_disc:
+            loss_G += self.lambda_disc * mse(self.disc_B(x_AB), 1)
+            loss_G += self.lambda_disc * mse(self.disc_A(x_BA), 1)
+        if self.lambda_x_id:
+            loss_G += self.lambda_x_id * dist(x_AA, x_A)
+            loss_G += self.lambda_x_id * dist(x_BB, x_B)
+        if self.lambda_z_id:
+            loss_G += self.lambda_z_id * dist(s_AB['common'],
+                                              z_AB['common'].detach())
+            loss_G += self.lambda_z_id * dist(s_AB['residual'],
+                                              z_AB['residual'])   # detached
+            loss_G += self.lambda_z_id * dist(s_AB['unique'],
+                                              z_AB['unique'])     # detached
+            loss_G += self.lambda_z_id * dist(s_BA['common'],
+                                              z_BA['common'].detach())
+            loss_G += self.lambda_z_id * dist(s_BA['residual'],
+                                              z_BA['residual'])   # detached
+            loss_G += self.lambda_z_id * dist(s_BA['unique'],
+                                              z_BA['unique'])     # detached
+        if self.lambda_const:
+            loss_G += self.lambda_const * dist(s_B['unique'],
+                                               self._z_constant(batch_size))
+        if self.lambda_cyc:
+            loss_G += self.lambda_cyc * dist(x_ABA, x_A)
+            loss_G += self.lambda_cyc * dist(x_BAB, x_B)
+        if self.lambda_mi:
+            loss_G += self.lambda_mi * self.mi_estimator.evaluate(a_A, b_A)
+            loss_G += self.lambda_mi * self.mi_estimator.evaluate(a_B, b_B)
+            loss_G += self.lambda_mi * self.mi_estimator.evaluate(a_AB, b_AB)
+            loss_G += self.lambda_mi * self.mi_estimator.evaluate(a_BA, b_BA)
+        
+        # Segment.
+        loss_segmentation = 0
+        if self.lambda_seg and mask is not None:
+            loss_segmentation = self.loss_segmentation(x_AM,
+                                                       mask[mask_indices])
+            loss_G += self.lambda_seg * loss_segmentation
+            if self.lambda_z_id:
+                loss_G += (  self.lambda_z_id
+                           * dist(s_AM['unique'], z_AM['unique'].detach()))
         
         # Compute generator gradients.
         if compute_grad:
             loss_G.backward()
+        if compute_grad and self.lambda_disc:
             self.disc_A.zero_grad()
             self.disc_B.zero_grad()
         
         # Discriminator losses.
-        loss_disc_A = (  mse(self.disc_A(x_A), 1)
-                       + mse(self.disc_A(x_BA.detach()), 0))
-        loss_disc_B = (  mse(self.disc_B(x_B), 1)
-                       + mse(self.disc_B(x_AB.detach()), 0))
-        if compute_grad:
+        loss_disc_A = loss_disc_B = 0
+        if self.lambda_disc:
+            loss_disc_A = (  mse(self.disc_A(x_A), 1)
+                           + mse(self.disc_A(x_BA.detach()), 0))
+            loss_disc_B = (  mse(self.disc_B(x_B), 1)
+                           + mse(self.disc_B(x_AB.detach()), 0))
+            loss_G += self.lambda_disc * (loss_disc_A+loss_disc_B)
+        if self.lambda_disc and compute_grad:
             loss_disc_A.backward()
             loss_disc_B.backward()
         
