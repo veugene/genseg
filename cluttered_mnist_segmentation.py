@@ -106,14 +106,14 @@ if __name__ == '__main__':
                              size=int(len(m)*labeled_fraction),
                              replace=False)
         # Prepare for pytorch.
-        h = Variable(torch.from_numpy(np.expand_dims(h, 1)))
         s = Variable(torch.from_numpy(np.expand_dims(s, 1)))
+        h = Variable(torch.from_numpy(np.expand_dims(h, 1)))
         m = Variable(torch.from_numpy(np.expand_dims(m, 1)))
         if not args.cpu:
-            h = h.cuda()
             s = s.cuda()
+            h = h.cuda()
             m = m.cuda()
-        return h, s, m, indices
+        return s, h, m, indices
     
     # Set up metrics.
     metrics = {'train': None, 'valid': None}
