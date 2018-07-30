@@ -146,6 +146,15 @@ if __name__ == '__main__':
                                         A, B, M, indices, compute_grad=False)
             metrics_dict = metrics['train'](outputs['x_AM'], M[indices])
         setattr(engine.state, 'metrics', metrics_dict)
+        
+        # Prepare images to save to disk.
+        out_keys = ('x_AB', 'x_BA', 'x_ABA', 'x_BAB', 'x_AM')
+        s, h, m, _ = zip(*batch)
+        images = (np.array(s), np.array(h), np.array(m))
+        images += tuple([np.squeeze(outputs[key].cpu().numpy(), 1)
+                         for key in out_keys])
+        setattr(engine.state, 'save_images', images)
+        
         return losses['seg'].item(), losses, metrics_dict
     
     # Get engines.
