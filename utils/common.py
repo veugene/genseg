@@ -2,6 +2,8 @@ import os
 import sys
 from datetime import datetime
 import imp
+import numpy as np
+import scipy.misc
 import torch
 from ignite.engine import (Events,
                            Engine)
@@ -199,4 +201,71 @@ class experiment(object):
         with open(os.path.join(path, "cmd.sh"), 'w') as f:
             f.write(' '.join(sys.argv))
         return path, experiment_id
+
+
+"""
+Save sets of 2D images to file.
+
+save_path : path to save the images to (a new folder is created on every call).
+name_images : the name of the attribute, in the Engine state, which contains
+    the tuple of image stacks to save.
+save_every : save images every `save_every` number of calls.
+score_function : a `scoring_function` that returns a score, given the Engine
+    state; save images only whenever a new max score is attained.
+"""
+# TODO: implement per epoch evaluation and saving.
+class image_saver(object):
+    def __init__(self, save_path, name_images, save_every=1,
+                 score_function=None):
+        self.save_path      = save_path
+        self.name_images    = name_images
+        self.save_every     = save_every
+        self.score_function = score_function
+        self._max_score     = -np.inf
+        self._call_counter  = 0
+
+    def __call__(self, engine):
+        self._call_counter += 1
+        if self._call_counter%self.save_every:
+            return
+        
+        # If tracking a score, only save whenever a max score is reached.
+        if self.score_function is not None:
+            score = float(self.score_function(engine))
+            if score > self._max_score:
+                self._max_score = score
+            else:
+                return
+        
+        # Get images to save.
+        images = getattr(engine.state, self.name_images)
+        if not isinstance(images, tuple):
+            raise ValueError("Images in `engine.state.{}` should be stored "
+                "as a tuple of image stacks.".format(self.name_images))
+        n_images = len(images[0])
+        shape = np.shape(images[0])
+        for stack in images:
+            if len(stack)!=n_images:
+                raise ValueError("Every stack of images in the "
+                    "`engine.state.{}` tuple must have the same length."
+                    "".format(self.name_images))
+            stack_shape = np.shape(stack)
+            if stack_shape!=shape:
+                raise ValueError("All images must have the same shape.")
+            if len(stack_shape)!=3:
+                raise ValueError("All image stacks must be 3-dimensional "
+                    "(stacks of 2D images).")
+        
+        
+        # Make sub-directory.
+        save_dir = os.path.join(self.save_path,
+                                "{}".format(self._call_counter))
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+        
+        # Concatenate images across sets and save to disk.
+        for i, im_set in enumerate(zip(*images)):
+            row = np.concatenate(im_set, axis=1)
+            im = scipy.misc.toimage(row, high=255., low=0.)
+            im.save(os.path.join(save_dir, "{}.jpg".format(i)))
 

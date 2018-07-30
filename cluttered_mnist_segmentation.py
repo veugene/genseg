@@ -20,7 +20,8 @@ from ignite.engine import (Events,
                            Engine)
 from ignite.handlers import ModelCheckpoint
 
-from utils.common import experiment
+from utils.common import (experiment,
+                          image_saver)
 from utils.ignite import (metrics_handler,
                           scoring_function)
 from utils.metrics import (dice_loss,
@@ -168,7 +169,15 @@ if __name__ == '__main__':
     # Set up validation.
     trainer.add_event_handler(Events.EPOCH_COMPLETED,
                               lambda _: evaluator.run(loader_valid))
-
+    
+    # Set up image saving.
+    image_saver_obj = image_saver(
+        save_path=os.path.join(experiment_state.experiment_path,
+                               "validation_outputs"),
+        name_images='save_images',
+        score_function=scoring_function('metrics', 'g_dice'))
+    evaluator.add_event_handler(Events.ITERATION_COMPLETED, image_saver_obj)
+    
     # Set up model checkpointing.
     score_function = scoring_function('metrics', 'g_dice')
     experiment_state.setup_checkpoints(trainer, evaluator,
