@@ -343,7 +343,8 @@ class decoder(nn.Module):
         for m, shape_in, shape_out in zip(self.blocks,
                                           self._conv_shapes[:-1],
                                           self._conv_shapes[1:]):
-            spatial_shape_in = tuple(shape_out[i]-shape_in[i]
+            spatial_shape_in = tuple(max(out.size(i+1),
+                                         shape_out[i]-shape_in[i])
                                      for i in range(1, self.ndim+1))
             if np.any(np.less_equal(spatial_shape_in, 0)):
                 spatial_shape_in = shape_in[1:]
