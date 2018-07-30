@@ -124,9 +124,6 @@ if __name__ == '__main__':
             ))
         metrics[key] = metrics_handler(metrics_dict)
     
-    ## TODO validation epoch length
-    #epoch_length = lambda ds, bs : len(ds)//bs + int(len(ds)%bs>0)
-    
     # Training loop.
     def training_function(engine, batch):
         experiment_state.model.train()
@@ -135,7 +132,8 @@ if __name__ == '__main__':
         losses, outputs = experiment_state.model.evaluate(A, B, M, indices,
                                                           compute_grad=True)
         experiment_state.optimizer.step()
-        metrics_dict = metrics['train'](outputs['x_AM'], M[indices])   
+        with torch.no_grad():
+            metrics_dict = metrics['train'](outputs['x_AM'], M[indices])
         setattr(engine.state, 'metrics', metrics_dict)
         return losses['seg'].item(), losses, metrics_dict
     
@@ -143,9 +141,10 @@ if __name__ == '__main__':
     def validation_function(engine, batch):
         experiment_state.model.eval()
         A, B, M, indices = prepare_batch(batch)
-        losses, outputs = experiment_state.model.evaluate(A, B, M, indices,
-                                                          compute_grad=False)
-        metrics_dict = metrics['train'](outputs['x_AM'], M)     
+        with torch.no_grad():
+            losses, outputs = experiment_state.model.evaluate(
+                                        A, B, M, indices, compute_grad=False)
+            metrics_dict = metrics['train'](outputs['x_AM'], M[indices])
         setattr(engine.state, 'metrics', metrics_dict)
         return losses['seg'].item(), losses, metrics_dict
     
