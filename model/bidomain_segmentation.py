@@ -29,18 +29,20 @@ def mse(prediction, target):
     if not hasattr(target, '__len__'):
         target = torch.ones_like(prediction)*target
         if prediction.is_cuda:
-            target = target.cuda(args.gpu_id)
+            target = target.cuda()
         target = Variable(target)
     return torch.nn.MSELoss()(prediction, target)
     
     
-class segmentation_model(object):
+class segmentation_model(torch.nn.Module):
     def __init__(self, f_factor, f_common, f_residual, f_unique,
                  g_common, g_residual, g_unique, g_output,
                  disc_A, disc_B, mutual_information, loss_segmentation,
-                 z_size=50, z_constant=0, lambda_disc=1, lambda_x_id=10,
+                 z_size=(50,), z_constant=0, lambda_disc=1, lambda_x_id=10,
                  lambda_z_id=1, lambda_const=1, lambda_cyc=0, lambda_mi=1,
-                 lambda_seg=1):
+                 lambda_seg=1, rng=None):
+        super(segmentation_model, self).__init__()
+        self.rng = rng if rng else np.random.RandomState()
         self.f_factor           = f_factor
         self.f_common           = f_common
         self.f_residual         = f_residual
@@ -52,6 +54,7 @@ class segmentation_model(object):
         self.disc_A             = disc_A
         self.disc_B             = disc_B
         self.mutual_information = mutual_information
+        self.mi_estimator       = mine(mutual_information, rng=self.rng)
         self.loss_segmentation  = loss_segmentation
         self.z_size             = z_size
         self.z_constant         = z_constant
@@ -62,13 +65,29 @@ class segmentation_model(object):
         self.lambda_cyc         = lambda_cyc
         self.lambda_mi          = lambda_mi
         self.lambda_seg         = lambda_seg
+        self.is_cuda            = False
         
-    def _z_constant(batch_size):
-        return Variable(torch.zeros((batch_size, 1, self.z_size),
-                                    dtype='float32'))
+    def _z_constant(self, batch_size):
+        ret = Variable(torch.zeros((batch_size,)+self.z_size,
+                                   dtype=torch.float32))
+        if self.is_cuda:
+            ret = ret.cuda()
+        return ret
     
-    def _z_sample(batch_size):
-        return Variable(torch.randn(batch_size, 1,self.z_size).type('float32'))
+    def _z_sample(self, batch_size):
+        ret = Variable(torch.randn((batch_size,)
+                                    +self.z_size).type(torch.float32))
+        if self.is_cuda:
+            ret = ret.cuda()
+        return ret
+    
+    def cuda(self, *args, **kwargs):
+        self.is_cuda = True
+        super(segmentation_model, self).cuda(*args, **kwargs)
+        
+    def cpu(self, *args, **kwargs):
+        self.is_cuda = False
+        super(segmentation_model, self).cpu(*args, **kwargs)
         
     def encode(self, x):
         z_a, z_b = self.f_factor(x)
@@ -80,15 +99,16 @@ class segmentation_model(object):
              'unique'  : z_unique}
         return z, z_a, z_b
         
-    def decode(self, z_common, z_residual, z_unique):
-        out = self.g_output(self.g_common(z_common),
-                            self.g_residual(z_residual),
-                            self.g_unique(z_unique))
+    def decode(self, common, residual, unique):
+        out = self.g_output(self.g_common(common),
+                            self.g_residual(residual),
+                            self.g_unique(unique))
+        out = torch.sigmoid(out)
         return out
     
     def translate_AB(self, x_A):
         batch_size = len(x_A)
-        s_A = self.encode(x_A)
+        s_A, _, _ = self.encode(x_A)
         z_A = {'common'  : s_A['common'],
                'residual': self._z_sample(batch_size),
                'unique'  : self._z_constant(batch_size)}
@@ -97,7 +117,7 @@ class segmentation_model(object):
     
     def translate_BA(self, x_B):
         batch_size = len(x_B)
-        s_B = self.encode(x_B)
+        s_B, _, _ = self.encode(x_B)
         z_B = {'common'  : s_B['common'],
                'residual': self._z_sample(batch_size),
                'unique'  : self._z_sample(batch_size)}
@@ -105,15 +125,21 @@ class segmentation_model(object):
         return x_BA
     
     def segment(self, x_A):
-        batch_size = len(x_B)
-        s_A = self.encode(x_A)
+        batch_size = len(x_A)
+        s_A, _, _ = self.encode(x_A)
         z_AM = {'common'  : self._z_constant(batch_size),
                 'residual': self._z_constant(batch_size),
                 'unique'  : s_A['unique']}
         x_AM = self.decode(**z_AM)
         return x_AM
-            
-    def update(self, x_A, x_B, mask=None):
+    
+    def evaluate(self, x_A, x_B, mask=None, mask_indices=None,
+                 compute_grad=False):
+        with torch.set_grad_enabled(compute_grad):
+            return self._evaluate(x_A, x_B, mask, mask_indices, compute_grad)
+    
+    def _evaluate(self, x_A, x_B, mask=None, mask_indices=None,
+                  compute_grad=False):
         assert len(x_A)==len(x_B)
         batch_size = len(x_A)
         
@@ -156,7 +182,7 @@ class segmentation_model(object):
         x_BAB = self.decode(**z_BAB)
         
         # Generator losses.
-        dist = torch.nn.L1Loss
+        dist = torch.nn.L1Loss()
         loss_discr_AB  = mse(self.disc_B(x_AB), 1)
         loss_discr_BA  = mse(self.disc_A(x_BA), 1)
         loss_recon_AA  = dist(x_AA, x_A)
@@ -176,10 +202,10 @@ class segmentation_model(object):
         loss_const_zB  = dist(s_B['unique'], self._z_constant(batch_size))
         loss_cycle_ABA = dist(x_ABA, x_A)
         loss_cycle_BAB = dist(x_BAB, x_B)
-        loss_MI_A      = self.mutual_information.evaluate(a_A, b_A)
-        loss_MI_B      = self.mutual_information.evaluate(a_B, b_B)
-        loss_MI_AB     = self.mutual_information.evaluate(a_AB, b_AB)
-        loss_MI_BA     = self.mutual_information.evaluate(a_BA, b_BA)
+        loss_MI_A      = self.mi_estimator.evaluate(a_A, b_A)
+        loss_MI_B      = self.mi_estimator.evaluate(a_B, b_B)
+        loss_MI_AB     = self.mi_estimator.evaluate(a_AB, b_AB)
+        loss_MI_BA     = self.mi_estimator.evaluate(a_BA, b_BA)
         
         # Total generator loss (before segmentation).
         loss_G = (  self.lambda_disc  * (loss_discr_AB+loss_discr_BA)
@@ -192,29 +218,48 @@ class segmentation_model(object):
                                          +loss_MI_AB+loss_MI_BA))
         
         # Segment.
+        x_AM = None
+        loss_segmentation = 0
         if mask is not None:
-            z_AM = {'common'  : self._z_constant(batch_size),
-                    'residual': self._z_constant(batch_size),
-                    'unique'  : s_A['unique']}
+            if mask_indices is None:
+                mask_indices = list(range(len(mask)))
+            num_masks = len(mask_indices)
+            z_AM = {'common'  : self._z_constant(num_masks),
+                    'residual': self._z_constant(num_masks),
+                    'unique'  : s_A['unique'][mask_indices]}
             x_AM = self.decode(**z_AM)
             s_AM, a_AM, b_AM = self.encode(x_AM)
             loss_recon_zAM = dist(s_AM['unique'], z_AM['unique'].detach())
-            loss_segmentation = self.loss_segmentation(x_AM, mask)
-            loss_G += (  self.lambda_seg  * loss_segmentation
-                       + self.lambda_z_id * loss_recon_zAM)
+            loss_segmentation = self.loss_segmentation(x_AM,mask[mask_indices])
+            loss_G += ( self.lambda_seg  * loss_segmentation
+                       +self.lambda_z_id * loss_recon_zAM)
         
         # Compute generator gradients.
-        loss_G.backward()
-        self.disc_A.zero_grad()
-        self.disc_B.zero_grad()
+        if compute_grad:
+            loss_G.backward()
+            self.disc_A.zero_grad()
+            self.disc_B.zero_grad()
         
         # Discriminator losses.
         loss_disc_A = (  mse(self.disc_A(x_A), 1)
                        + mse(self.disc_A(x_BA.detach()), 0))
         loss_disc_B = (  mse(self.disc_B(x_B), 1)
                        + mse(self.disc_B(x_AB.detach()), 0))
-        loss_disc_A.backward()
-        loss_disc_B.backward()
+        if compute_grad:
+            loss_disc_A.backward()
+            loss_disc_B.backward()
+        
+        # Compile outputs and return.
+        losses  = {'seg'   : loss_segmentation,
+                   'disc_A': loss_disc_A,
+                   'disc_B': loss_disc_B,
+                   'loss_G': loss_G}
+        outputs = {'x_AB'  : x_AB,
+                   'x_BA'  : x_BA,
+                   'x_ABA' : x_ABA,
+                   'x_BAB' : x_BAB,
+                   'x_AM'  : x_AM}
+        return losses, outputs
 
 
 def _run_mine():
@@ -257,9 +302,11 @@ def _run_mine():
             self.n_hidden = n_hidden
             modules = []
             modules.append(nn.Linear(size*2, self.n_hidden))
+            #modules.append(nn.SpectralNorm())
             modules.append(nn.ReLU())
-            for i in range(2):
+            for i in range(0):
                 modules.append(nn.Linear(self.n_hidden, self.n_hidden))
+                #modules.append(nn.SpectralNorm())
                 modules.append(nn.ReLU())
             modules.append(nn.Linear(self.n_hidden, 1))
             self.model = nn.Sequential(*tuple(modules))
@@ -271,12 +318,19 @@ def _run_mine():
     mi_estimator = mine(mi_estimation_network(n_hidden=n_hidden))
     model = mi_estimator.estimation_network
     
+    #def init_orthogonal(m):
+        #if isinstance(m, nn.Linear):
+            #torch.nn.init.orthogonal_(m.weight)
+    #model.apply(init_orthogonal)
+    
     # Train
     optimizer = torch.optim.Adam(params=model.parameters(),
                                  lr=0.001,
                                  eps=1e-7,
                                  weight_decay=0.01,
                                  amsgrad=True)
+    #optimizer = torch.optim.SGD(params=model.parameters(),
+                                #lr=0.01)
     lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, 0.999)
     model.cuda()
     model.train()
@@ -293,6 +347,7 @@ def _run_mine():
         z = torch.from_numpy(z.astype(np.float32)).cuda()
         z_marginal = torch.from_numpy(z_marginal.astype(np.float32)).cuda()
         loss = mi_estimator.evaluate(x, z, z_marginal)
+                
         loss.backward()
         norm = nn.utils.clip_grad_norm_(model.parameters(), max_norm=1)
         optimizer.step()
