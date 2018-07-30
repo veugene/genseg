@@ -148,7 +148,7 @@ class segmentation_model(torch.nn.Module):
         if (   self.lambda_disc
             or self.lambda_x_id
             or self.lambda_z_id
-            or self.lambda_z_const
+            or self.lambda_const
             or self.lambda_cyc
             or self.lambda_mi):
                 s_B, a_B, b_B = self.encode(x_B)

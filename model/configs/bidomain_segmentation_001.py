@@ -2,8 +2,11 @@ import torch
 from torch import nn
 import numpy as np
 from fcn_maker.blocks import (basic_block,
+                              tiny_block,
+                              convolution,
                               batch_normalization,
-                              get_initializer)
+                              get_initializer,
+                              get_nonlinearity)
 from fcn_maker.loss import dice_loss
 from model.common import (encoder,
                           decoder)
@@ -21,13 +24,13 @@ def build_model():
         #'lambda_mi'         :1,
         #'lambda_seg'        :1}
     lambdas = {
-        'lambda_disc'       :0,
-        'lambda_x_id'       :0,
-        'lambda_z_id'       :0,
-        'lambda_const'      :0,
-        'lambda_cyc'        :0,
-        'lambda_mi'         :0,
-        'lambda_seg'        :1}
+        'lambda_disc'       : .1,
+        'lambda_x_id'       : .1,
+        'lambda_z_id'       : .1,
+        'lambda_const'      : 0,
+        'lambda_cyc'        : .1,
+        'lambda_mi'         : 0,
+        'lambda_seg'        : 1}
     
     encoder_kwargs = {
         'input_shape'       : (1, 100, 100),
@@ -74,6 +77,21 @@ def build_model():
         'nonlinearity'      : 'ReLU',
         'ndim'              : 2}
     
+    discriminator_kwargs = {
+        'input_shape'       : (1, 100, 100),
+        'num_conv_blocks'   : 4,
+        'block_type'        : tiny_block,
+        'num_channels_list' : [20, 20, 40, 80],
+        'skip'              : True,
+        'dropout'           : 0.,
+        'normalization'     : None,
+        'norm_kwargs'       : None,
+        'conv_padding'      : True,
+        'vector_out'        : False,
+        'init'              : 'kaiming_normal_',
+        'nonlinearity'      : 'ReLU',
+        'ndim'              : 2}
+    
     class conv_stack(nn.Module):
         def __init__(self, in_channels, out_channels, num_blocks, block_type,
                      skip=True, dropout=0., normalization=batch_normalization,
@@ -110,6 +128,25 @@ def build_model():
             self.blocks = nn.Sequential(*tuple(blocks))
         def forward(self, x):
             return self.blocks(x)
+        
+        
+    class patch_discriminator(nn.Module):
+        def __init__(self, *args, **kwargs):
+            super(patch_discriminator, self).__init__()
+            self.encoder = encoder(*args, **kwargs)
+            self.nlin = get_nonlinearity(self.encoder.nonlinearity)
+            self.final_conv = convolution(
+                in_channels=self.encoder.out_channels,
+                out_channels=1,
+                kernel_size=1,
+                init=self.encoder.init)
+            
+        def forward(self, x):
+            out = self.encoder(x)
+            out = self.nlin(out)
+            out = self.final_conv(out)
+            return out
+    
     
     class mi_estimation_network(nn.Module):
         def __init__(self, x_size, z_size, n_hidden):
@@ -154,8 +191,8 @@ def build_model():
         'g_residual'        : conv_stack(**conv_stack_kwargs),
         'g_unique'          : conv_stack(**conv_stack_kwargs),
         'g_output'          : decoder(**decoder_kwargs),
-        'disc_A'            : encoder(**encoder_kwargs),
-        'disc_B'            : encoder(**encoder_kwargs),
+        'disc_A'            : patch_discriminator(**discriminator_kwargs),
+        'disc_B'            : patch_discriminator(**discriminator_kwargs),
         'mutual_information': mi_estimation_network(x_size=vector_size,
                                                     z_size=vector_size,
                                                     n_hidden=100)}

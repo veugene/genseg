@@ -136,7 +136,7 @@ if __name__ == '__main__':
         with torch.no_grad():
             metrics_dict = metrics['train'](outputs['x_AM'], M[indices])
         setattr(engine.state, 'metrics', metrics_dict)
-        return losses['seg'].item(), losses, metrics_dict
+        return losses['loss_G'].item(), losses, metrics_dict
     
     # Validation loop.
     def validation_function(engine, batch):
@@ -156,7 +156,7 @@ if __name__ == '__main__':
                          for key in out_keys if outputs[key] is not None])
         setattr(engine.state, 'save_images', images)
         
-        return losses['seg'].item(), losses, metrics_dict
+        return losses['loss_G'].item(), losses, metrics_dict
     
     # Get engines.
     append = bool(args.resume_from is not None)
