@@ -217,7 +217,7 @@ class setup_mnist_data(object):
         add_clutter(clutter, num=self.n_clutter)
         
         # Create segmentation mask for x.
-        mask = np.zeros_like(x_out, dtype=np.float32)
+        mask = np.zeros_like(x_out, dtype=np.int64)
         mask[x_crop_indices][x>0.5] = 1
         
         return (x_out, clutter, mask, y)
