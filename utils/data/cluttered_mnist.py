@@ -196,13 +196,13 @@ class setup_mnist_data(object):
             for idx in self.rng.randint(idx_max, size=num):
                 crop_target = random_crop(self.size_output, self.size_clutter)
                 crop_source = random_crop(28,               self.size_clutter)
-                image[crop_target] += self._x[fold][idx][crop_source]
-            image_oversaturated = image>1
-            n_oversaturated = np.count_nonzero(image_oversaturated)
-            image[image_oversaturated] = \
-                                      0.33*self.rng.randn(n_oversaturated)+0.7
-            image[image>1] = 1
-            image[image<0] = 0
+                cropped     = self._x[fold][idx][crop_source]
+                s = (cropped+image[crop_target])>1  # Oversaturated here.
+                m = cropped>0                       # Clutter is here.
+                m[s] = 0            # Treat oversaturated region separately.
+                image[crop_target][m] = cropped[m]
+                image[crop_target][s] = np.maximum(image[crop_target][s],
+                                                   cropped[s])
         
         # Generate output with clutter.
         x_crop_indices = random_crop(self.size_output, 28)
