@@ -176,13 +176,17 @@ class setup_mnist_data(object):
             print(msg) 
         
     def _generate_cluttered_sample(self, fold):
+        # The background is noisy.
+        def background():
+            return 0.01*self.rng.randn(self.size_output,
+                                       self.size_output).astype(np.float32)
+        
         # Randomly sample a data point.
         idx_max = len(self._x[fold])
         idx_sample = self.rng.randint(idx_max)
         x = self._x[fold][idx_sample]
         y = self._y[fold][idx_sample]
-        x_out = np.zeros((self.size_output, self.size_output),
-                         dtype=np.float32)
+        x_out = background()
         
         # Helper function to get slices for both dimensions of square crop.
         def random_crop(idx_max, width):
@@ -213,7 +217,7 @@ class setup_mnist_data(object):
         add_clutter(x_out, num=n_clutter_foreground)
         
         # Generate clutter images without x.
-        clutter = np.zeros_like(x_out, dtype=np.float32)
+        clutter = background()
         add_clutter(clutter, num=self.n_clutter)
         
         # Create segmentation mask for x.
