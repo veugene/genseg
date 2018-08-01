@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+from torch import nn
 from torch.autograd import Variable
 
 
@@ -31,16 +32,16 @@ def mse(prediction, target):
         if prediction.is_cuda:
             target = target.cuda()
         target = Variable(target)
-    return torch.nn.MSELoss()(prediction, target)
+    return nn.MSELoss()(prediction, target)
     
     
-class segmentation_model(torch.nn.Module):
+class segmentation_model(nn.Module):
     def __init__(self, f_factor, f_common, f_residual, f_unique,
                  g_common, g_residual, g_unique, g_output,
                  disc_A, disc_B, mutual_information, loss_segmentation,
                  z_size=(50,), z_constant=0, lambda_disc=1, lambda_x_id=10,
                  lambda_z_id=1, lambda_const=1, lambda_cyc=0, lambda_mi=1,
-                 lambda_seg=1, rng=None):
+                 lambda_mi=1, lambda_seg=1, disc_clip_norm=1., rng=None):
         super(segmentation_model, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.f_factor           = f_factor
@@ -268,6 +269,11 @@ class segmentation_model(torch.nn.Module):
         if self.lambda_disc and compute_grad:
             loss_disc_A.backward()
             loss_disc_B.backward()
+            if self.disc_clip_norm:
+                nn.utils.clip_grad_norm_(self.disc_A.parameters(),
+                                         max_norm=self.disc_clip_norm)
+                nn.utils.clip_grad_norm_(self.disc_B.parameters(),
+                                         max_norm=self.disc_clip_norm)
         
         # Compile outputs and return.
         losses  = {'seg'   : loss_segmentation,
