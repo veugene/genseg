@@ -60,7 +60,6 @@ def get_parser():
     parser.add_argument('--n_clutter', type=int, default=8)
     parser.add_argument('--size_clutter', type=int, default=10)
     parser.add_argument('--size_output', type=int, default=100)
-    parser.add_argument('--frac_clutter_foreground', type=float, default=0.)
     parser.add_argument('--n_valid', type=int, default=500)
     parser.add_argument('--n_test', type=int, default=500)
     parser.add_argument('--cpu', default=False, action='store_true')
@@ -90,7 +89,6 @@ if __name__ == '__main__':
         n_clutter=args.n_clutter,
         size_clutter=args.size_clutter,
         size_output=args.size_output,
-        frac_clutter_foreground=args.frac_clutter_foreground,
         verbose=True,
         rng=rng)
     loader_train = autorewind(partial(data.gen_train,

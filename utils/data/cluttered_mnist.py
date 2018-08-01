@@ -7,8 +7,7 @@ import codecs
 
 class setup_mnist_data(object):
     """
-    Generates cluttered MNIST data with `frac_clutter_foreground` clutter in 
-    the foreground and the rest in the background. Each image has one complete
+    Generates cluttered MNIST data with clutter. Each image has one complete
     digit. The source data is downloaded, as needed.
     
     Prior to generating data, the source data is split into training,
@@ -22,8 +21,6 @@ class setup_mnist_data(object):
     n_clutter : number of distractors, forming clutter
     size_clutter : the size of each distractor (a square cropped from an image)
     size_output : the size of each output image (square)
-    frac_clutter_foreground : the fraction in [0, 1] of the clutter to place
-        in the foreground; the rest is put behind the main digit
     verbose : whether to print messages to stdout when getting source data
         for the first time
     rng : optional numpy random number generator
@@ -41,15 +38,14 @@ class setup_mnist_data(object):
     ]
     
     def __init__(self, data_dir, n_valid, n_test,
-                 n_clutter=8, size_clutter=8, size_output=100,
-                 frac_clutter_foreground=0.5, verbose=False, rng=None):
+                 n_clutter=8, size_clutter=8, size_output=100, verbose=False,
+                 rng=None):
         self.data_dir = data_dir
         self.n_valid = n_valid
         self.n_test = n_test
         self.n_clutter = n_clutter
         self.size_clutter = size_clutter
         self.size_output = size_output
-        self.frac_clutter_foreground = frac_clutter_foreground
         self.verbose = verbose
         self.rng = rng if rng is not None else np.random.RandomState()
         
@@ -208,13 +204,10 @@ class setup_mnist_data(object):
             image[image>1] = 1
             image[image<0] = 0
         
-        # Generate output with clutter in the background and foreground.
+        # Generate output with clutter.
         x_crop_indices = random_crop(self.size_output, 28)
-        n_clutter_background = int(self.n_clutter*self.frac_clutter_foreground)
-        n_clutter_foreground = self.n_clutter-n_clutter_background
-        add_clutter(x_out, num=n_clutter_background)
         x_out[x_crop_indices][x>0] = x[x>0]
-        add_clutter(x_out, num=n_clutter_foreground)
+        add_clutter(x_out, num=self.n_clutter)
         
         # Generate clutter images without x.
         clutter = background()
@@ -269,7 +262,6 @@ if __name__=='__main__':
                                   n_clutter=8,
                                   size_clutter=10,
                                   size_output=100,
-                                  frac_clutter_foreground=0.,
                                   verbose=True,
                                   rng=np.random.RandomState(1234))
     
