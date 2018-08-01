@@ -4,17 +4,19 @@ import numpy as np
 from fcn_maker.blocks import (basic_block,
                               tiny_block,
                               convolution,
-                              batch_normalization,
                               get_initializer,
                               get_nonlinearity)
 from fcn_maker.loss import dice_loss
 from model.common import (encoder,
-                          decoder)
+                          decoder,
+                          instance_normalization)
 from model.bidomain_segmentation import (segmentation_model,
                                          mine)
 
 
 def build_model():
+    image_size = (1, 100, 100)
+    bottleneck_size = (50, 7, 7)
     #lambdas = {
         #'lambda_disc'       :1,
         #'lambda_x_id'       :10,
@@ -33,13 +35,13 @@ def build_model():
         'lambda_seg'        : 1}
     
     encoder_kwargs = {
-        'input_shape'       : (1, 100, 100),
+        'input_shape'       : image_size,
         'num_conv_blocks'   : 5,
         'block_type'        : basic_block,
         'num_channels_list' : [20, 20, 30, 50, 100],
         'skip'              : True,
         'dropout'           : 0.,
-        'normalization'     : batch_normalization,
+        'normalization'     : instance_normalization,
         'norm_kwargs'       : None,
         'conv_padding'      : True,
         'vector_out'        : False,
@@ -48,14 +50,15 @@ def build_model():
         'ndim'              : 2}
     
     decoder_kwargs = {
-        'input_shape'       : (50, 7, 7),
-        'output_shape'      : (1, 100, 100),
+        'input_shape'       : (150,)+bottleneck_size[1:],
+        'output_shape'      : image_size,
         'num_conv_blocks'   : 5,
         'block_type'        : basic_block,
         'num_channels_list' : [50, 50, 30, 20, 1],
+        'num_classes'       : 1,
         'skip'              : True,
         'dropout'           : 0.,
-        'normalization'     : batch_normalization,
+        'normalization'     : instance_normalization,
         'norm_kwargs'       : None,
         'conv_padding'      : True,
         'vector_in'         : False,
@@ -70,7 +73,7 @@ def build_model():
         'block_type'        : basic_block,
         'skip'              : True,
         'dropout'           : 0.,
-        'normalization'     : batch_normalization,
+        'normalization'     : instance_normalization,
         'norm_kwargs'       : None,
         'conv_padding'      : True,
         'init'              : 'kaiming_normal_',
@@ -78,11 +81,11 @@ def build_model():
         'ndim'              : 2}
     
     discriminator_kwargs = {
-        'input_shape'       : (1, 100, 100),
+        'input_shape'       : image_size,
         'num_conv_blocks'   : 4,
         'block_type'        : tiny_block,
         'num_channels_list' : [20, 20, 40, 80],
-        'skip'              : True,
+        'skip'              : False,
         'dropout'           : 0.,
         'normalization'     : None,
         'norm_kwargs'       : None,
@@ -94,9 +97,10 @@ def build_model():
     
     class conv_stack(nn.Module):
         def __init__(self, in_channels, out_channels, num_blocks, block_type,
-                     skip=True, dropout=0., normalization=batch_normalization,
-                     norm_kwargs=None, conv_padding=True,
-                     init='kaiming_normal_', nonlinearity='ReLU', ndim=2):
+                     skip=True, dropout=0.,
+                     normalization=instance_normalization, norm_kwargs=None,
+                     conv_padding=True, init='kaiming_normal_', 
+                     nonlinearity='ReLU', ndim=2):
             super(conv_stack, self).__init__()
             self.in_channels   = in_channels
             self.out_channels  = out_channels
@@ -180,7 +184,6 @@ def build_model():
                 b = b.contiguous()
             return a, b
     
-    bottleneck_size = (50, 7, 7)
     vector_size = np.product(bottleneck_size)
     submodel = {
         'f_factor'          : f_factor(**encoder_kwargs),
@@ -201,6 +204,7 @@ def build_model():
                                loss_segmentation=dice_loss(),
                                z_size=bottleneck_size,
                                z_constant=0,
-                               **lambdas)
+                               **lambdas,
+                               disc_clip_norm=0.01)
     
     return model

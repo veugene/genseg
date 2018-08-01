@@ -137,7 +137,7 @@ Helper to build a norm -> ReLU -> fully-connected.
 """
 class norm_nlin_fc(torch.nn.Module):
     def __init__(self, in_features, out_features, nonlinearity='ReLU',
-                 normalization=batch_normalization, norm_kwargs=None,
+                 normalization=instance_normalization, norm_kwargs=None,
                  init='kaiming_normal_'):
         super(norm_nlin_fc, self).__init__()
         if norm_kwargs is None:
@@ -170,7 +170,7 @@ class norm_nlin_fc(torch.nn.Module):
 class encoder(nn.Module):
     def __init__(self, input_shape, num_conv_blocks, block_type,
                  num_channels_list, skip=True, dropout=0.,
-                 normalization=batch_normalization, norm_kwargs=None,
+                 normalization=instance_normalization, norm_kwargs=None,
                  conv_padding=True, vector_out=False, init='kaiming_normal_',
                  nonlinearity='ReLU', ndim=2):
         super(encoder, self).__init__()
@@ -181,7 +181,6 @@ class encoder(nn.Module):
         
         # num_channels should be specified once for every block.
         if len(num_channels_list)!=num_conv_blocks+int(vector_out==True):
-            print(len(num_channels_list), num_conv_blocks, vector_out)
             raise ValueError("`num_channels_list` must have the same number "
                              "of entries as there are blocks "
                              "(+1 if `vector_out==True`).")
@@ -251,8 +250,8 @@ class encoder(nn.Module):
 
 class decoder(nn.Module):
     def __init__(self, input_shape, output_shape, num_conv_blocks, block_type,
-                 num_channels_list, skip=True, dropout=0.,
-                 normalization=batch_normalization, norm_kwargs=None,
+                 num_channels_list, num_classes=None, skip=True, dropout=0.,
+                 normalization=instance_normalization, norm_kwargs=None,
                  conv_padding=True, vector_in=False, upsample_mode='conv',
                  init='kaiming_normal_', nonlinearity='ReLU', ndim=2):
         super(decoder, self).__init__()
@@ -272,6 +271,7 @@ class decoder(nn.Module):
         self.num_conv_blocks = num_conv_blocks
         self.block_type = block_type
         self.num_channels_list = num_channels_list
+        self.num_classes = num_classes
         self.skip = skip
         self.dropout = dropout
         self.normalization = normalization
@@ -332,10 +332,19 @@ class decoder(nn.Module):
             self.blocks.append(block)
             shape = get_output_shape(block, shape)
             last_channels = self.num_channels_list[-i]
+            
+        '''
+        Set up linear classifier.
+        '''
+        if num_classes is not None:
+            self.classifier = convolution(in_channels=last_channels,
+                                          out_channels=self.num_classes,
+                                          kernel_size=1,
+                                          ndim=self.ndim)
         
-    def forward(self, common, residual, unique):
-        #inp = torch.cat([common, residual, unique], dim=1)
-        inp = sum([common, residual, unique])
+    def forward(self, common, residual, unique, segment=False):
+        inp = torch.cat([common, residual, unique], dim=1)
+        #inp = sum([common, residual, unique])
         out = inp
         if self.vector_in:
             out = self.fc(out)
@@ -355,6 +364,15 @@ class decoder(nn.Module):
             out = adjust_to_size(out, shape_out[1:])
             if not out.is_contiguous():
                 out = out.contiguous()
+        if segment:
+            if self.num_classes is None:
+                raise ValueError("Cannot segment when `num_classes` is "
+                                 "set to None.")
+            out = self.classifier(out)
+            if self.num_classes==1:
+                out = torch.sigmoid(out)
+            else:
+                out = torch.softmax(out, dim=1)
         return out
     
     
@@ -398,7 +416,7 @@ if __name__=='__main__':
                     num_channels_list=[10, 20, 30, 40, 50, 60, vector_len],
                     skip=True,
                     dropout=0.,
-                    normalization=batch_normalization,
+                    normalization=instance_normalization,
                     norm_kwargs=None,
                     conv_padding=True,
                     vector_out=True,
@@ -422,7 +440,7 @@ if __name__=='__main__':
                     num_channels_list=[60, 50, 40, 30, 20, 10, 3],
                     skip=True,
                     dropout=0.,
-                    normalization=batch_normalization,
+                    normalization=instance_normalization,
                     norm_kwargs=None,
                     conv_padding=True,
                     vector_in=True,

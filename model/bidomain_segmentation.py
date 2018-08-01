@@ -104,11 +104,11 @@ class segmentation_model(nn.Module):
              'unique'  : z_unique}
         return z, z_a, z_b
         
-    def decode(self, common, residual, unique):
+    def decode(self, common, residual, unique, segment=False):
         out = self.g_output(self.g_common(common),
                             self.g_residual(residual),
-                            self.g_unique(unique))
-        out = torch.sigmoid(out)
+                            self.g_unique(unique),
+                            segment=segment)
         return out
     
     def translate_AB(self, x_A):
@@ -135,7 +135,7 @@ class segmentation_model(nn.Module):
         z_AM = {'common'  : self._z_constant(batch_size),
                 'residual': self._z_constant(batch_size),
                 'unique'  : s_A['unique']}
-        x_AM = self.decode(**z_AM)
+        x_AM = self.decode(**z_AM, segment=True)
         return x_AM
     
     def evaluate(self, x_A, x_B, mask=None, mask_indices=None,
