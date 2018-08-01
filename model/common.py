@@ -39,7 +39,7 @@ def get_output_shape(layer, input_shape):
     def compute_pool_out_shape(input_shape, padding, stride=2):
         input_spatial_shape_padded = ( np.array(input_shape)[1:]
                                       +2*np.array(padding))
-        out_shape = ( input_spatial_shape_padded//stride,
+        out_shape = ( input_spatial_shape_padded//stride
                      +input_spatial_shape_padded%stride)
         out_shape = (input_shape[0],)+tuple(out_shape)
         return out_shape
@@ -91,6 +91,7 @@ def get_output_shape(layer, input_shape):
                                                padding=0,
                                                stride=2)
         out_shape = compute_conv_out_shape(input_shape=out_shape,
+                                           out_channels=layer.out_channels,
                                            padding=int(layer.conv_padding),
                                            kernel_size=3,
                                            stride=2 if layer.subsample else 1)
