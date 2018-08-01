@@ -56,7 +56,7 @@ def get_parser():
     parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument('--learning_rate', type=float, default=0.001)
     parser.add_argument('--optimizer', type=str, default='amsgrad',
-                        choices=['adam', 'amsgrad', 'rmsprop'])
+                        choices=['adam', 'amsgrad', 'rmsprop', 'sgd'])
     parser.add_argument('--n_clutter', type=int, default=8)
     parser.add_argument('--size_clutter', type=int, default=10)
     parser.add_argument('--size_output', type=int, default=100)

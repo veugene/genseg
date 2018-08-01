@@ -153,12 +153,14 @@ class experiment(object):
                   'weight_decay' : weight_decay}
         optimizer = None
         if name=='adam':
-            optimizer = torch.optim.Adam(betas=(0.9,0.999), **kwargs)
+            optimizer = torch.optim.Adam(betas=(0.5,0.999), **kwargs)
         elif name=='amsgrad':
-            optimizer = torch.optim.Adam(betas=(0.9,0.999), amsgrad=True,
+            optimizer = torch.optim.Adam(betas=(0.5,0.999), amsgrad=True,
                                          **kwargs)
         elif name=='rmsprop':
-            optimizer = torch.optim.RMSprop(alpha=0.9, **kwargs)
+            optimizer = torch.optim.RMSprop(alpha=0.5, **kwargs)
+        elif name=='sgd':
+            optimizer = torch.optim.SGD(**kwargs)
         else:
             raise NotImplemented("Optimizer {} not supported."
                                 "".format(args.optimizer))
