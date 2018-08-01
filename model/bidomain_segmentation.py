@@ -24,6 +24,10 @@ class mine(object):
         lower_bound = (  torch.mean(joint)
                        - torch.log(torch.mean(torch.exp(marginal))))
         return -lower_bound
+
+
+def dist_ratio_mse_abs(x, y, eps=1e-7):
+    return torch.mean((x-y)**2) / (torch.mean(torch.abs(x-y))+eps)
     
     
 def mse(prediction, target):
@@ -209,7 +213,7 @@ class segmentation_model(nn.Module):
         
         # Generator losses.
         loss_G = 0
-        dist = torch.nn.L1Loss()
+        def dist(x, y): return torch.mean(torch.abs(x-y))
         if self.lambda_disc:
             loss_G += self.lambda_disc * mse(self.disc_B(x_AB), 1)
             loss_G += self.lambda_disc * mse(self.disc_A(x_BA), 1)
