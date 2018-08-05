@@ -405,6 +405,19 @@ class mlp(nn.Module):
         return self.model(x)
     
     
+def dist_ratio_mse_abs(x, y, eps=1e-7):
+    return torch.mean((x-y)**2) / (torch.mean(torch.abs(x-y))+eps)
+    
+    
+def mse(prediction, target):
+    if not hasattr(target, '__len__'):
+        target = torch.ones_like(prediction)*target
+        if prediction.is_cuda:
+            target = target.cuda()
+        target = Variable(target)
+    return nn.MSELoss()(prediction, target)
+    
+    
 if __name__=='__main__':
     image_shape = (3, 256, 171, 91)
     vector_len = 50

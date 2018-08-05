@@ -2,21 +2,10 @@ import numpy as np
 import torch
 from torch import nn
 from torch.autograd import Variable
+from .common import (dist_ratio_mse_abs,
+                     mse)
 
 
-def dist_ratio_mse_abs(x, y, eps=1e-7):
-    return torch.mean((x-y)**2) / (torch.mean(torch.abs(x-y))+eps)
-    
-    
-def mse(prediction, target):
-    if not hasattr(target, '__len__'):
-        target = torch.ones_like(prediction)*target
-        if prediction.is_cuda:
-            target = target.cuda()
-        target = Variable(target)
-    return nn.MSELoss()(prediction, target)
-    
-    
 class segmentation_model(nn.Module):
     def __init__(self, f_factor, f_common, f_residual, f_unique,
                  g_common, g_residual, g_unique, g_output,
@@ -48,6 +37,7 @@ class segmentation_model(nn.Module):
         self.lambda_cyc         = lambda_cyc
         self.lambda_mi          = lambda_mi
         self.lambda_seg         = lambda_seg
+        self.disc_clip_norm     = disc_clip_norm
         self.is_cuda            = False
         
     def _z_constant(self, batch_size):
