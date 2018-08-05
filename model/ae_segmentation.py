@@ -10,7 +10,7 @@ from .common import (dist_ratio_mse_abs,
 
 class segmentation_model(nn.Module):
     def __init__(self, encoder, decoder_rec, decoder_seg=None, loss_rec=mae,
-                 loss_seg=dice_loss(), lambda_seg=1, rng=None):
+                 loss_seg=dice_loss(), lambda_rec=1., lambda_seg=1., rng=None):
         super(segmentation_model, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.encoder        = encoder
@@ -18,6 +18,7 @@ class segmentation_model(nn.Module):
         self.decoder_seg    = decoder_seg
         self.loss_rec       = loss_rec
         self.loss_seg       = loss_seg
+        self.lambda_rec     = lambda_rec
         self.lambda_seg     = lambda_seg
         self.is_cuda        = False
     
@@ -41,24 +42,29 @@ class segmentation_model(nn.Module):
             return self._evaluate(x, mask, mask_indices, compute_grad)
     
     def _evaluate(self, x, mask=None, mask_indices=None, compute_grad=False):
-        # Encode, segment (if applicable), and decode.
+        loss_reconstruction = 0
+        loss_segmentation   = 0
+        
         code  = self.encoder(x)
-        x_rec = self.decoder_rec(code)
+        x_rec = None
         y     = None
-        if mask is not None:
+        
+        # Reconstruct.
+        if self.lambda_rec:
+            x_rec = self.decoder_rec(code)
+            loss_reconstruction = self.loss_rec(x_rec, x)
+        
+        # Segment.
+        if mask is not None and self.lambda_seg:
             if mask_indices is None:
                 mask_indices = list(range(len(mask)))
             y = self.decoder_seg(code, segment=True)
-            
-        # Losses.
-        loss_reconstruction = self.loss_rec(x_rec, x)
-        loss_segmentation   = 0
-        if mask is not None:
             loss_segmentation = self.loss_seg(y[mask_indices],
                                               mask[mask_indices])
-        loss = loss_reconstruction + self.lambda_seg*loss_segmentation
         
-        # Compute gradients.
+        # Loss. Compute gradients, if requested.
+        loss = ( self.lambda_rec*loss_reconstruction
+                +self.lambda_seg*loss_segmentation)
         if compute_grad:
             loss.backward()
         

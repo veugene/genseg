@@ -54,6 +54,7 @@ def build_model():
                                decoder_seg=decoder(**decoder_kwargs),
                                loss_rec=mae,
                                loss_seg=dice_loss(),
+                               lambda_rec=1.,
                                lambda_seg=10.,
                                rng=np.random.RandomState(1234))
     
