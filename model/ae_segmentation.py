@@ -32,13 +32,15 @@ class segmentation_model(nn.Module):
     def segment(self, x):
         return self.segmentation(self.encoder(x))
     
-    def evaluate(self, x, mask=None, mask_indices=None, compute_grad=False):
+    def evaluate(self, x_A, x_B=None, mask=None, mask_indices=None,
+                 compute_grad=False):
+        x = x_A
+        if x_B is not None:
+            x = torch.cat([x_A, x_B], dim=0)
         with torch.set_grad_enabled(compute_grad):
             return self._evaluate(x, mask, mask_indices, compute_grad)
     
     def _evaluate(self, x, mask=None, mask_indices=None, compute_grad=False):
-        batch_size = len(x)
-        
         # Encode, segment (if applicable), and decode.
         code  = self.encoder(x)
         x_rec = self.decoder_rec(code)
