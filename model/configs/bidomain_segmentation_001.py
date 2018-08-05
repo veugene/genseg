@@ -183,6 +183,14 @@ def build_model():
             if not b.is_contiguous():
                 b = b.contiguous()
             return a, b
+        
+    class g_decoder(nn.Module):
+        def __init__(self, *args, **kwargs):
+            super(g_decoder).__init__()
+            self.model = decoder(*args, **kwargs)
+        def forward(self, common, residual, unique):
+            x = sum([common, residual, unique])
+            return self.model(x)
     
     vector_size = np.product(bottleneck_size)
     submodel = {
@@ -193,7 +201,7 @@ def build_model():
         'g_common'          : conv_stack(**conv_stack_kwargs),
         'g_residual'        : conv_stack(**conv_stack_kwargs),
         'g_unique'          : conv_stack(**conv_stack_kwargs),
-        'g_output'          : decoder(**decoder_kwargs),
+        'g_output'          : g_decoder(**decoder_kwargs),
         'disc_A'            : patch_discriminator(**discriminator_kwargs),
         'disc_B'            : patch_discriminator(**discriminator_kwargs),
         'mutual_information': mi_estimation_network(x_size=vector_size,

@@ -343,10 +343,8 @@ class decoder(nn.Module):
                                           kernel_size=1,
                                           ndim=self.ndim)
         
-    def forward(self, common, residual, unique, segment=False):
-        inp = torch.cat([common, residual, unique], dim=1)
-        #inp = sum([common, residual, unique])
-        out = inp
+    def forward(self, x, segment=False):
+        out = x
         if self.vector_in:
             out = self.fc(out)
             out = out.view(out.size(0), *self._conv_shapes[0])
