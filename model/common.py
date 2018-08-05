@@ -251,7 +251,7 @@ class encoder(nn.Module):
 
 class decoder(nn.Module):
     def __init__(self, input_shape, output_shape, num_conv_blocks, block_type,
-                 num_channels_list, num_classes=None, skip=True, dropout=0.,
+                 num_channels_list, skip=True, dropout=0.,
                  normalization=instance_normalization, norm_kwargs=None,
                  conv_padding=True, vector_in=False, upsample_mode='conv',
                  init='kaiming_normal_', nonlinearity='ReLU', ndim=2):
@@ -272,7 +272,6 @@ class decoder(nn.Module):
         self.num_conv_blocks = num_conv_blocks
         self.block_type = block_type
         self.num_channels_list = num_channels_list
-        self.num_classes = num_classes
         self.skip = skip
         self.dropout = dropout
         self.normalization = normalization
@@ -284,8 +283,8 @@ class decoder(nn.Module):
         self.nonlinearity = nonlinearity
         self.ndim = ndim
         
-        self.in_channels = self.input_shape[0]
-        self.out_channels = output_shape[0]
+        self.in_channels  = self.input_shape[0]
+        self.out_channels = self.output_shape[0]
         
         # Compute all intermediate conv shapes by working backward from the 
         # output shape.
@@ -335,13 +334,12 @@ class decoder(nn.Module):
             last_channels = self.num_channels_list[-i]
             
         '''
-        Set up linear classifier.
+        Final output - change number of channels.
         '''
-        if num_classes is not None:
-            self.classifier = convolution(in_channels=last_channels,
-                                          out_channels=self.num_classes,
-                                          kernel_size=1,
-                                          ndim=self.ndim)
+        self.output = convolution(in_channels=last_channels,
+                                  out_channels=self.output_shape[0],
+                                  kernel_size=1,
+                                  ndim=self.ndim)
         
     def forward(self, x, segment=False):
         out = x
@@ -363,12 +361,9 @@ class decoder(nn.Module):
             out = adjust_to_size(out, shape_out[1:])
             if not out.is_contiguous():
                 out = out.contiguous()
+        out = self.output(out)
         if segment:
-            if self.num_classes is None:
-                raise ValueError("Cannot segment when `num_classes` is "
-                                 "set to None.")
-            out = self.classifier(out)
-            if self.num_classes==1:
+            if self.out_channels==1:
                 out = torch.sigmoid(out)
             else:
                 out = torch.softmax(out, dim=1)

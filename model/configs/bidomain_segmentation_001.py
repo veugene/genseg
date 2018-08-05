@@ -55,7 +55,6 @@ def build_model():
         'num_conv_blocks'   : 5,
         'block_type'        : basic_block,
         'num_channels_list' : [50, 50, 30, 20, 1],
-        'num_classes'       : 1,
         'skip'              : True,
         'dropout'           : 0.,
         'normalization'     : instance_normalization,
