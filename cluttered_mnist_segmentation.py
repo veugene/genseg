@@ -37,8 +37,7 @@ import itertools
 Process arguments.
 '''
 def get_parser():
-    parser = argparse.ArgumentParser(description="Cluttered MNIST bi-domain "
-                                                 "segmentation.")
+    parser = argparse.ArgumentParser(description="Cluttered MNIST seg.")
     parser.add_argument('--name', type=str, default="")
     parser.add_argument('--data_dir', type=str, default='./data/mnist')
     parser.add_argument('--save_path', type=str, default='./experiments')
@@ -132,29 +131,28 @@ if __name__ == '__main__':
                                                           compute_grad=True)
         experiment_state.optimizer.step()
         with torch.no_grad():
-            metrics_dict = metrics['train'](outputs['x_AM'], M[indices])
+            metrics_dict = metrics['train'](outputs['seg'], M[indices])
         setattr(engine.state, 'metrics', metrics_dict)
-        return losses['loss_G'].item(), losses, metrics_dict
+        return losses['loss'].item(), losses, metrics_dict
     
     # Validation loop.
     def validation_function(engine, batch):
         experiment_state.model.eval()
-        A, B, M, _ = prepare_batch(batch)
+        A, B, M, indices = prepare_batch(batch)
         with torch.no_grad():
             losses, outputs = experiment_state.model.evaluate(
-                                        A, B, M, _, compute_grad=False)
-            metrics_dict = metrics['train'](outputs['x_AM'], M)
+                                        A, B, M, indices, compute_grad=False)
+            metrics_dict = metrics['train'](outputs['seg'], M)
         setattr(engine.state, 'metrics', metrics_dict)
         
         # Prepare images to save to disk.
-        out_keys = ('x_AB', 'x_BA', 'x_ABA', 'x_BAB', 'x_AM')
         s, h, m, _ = zip(*batch)
         images = (np.array(s), np.array(h), np.array(m))
-        images += tuple([np.squeeze(outputs[key].cpu().numpy(), 1)
-                         for key in out_keys if outputs[key] is not None])
+        images += tuple([np.squeeze(outputs[key].cpu().numpy(), 1)[:len(A)]
+                        for key in outputs.keys() if outputs[key] is not None])
         setattr(engine.state, 'save_images', images)
         
-        return losses['loss_G'].item(), losses, metrics_dict
+        return losses['loss'].item(), losses, metrics_dict
     
     # Get engines.
     append = bool(args.resume_from is not None)

@@ -253,10 +253,10 @@ class segmentation_model(nn.Module):
         losses  = {'seg'   : loss_segmentation,
                    'disc_A': loss_disc_A,
                    'disc_B': loss_disc_B,
-                   'loss_G': loss_G}
+                   'loss'  : loss_G}
         outputs = {'x_AB'  : x_AB,
                    'x_BA'  : x_BA,
                    'x_ABA' : x_ABA,
                    'x_BAB' : x_BAB,
-                   'x_AM'  : x_AM}
+                   'seg'   : x_AM}
         return losses, outputs
