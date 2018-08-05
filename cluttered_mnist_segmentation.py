@@ -46,7 +46,6 @@ def get_parser():
                               default="./model/configs/"
                                       "bidomain_segmentation_001.py")
     mutex_parser.add_argument('--resume_from', type=str, default=None)
-    parser.add_argument('-e', '--evaluate', action='store_true')
     parser.add_argument('--weight_decay', type=float, default=1e-4)
     parser.add_argument('--labeled_fraction', type=float, default=0.1)
     parser.add_argument('--batch_size_train', type=int, default=20)
@@ -62,8 +61,6 @@ def get_parser():
     parser.add_argument('--n_valid', type=int, default=500)
     parser.add_argument('--n_test', type=int, default=500)
     parser.add_argument('--cpu', default=False, action='store_true')
-    parser.add_argument('--nb_io_workers', type=int, default=1)
-    parser.add_argument('--nb_proc_workers', type=int, default=0)
     parser.add_argument('--rseed', type=int, default=None)
     return parser
 
@@ -78,6 +75,7 @@ if __name__ == '__main__':
     if not args.cpu:
         experiment_state.model.cuda()
     assert args.labeled_fraction > 0
+    torch.manual_seed(args.rseed)
     
     # Prepare data.
     rng = np.random.RandomState(args.rseed)
