@@ -54,7 +54,8 @@ class segmentation_model(nn.Module):
         loss_reconstruction = self.loss_rec(x_rec, x)
         loss_segmentation   = 0
         if mask is not None:
-            loss_segmentation = self.loss_seg(y[mask_indices], mask)
+            loss_segmentation = self.loss_seg(y[mask_indices],
+                                              mask[mask_indices])
         loss = loss_reconstruction + self.lambda_seg*loss_segmentation
         
         # Compute gradients.
