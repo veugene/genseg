@@ -16,7 +16,7 @@ from .ignite import progress_report
 Parse and set up arguments, set up the model and optimizer, and prepare the
 folder into which to save the experiment.
 
-In args, expecting `resume_from`, `model_from`, `name`, and `save_path`.
+In args, expecting `resume_from` or `model_from`, `name`, and `save_path`.
 """
 class experiment(object):
     def __init__(self, name, parser):
@@ -24,39 +24,41 @@ class experiment(object):
         
         # Set up args, model, and optimizer.
         args = parser.parse_args()
-        initial_epoch = 0
+        self._epoch = [0]
         if args.resume_from is None:
+            experiment_path, experiment_id = self._setup_experiment_directory(
+                name="{}__{}".format(name, args.name),
+                save_path=args.save_path)
+            self.experiment_path = experiment_path
+            self.experiment_id = experiment_id
             model, optimizer = self._init_state(
                                             model_from=args.model_from,
                                             optimizer_name=args.optimizer,
                                             learning_rate=args.learning_rate,
                                             weight_decay=args.weight_decay)
         else:
-            args, initial_epoch = self._load_and_merge_args(parser)
-            model, optimizer = self._load_state(load_from=args.model_from,
+            self.experiment_path = args.resume_from
+            args = self._load_and_merge_args(parser)
+            state_file = sorted([fn for fn in os.listdir(args.resume_from)
+                                 if fn.startswith('state_dict_')
+                                 and fn.endswith('.pth')])[-1]
+            state_from = os.path.join(args.resume_from, state_file)
+            model, optimizer = self._load_state(load_from=state_from,
                                                 optimizer_name=args.optimizer)
         if not args.cpu:
             model.cuda()
         self.args = args
-        self.initial_epoch = initial_epoch
         self.model = model
         self.optimizer = optimizer
         print("Number of parameters: {}".format(count_params(model)))
         
-        # Set up experiment directory.
-        experiment_path, experiment_id = self._setup_experiment_directory(
-            name="{}__{}".format(name, args.name),
-            save_path=args.save_path)
-        self.experiment_path = experiment_path
-        self.experiment_id = experiment_id
-        
         # For checkpoints.
-        self.model_dict = {
-            'experiment_id'   : experiment_id,
+        self.model_dict = {'dict': {
+            'epoch'           : self._epoch,
+            'experiment_id'   : self.experiment_id,
             'model_as_str'    : model._model_as_str,
             'model_state'     : model.state_dict(),
-            'optimizer_state' : optimizer.state_dict()}
-        
+            'optimizer_state' : optimizer.state_dict()}}    
     
     def setup_engine(self, function,
                      append=False, prefix=None, epoch_length=None):
@@ -95,6 +97,21 @@ class experiment(object):
                                     checkpoint_best_handler,
                                     self.model_dict)
         
+        # Track last epoch in `self.model_dict`.
+        evaluator.add_event_handler(Events.EPOCH_COMPLETED,
+                                    self._increment_epoch)
+        
+        # Setup initial epoch in the training engine.
+        trainer.add_event_handler(Events.STARTED,
+                                  lambda engine: setattr(engine.state,
+                                                         "epoch",
+                                                         self._epoch[0]))
+        
+        
+    def _increment_epoch(self, engine):
+        self._epoch[0] += 1
+        engine.epoch = self._epoch
+        
     def _load_state(self, load_from, optimizer_name):
         '''
         Restore the model, its state, and the optimizer's state.
@@ -113,6 +130,10 @@ class experiment(object):
                                      name=optimizer_name,
                                      params=model.parameters(),
                                      state_dict=saved_dict['optimizer_state'])
+        
+        # Experiment metadata.
+        self.experiment_id = saved_dict['experiment_id']
+        self._epoch = saved_dict['epoch']
         
         return model, optimizer
     
@@ -190,9 +211,7 @@ class experiment(object):
         # Override loaded arguments with any provided anew.
         args = parser.parse_args(namespace=args)
         
-        # TODO: Get last epoch.
-            
-        return args, initial_epoch
+        return args
 
     def _setup_experiment_directory(self, name, save_path):
         experiment_time = "{0:%Y-%m-%d}_{0:%H-%M-%S}".format(datetime.now())
