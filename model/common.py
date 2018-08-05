@@ -416,6 +416,10 @@ def mse(prediction, target):
             target = target.cuda()
         target = Variable(target)
     return nn.MSELoss()(prediction, target)
+
+
+def mae(prediction, target):
+    return torch.mean(torch.abs(prediction-target))
     
     
 if __name__=='__main__':

@@ -2,14 +2,16 @@ import numpy as np
 import torch
 from torch import nn
 from torch.autograd import Variable
+from fcn_maker.loss import dice_loss
 from .common import (dist_ratio_mse_abs,
+                     mae,
                      mse)
 
 
 class segmentation_model(nn.Module):
-    def __init__(self, f_factor, f_common, f_residual, f_unique,
-                 g_common, g_residual, g_unique, g_output,
-                 disc_A, disc_B, mutual_information, loss_segmentation,
+    def __init__(self, f_factor, f_common, f_residual, f_unique, g_common,
+                 g_residual, g_unique, g_output, disc_A, disc_B,
+                 mutual_information, loss_seg=dice_loss(), loss_rec=mae,
                  z_size=(50,), z_constant=0, lambda_disc=1, lambda_x_id=10,
                  lambda_z_id=1, lambda_const=1, lambda_cyc=0, lambda_mi=1,
                  lambda_mi=1, lambda_seg=1, disc_clip_norm=1., rng=None):
@@ -27,7 +29,8 @@ class segmentation_model(nn.Module):
         self.disc_B             = disc_B
         self.mutual_information = mutual_information
         self.mi_estimator       = mine(mutual_information, rng=self.rng)
-        self.loss_segmentation  = loss_segmentation
+        self.loss_seg           = loss_seg
+        self.loss_rec           = loss_rec
         self.z_size             = z_size
         self.z_constant         = z_constant
         self.lambda_disc        = lambda_disc
@@ -181,7 +184,7 @@ class segmentation_model(nn.Module):
         
         # Generator losses.
         loss_G = 0
-        def dist(x, y): return torch.mean(torch.abs(x-y))
+        dist = self.loss_rec
         if self.lambda_disc:
             loss_G += self.lambda_disc * mse(self.disc_B(x_AB), 1)
             loss_G += self.lambda_disc * mse(self.disc_A(x_BA), 1)
@@ -216,8 +219,7 @@ class segmentation_model(nn.Module):
         # Segment.
         loss_segmentation = 0
         if self.lambda_seg and mask is not None:
-            loss_segmentation = self.loss_segmentation(x_AM,
-                                                       mask[mask_indices])
+            loss_segmentation = self.loss_seg(x_AM, mask[mask_indices])
             loss_G += self.lambda_seg * loss_segmentation
             if self.lambda_z_id:
                 loss_G += (  self.lambda_z_id
