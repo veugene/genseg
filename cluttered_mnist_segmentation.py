@@ -48,6 +48,7 @@ def get_parser():
     mutex_parser.add_argument('--resume_from', type=str, default=None)
     parser.add_argument('--weight_decay', type=float, default=1e-4)
     parser.add_argument('--labeled_fraction', type=float, default=0.1)
+    parser.add_argument('--yield_only_labeled', action='store_true')
     parser.add_argument('--batch_size_train', type=int, default=20)
     parser.add_argument('--batch_size_valid', type=int, default=20)
     parser.add_argument('--epoch_length', type=int, default=200)
@@ -87,6 +88,7 @@ if __name__ == '__main__':
         size_clutter=args.size_clutter,
         size_output=args.size_output,
         segment_fraction=args.labeled_fraction,
+        yield_only_labeled=args.yield_only_labeled,
         verbose=True,
         rng=rng)
     loader_train = autorewind(partial(data.gen_train,

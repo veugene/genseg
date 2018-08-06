@@ -41,7 +41,8 @@ class setup_mnist_data(object):
     
     def __init__(self, data_dir, n_valid, n_test,
                  n_clutter=8, size_clutter=8, size_output=100,
-                 segment_fraction=1, verbose=False, rng=None):
+                 segment_fraction=1, yield_only_labeled=False, verbose=False,
+                 rng=None):
         self.data_dir = data_dir
         self.n_valid = n_valid
         self.n_test = n_test
@@ -49,6 +50,7 @@ class setup_mnist_data(object):
         self.size_clutter = size_clutter
         self.size_output = size_output
         self.segment_fraction = segment_fraction
+        self.yield_only_labeled = yield_only_labeled
         self.verbose = verbose
         self.rng = rng if rng is not None else np.random.RandomState()
         
@@ -88,8 +90,13 @@ class setup_mnist_data(object):
         x_train = x_train[:-self.n_valid]
         y_train = y_train[:-self.n_valid]
         
+        # Provide segmentation masks for these training cases.
         n_segment = max(1, int(self.segment_fraction*len(x_train)+0.5))
-        self._indices_seg = set(self.rng.permutation(len(x_train))[:n_segment])            
+        self._indices_seg = set(self.rng.permutation(len(x_train))[:n_segment]) 
+        if self.yield_only_labeled:
+            x_train = x_train[self._indices_seg]
+            y_train = y_train[self._indices_seg]
+        
         self._x = {'train': x_train,
                    'valid': x_valid,
                    'test' : x_test}
