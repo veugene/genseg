@@ -106,6 +106,10 @@ class experiment(object):
                                   lambda engine: setattr(engine.state,
                                                          "epoch",
                                                          self._epoch[0]))
+                                          
+        # Setup initial epoch in the checkpoint handlers.
+        checkpoint_last_handler._iteration = self._epoch[0]
+        checkpoint_best_handler._iteration = self._epoch[0]
         
         
     def _increment_epoch(self, engine):
