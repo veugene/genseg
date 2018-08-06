@@ -60,7 +60,6 @@ def get_parser():
     parser.add_argument('--size_clutter', type=int, default=10)
     parser.add_argument('--size_output', type=int, default=100)
     parser.add_argument('--n_valid', type=int, default=500)
-    parser.add_argument('--n_test', type=int, default=500)
     parser.add_argument('--cpu', default=False, action='store_true')
     parser.add_argument('--rseed', type=int, default=1234)
     return parser
@@ -83,7 +82,6 @@ if __name__ == '__main__':
     data = setup_mnist_data(
         data_dir='./data/mnist',
         n_valid=args.n_valid,
-        n_test=args.n_test,
         n_clutter=args.n_clutter,
         size_clutter=args.size_clutter,
         size_output=args.size_output,

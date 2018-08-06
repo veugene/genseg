@@ -17,7 +17,6 @@ class setup_mnist_data(object):
     
     data_dir : directory containing the data (or where to download the data)
     n_valid : number of data points in the validation subset
-    n_test : number of data points in the testing subset
     n_clutter : number of distractors, forming clutter
     size_clutter : the size of each distractor (a square cropped from an image)
     size_output : the size of each output image (square)
@@ -39,13 +38,11 @@ class setup_mnist_data(object):
         'http://yann.lecun.com/exdb/mnist/t10k-labels-idx1-ubyte.gz',
     ]
     
-    def __init__(self, data_dir, n_valid, n_test,
-                 n_clutter=8, size_clutter=8, size_output=100,
-                 segment_fraction=1, yield_only_labeled=False, verbose=False,
-                 rng=None):
+    def __init__(self, data_dir, n_valid, n_clutter=8, size_clutter=8,
+                 size_output=100, segment_fraction=1,
+                 yield_only_labeled=False, verbose=False, rng=None):
         self.data_dir = data_dir
         self.n_valid = n_valid
-        self.n_test = n_test
         self.n_clutter = n_clutter
         self.size_clutter = size_clutter
         self.size_output = size_output
@@ -62,7 +59,8 @@ class setup_mnist_data(object):
         
         # Pre-generate validation and test sets. Using same rng.
         self._validation_set = self._generate_cluttered(n_valid, fold='valid')
-        self._testing_set = self._generate_cluttered(n_test, fold='test')
+        self._testing_set = self._generate_cluttered(len(self._x['test']),
+                                                     fold='test')
         
     def _load_data(self):
         # Load.
@@ -270,21 +268,17 @@ if __name__=='__main__':
     Interactive debug code.
     
     """
-    n_data = 20 
-    batch_size = 5
-    
     mnist_data = setup_mnist_data(data_dir='data',
-                                  n_valid=n_data,
-                                  n_test=n_data,
-                                  n_clutter=8,
+                                  n_valid=500,
+                                  n_clutter=50,
                                   size_clutter=10,
                                   size_output=100,
                                   verbose=True,
                                   rng=np.random.RandomState(1234))
     
-    data_gen = {'train': mnist_data.gen_train(batch_size=batch_size, n_batches=n_data),
-                'valid': mnist_data.gen_valid(batch_size=batch_size),
-                'test':  mnist_data.gen_test(batch_size=batch_size)}
+    data_gen = {'train': mnist_data.gen_train(batch_size=10, n_batches=10),
+                'valid': mnist_data.gen_valid(batch_size=10),
+                'test':  mnist_data.gen_test(batch_size=10)}
     
     import matplotlib.pyplot as plt
     def make_panel(batch, axis, ax_handle):
@@ -297,7 +291,7 @@ if __name__=='__main__':
         ax_handle.imshow(cat)
     fig, ax = plt.subplots(1, 3)
     plt.gray()
-    for i in range(n_data):
+    for i in range(10):
         batch = dict([(key, next(data_gen[key])) for key in data_gen])
         print("batch {}: shape_train={}, shape_valid={}, shape_test={}"
               "".format(i, len(batch['train']), len(batch['valid']),
