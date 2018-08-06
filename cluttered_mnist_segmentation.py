@@ -166,6 +166,10 @@ if __name__ == '__main__':
                                               prefix='val',
                                               append=append,
                                               epoch_length=epoch_length_val)
+    tester    = experiment_state.setup_engine(validation_function,
+                                              prefix='test',
+                                              append=append,
+                                              epoch_length=epoch_length_val)
     
     # Reset global Dice score counts every epoch (or validation run).
     func = lambda key : metrics[key].measure_functions['g_dice'].reset_counts
@@ -193,3 +197,9 @@ if __name__ == '__main__':
     Train.
     '''
     trainer.run(loader_train, max_epochs=args.epochs)
+    
+    '''
+    Test.
+    '''
+    print("\nTESTING\n")
+    tester.run(loader_test)
