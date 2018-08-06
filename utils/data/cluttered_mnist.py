@@ -21,6 +21,8 @@ class setup_mnist_data(object):
     n_clutter : number of distractors, forming clutter
     size_clutter : the size of each distractor (a square cropped from an image)
     size_output : the size of each output image (square)
+    segment_fraction : the fraction of the training set to provide 
+        segmentation masks for.
     verbose : whether to print messages to stdout when getting source data
         for the first time
     rng : optional numpy random number generator
@@ -38,14 +40,15 @@ class setup_mnist_data(object):
     ]
     
     def __init__(self, data_dir, n_valid, n_test,
-                 n_clutter=8, size_clutter=8, size_output=100, verbose=False,
-                 rng=None):
+                 n_clutter=8, size_clutter=8, size_output=100,
+                 segment_fraction=1, verbose=False, rng=None):
         self.data_dir = data_dir
         self.n_valid = n_valid
         self.n_test = n_test
         self.n_clutter = n_clutter
         self.size_clutter = size_clutter
         self.size_output = size_output
+        self.segment_fraction = segment_fraction
         self.verbose = verbose
         self.rng = rng if rng is not None else np.random.RandomState()
         
@@ -84,7 +87,9 @@ class setup_mnist_data(object):
         y_valid = y_train[-self.n_valid:]
         x_train = x_train[:-self.n_valid]
         y_train = y_train[:-self.n_valid]
-                    
+        
+        n_segment = max(1, int(self.segment_fraction*len(x_train)+0.5))
+        self._indices_seg = set(self.rng.permutation(len(x_train))[:n_segment])            
         self._x = {'train': x_train,
                    'valid': x_valid,
                    'test' : x_test}
@@ -171,7 +176,7 @@ class setup_mnist_data(object):
         if self.verbose:
             print(msg) 
         
-    def _generate_cluttered_sample(self, fold):
+    def _generate_cluttered_sample(self, fold, indices_seg=None):
         # The background is noisy.
         def background():
             return 0.01*self.rng.randn(self.size_output,
@@ -214,20 +219,25 @@ class setup_mnist_data(object):
         add_clutter(clutter, num=self.n_clutter)
         
         # Create segmentation mask for x.
-        mask = np.zeros_like(x_out, dtype=np.int64)
-        mask[x_crop_indices][x>0.5] = 1
+        mask = None
+        if indices_seg is None or idx_sample in indices_seg:
+            mask = np.zeros_like(x_out, dtype=np.int64)
+            mask[x_crop_indices][x>0.5] = 1
         
         return (x_out, clutter, mask, y)
         
-    def _generate_cluttered(self, num, fold):
+    def _generate_cluttered(self, num, fold, indices_seg=None):
         output_list = []
         for _ in range(num):
-            output_list.append(self._generate_cluttered_sample(fold))
+            sample = self._generate_cluttered_sample(fold, indices_seg)
+            output_list.append(sample)
         return output_list
     
     def gen_train(self, batch_size, n_batches):
         for _ in range(n_batches):
-            batch = self._generate_cluttered(num=batch_size, fold='train')
+            batch = self._generate_cluttered(num=batch_size,
+                                             fold='train',
+                                             indices_seg=self._indices_seg)
             yield batch
     
     def gen_valid(self, batch_size):

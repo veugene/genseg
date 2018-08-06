@@ -61,7 +61,7 @@ def get_parser():
     parser.add_argument('--n_valid', type=int, default=500)
     parser.add_argument('--n_test', type=int, default=500)
     parser.add_argument('--cpu', default=False, action='store_true')
-    parser.add_argument('--rseed', type=int, default=None)
+    parser.add_argument('--rseed', type=int, default=1234)
     return parser
 
 
@@ -86,25 +86,26 @@ if __name__ == '__main__':
         n_clutter=args.n_clutter,
         size_clutter=args.size_clutter,
         size_output=args.size_output,
+        segment_fraction=args.labeled_fraction,
         verbose=True,
         rng=rng)
     loader_train = autorewind(partial(data.gen_train,
                                       args.batch_size_train,
                                       args.epoch_length))
     loader_valid = autorewind(partial(data.gen_valid, args.batch_size_valid))
-    loader_test  = autorewind(partial(data.gen_test, args.batch_size_valid))
+    loader_test  = autorewind(partial(data.gen_test,  args.batch_size_valid))
     
     def prepare_batch(batch, labeled_fraction=1.):
         s, h, m, _ = zip(*batch)
-        # Select labels to use.
-        indices = sorted(rng.choice(len(m),
-                                    size=int(len(m)*labeled_fraction),
-                                    replace=False))
+        
+        # Identify indices of examples with masks.
+        indices = [i for i, mask in enumerate(m) if mask is not None]
+        m_      = [m[i] for i in indices]
         
         # Prepare for pytorch.
         s = Variable(torch.from_numpy(np.expand_dims(s, 1)))
         h = Variable(torch.from_numpy(np.expand_dims(h, 1)))
-        m = Variable(torch.from_numpy(np.expand_dims(m, 1)))
+        m = Variable(torch.from_numpy(np.expand_dims(m_, 1)))
         if not args.cpu:
             s = s.cuda()
             h = h.cuda()
@@ -128,8 +129,10 @@ if __name__ == '__main__':
         losses, outputs = experiment_state.model.evaluate(A, B, M, indices,
                                                           compute_grad=True)
         experiment_state.optimizer.step()
-        with torch.no_grad():
-            metrics_dict = metrics['train'](outputs['seg'], M[indices])
+        metrics_dict = {}
+        if len(indices)>0:
+            with torch.no_grad():
+                metrics_dict = metrics['train'](outputs['seg'], M)
         setattr(engine.state, 'metrics', metrics_dict)
         return losses['loss'].item(), losses, metrics_dict
     

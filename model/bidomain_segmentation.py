@@ -219,7 +219,7 @@ class segmentation_model(nn.Module):
         # Segment.
         loss_segmentation = 0
         if self.lambda_seg and mask is not None:
-            loss_segmentation = self.loss_seg(x_AM, mask[mask_indices])
+            loss_segmentation = self.loss_seg(x_AM, mask)
             loss_G += self.lambda_seg * loss_segmentation
             if self.lambda_z_id:
                 loss_G += (  self.lambda_z_id

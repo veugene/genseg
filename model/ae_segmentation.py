@@ -59,8 +59,7 @@ class segmentation_model(nn.Module):
             if mask_indices is None:
                 mask_indices = list(range(len(mask)))
             y = self.decoder_seg(code, segment=True)
-            loss_segmentation = self.loss_seg(y[mask_indices],
-                                              mask[mask_indices])
+            loss_segmentation = self.loss_seg(y[mask_indices], mask)
         
         # Loss. Compute gradients, if requested.
         loss = ( self.lambda_rec*loss_reconstruction
