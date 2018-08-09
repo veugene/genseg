@@ -166,10 +166,12 @@ if __name__ == '__main__':
                                               prefix='val',
                                               append=append,
                                               epoch_length=epoch_length_val)
+    epoch_length_test=(     len(data._testing_set)//args.batch_size_valid
+                       +int(len(data._testing_set)%args.batch_size_valid>0))
     tester    = experiment_state.setup_engine(validation_function,
                                               prefix='test',
                                               append=append,
-                                              epoch_length=epoch_length_val)
+                                              epoch_length=epoch_length_test)
     
     # Reset global Dice score counts every epoch (or validation run).
     func = lambda key : metrics[key].measure_functions['g_dice'].reset_counts
