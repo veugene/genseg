@@ -143,7 +143,7 @@ if __name__ == '__main__':
         with torch.no_grad():
             losses, outputs = experiment_state.model.evaluate(
                                         A, B, M, indices, compute_grad=False)
-            metrics_dict = metrics['train'](outputs['seg'], M)
+            metrics_dict = metrics['valid'](outputs['seg'], M)
         setattr(engine.state, 'metrics', metrics_dict)
         
         # Prepare images to save to disk.
