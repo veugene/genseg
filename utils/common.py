@@ -74,17 +74,7 @@ class experiment(object):
     
     def setup_checkpoints(self, trainer, evaluator,
                           score_function=None, n_saved=2):
-        checkpoint_last_handler = ModelCheckpoint(
-                                    dirname=self.experiment_path,
-                                    filename_prefix='state',
-                                    n_saved=n_saved,
-                                    save_interval=1,
-                                    atomic=True,
-                                    create_dir=True,
-                                    require_empty=False)
-        trainer.add_event_handler(Events.EPOCH_COMPLETED,
-                                  checkpoint_last_handler,
-                                  self.model_dict)
+        # Checkpoint for best model performance.
         checkpoint_best_handler = ModelCheckpoint(
                                     dirname=self.experiment_path,
                                     filename_prefix='best_state',
@@ -97,9 +87,21 @@ class experiment(object):
                                     checkpoint_best_handler,
                                     self.model_dict)
         
-        # Track last epoch in `self.model_dict`.
-        evaluator.add_event_handler(Events.EPOCH_COMPLETED,
-                                    self._increment_epoch)
+        # Checkpoint at every epoch and increment epoch in `self.model_dict`.
+        checkpoint_last_handler = ModelCheckpoint(
+                                    dirname=self.experiment_path,
+                                    filename_prefix='state',
+                                    n_saved=n_saved,
+                                    save_interval=1,
+                                    atomic=True,
+                                    create_dir=True,
+                                    require_empty=False)
+        def _on_epoch_completed(engine, model_dict):
+            checkpoint_last_handler(engine, model_dict)
+            self._increment_epoch
+        trainer.add_event_handler(Events.EPOCH_COMPLETED,
+                                  _on_epoch_completed,
+                                  self.model_dict)
         
         # Setup initial epoch in the training engine.
         trainer.add_event_handler(Events.STARTED,
