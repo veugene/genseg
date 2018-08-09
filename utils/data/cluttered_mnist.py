@@ -40,7 +40,8 @@ class setup_mnist_data(object):
     
     def __init__(self, data_dir, n_valid, n_clutter=8, size_clutter=8,
                  size_output=100, segment_fraction=1,
-                 yield_only_labeled=False, verbose=False, rng=None):
+                 yield_only_labeled=False, gen_train_online=True,
+                 verbose=False, rng=None):
         self.data_dir = data_dir
         self.n_valid = n_valid
         self.n_clutter = n_clutter
@@ -48,6 +49,7 @@ class setup_mnist_data(object):
         self.size_output = size_output
         self.segment_fraction = segment_fraction
         self.yield_only_labeled = yield_only_labeled
+        self.gen_train_online = gen_train_online
         self.verbose = verbose
         self.rng = rng if rng is not None else np.random.RandomState()
         
@@ -61,6 +63,10 @@ class setup_mnist_data(object):
         self._validation_set = self._generate_cluttered(n_valid, fold='valid')
         self._testing_set = self._generate_cluttered(len(self._x['test']),
                                                      fold='test')
+        if not self.gen_train_online:
+            # Pre-generate training data.
+            self._training_set = \
+                self._generate_cluttered(len(self._x['train']), fold='train')
         
     def _load_data(self):
         # Load.
@@ -238,12 +244,23 @@ class setup_mnist_data(object):
             output_list.append(sample)
         return output_list
     
-    def gen_train(self, batch_size, n_batches):
+    def _gen_train_online(self, batch_size, n_batches):
         for _ in range(n_batches):
             batch = self._generate_cluttered(num=batch_size,
                                              fold='train',
                                              indices_seg=self._indices_seg)
             yield batch
+            
+    def _gen_train(self, batch_size):
+        for i in range(0, len(self._training_set), batch_size):
+            batch = self._training_set[i:i+batch_size]
+            yield batch
+    
+    def gen_train(self, *args, **kwargs):
+        if self.gen_train_online:
+            return self._gen_train_online(*args, **kwargs)
+        else:
+            return self._gen_train(*args, **kwargs)
     
     def gen_valid(self, batch_size):
         for i in range(0, len(self._validation_set), batch_size):

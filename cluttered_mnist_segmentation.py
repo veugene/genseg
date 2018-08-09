@@ -51,7 +51,10 @@ def get_parser():
     parser.add_argument('--yield_only_labeled', action='store_true')
     parser.add_argument('--batch_size_train', type=int, default=20)
     parser.add_argument('--batch_size_valid', type=int, default=20)
-    parser.add_argument('--epoch_length', type=int, default=200)
+    parser.add_argument('--epoch_length', type=int, default=None,
+                        help="By default, the training set is pregenerated. "
+                             "Otherwise, `epoch_length` batches are "
+                             "generated online per epoch.")
     parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument('--learning_rate', type=float, default=0.001)
     parser.add_argument('--optimizer', type=str, default='amsgrad',
@@ -59,6 +62,7 @@ def get_parser():
     parser.add_argument('--n_clutter', type=int, default=8)
     parser.add_argument('--size_clutter', type=int, default=10)
     parser.add_argument('--size_output', type=int, default=100)
+    parser.add_argument('--pregenerate_training_set', action='store_true')
     parser.add_argument('--n_valid', type=int, default=500)
     parser.add_argument('--cpu', default=False, action='store_true')
     parser.add_argument('--rseed', type=int, default=1234)
@@ -87,11 +91,16 @@ if __name__ == '__main__':
         size_output=args.size_output,
         segment_fraction=args.labeled_fraction,
         yield_only_labeled=args.yield_only_labeled,
+        gen_train_online=args.epoch_length is not None,
         verbose=True,
         rng=rng)
-    loader_train = autorewind(partial(data.gen_train,
-                                      args.batch_size_train,
-                                      args.epoch_length))
+    if args.epoch_length is None:
+        loader_train = autorewind(partial(data.gen_train,
+                                          args.batch_size_train))
+    else:
+        loader_train = autorewind(partial(data.gen_train,
+                                          args.batch_size_train,
+                                          args.epoch_length))
     loader_valid = autorewind(partial(data.gen_valid, args.batch_size_valid))
     loader_test  = autorewind(partial(data.gen_test,  args.batch_size_valid))
     
@@ -157,9 +166,12 @@ if __name__ == '__main__':
     
     # Get engines.
     append = bool(args.resume_from is not None)
+    epoch_length_train = args.epoch_length if args.epoch_length is not None \
+                 else (     len(data._training_set)//args.batch_size_train
+                       +int(len(data._training_set)%args.batch_size_train>0))
     trainer   = experiment_state.setup_engine(training_function,
                                               append=append,
-                                              epoch_length=args.epoch_length)
+                                              epoch_length=epoch_length_train)
     epoch_length_val =(     len(data._validation_set)//args.batch_size_valid
                        +int(len(data._validation_set)%args.batch_size_valid>0))
     evaluator = experiment_state.setup_engine(validation_function,
@@ -175,8 +187,8 @@ if __name__ == '__main__':
     
     # Reset global Dice score counts every epoch (or validation run).
     func = lambda key : metrics[key].measure_functions['g_dice'].reset_counts
-    trainer.add_event_handler(Events.EPOCH_STARTED, func('train'))
-    trainer.add_event_handler(Events.EPOCH_COMPLETED, func('valid'))
+    trainer.add_event_handler(  Events.EPOCH_STARTED, func('train'))
+    evaluator.add_event_handler(Events.EPOCH_STARTED, func('valid'))
 
     # Set up validation.
     trainer.add_event_handler(Events.EPOCH_COMPLETED,
