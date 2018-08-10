@@ -41,7 +41,6 @@ class progress_report(object):
             # Every time we're at the start of the next epoch, reset
             # the statistics.
             self.metrics = OrderedDict(((prefix+'loss', 0),))
-            setattr(engine.state, prefix+"metrics", self.metrics)
         iter_history = engine.state.output # only this iteration's history
         loss = iter_history[0]
         self.metrics[prefix+'loss'] += loss
