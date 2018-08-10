@@ -88,7 +88,7 @@ class setup_mnist_data(object):
         if self.n_valid < 0 or self.n_valid > len(x_train):
             raise ValueError("`n_valid` must be in [0, {}] but is {}"
                              "".format(len(x_train), self.n_valid))
-        R = self.rng.permutation(len(x_train)-self.n_valid)
+        R = self.rng.permutation(len(x_train))
         x_train = x_train[R]
         y_train = y_train[R]
         x_valid = x_train[-self.n_valid:]
