@@ -98,8 +98,8 @@ class setup_mnist_data(object):
         n_segment = max(1, int(self.segment_fraction*len(x_train)+0.5))
         self._indices_seg = set(self.rng.permutation(len(x_train))[:n_segment]) 
         if self.yield_only_labeled:
-            x_train = x_train[self._indices_seg]
-            y_train = y_train[self._indices_seg]
+            x_train = x_train[list(self._indices_seg)]
+            y_train = y_train[list(self._indices_seg)]
         
         self._x = {'train': x_train,
                    'valid': x_valid,
