@@ -139,11 +139,18 @@ if __name__ == '__main__':
                                                           compute_grad=True)
         experiment_state.optimizer.step()
         metrics_dict = {}
+        counts_dict  = {}
         if len(indices)>0:
             with torch.no_grad():
                 metrics_dict = metrics['train'](outputs['seg'], M)
+                counts_dict  = dict([(key, len(M)) for key in metrics_dict])
+        metrics_dict['rec']  = losses['rec'].item() if losses['rec'] else 0
+        metrics_dict['loss'] = losses['loss'].item()
+        counts_dict['rec']   = len(A)
+        counts_dict['loss']  = len(A)
         setattr(engine.state, 'metrics', metrics_dict)
-        return losses['loss'].item(), losses, metrics_dict
+        setattr(engine.state, 'counts',  counts_dict)
+        return losses, metrics_dict
     
     # Validation loop.
     def validation_function(engine, batch):
@@ -153,8 +160,13 @@ if __name__ == '__main__':
             losses, outputs = experiment_state.model.evaluate(
                                         A, B, M, indices, compute_grad=False)
             metrics_dict = metrics['valid'](outputs['seg'], M)
+            counts_dict  = dict([(key, len(M)) for key in metrics_dict])
+        metrics_dict['rec']  = losses['rec'].item() if losses['rec'] else 0
+        metrics_dict['loss'] = losses['loss'].item()
+        counts_dict['rec']   = len(A)
+        counts_dict['loss']  = len(A)
         setattr(engine.state, 'metrics', metrics_dict)
-        
+        setattr(engine.state, 'counts',  counts_dict)
         # Prepare images to save to disk.
         s, h, m, _ = zip(*batch)
         images = (np.array(s), np.array(h), np.array(m))
@@ -162,7 +174,7 @@ if __name__ == '__main__':
                         for key in outputs.keys() if outputs[key] is not None])
         setattr(engine.state, 'save_images', images)
         
-        return losses['loss'].item(), losses, metrics_dict
+        return losses, metrics_dict
     
     # Get engines.
     append = bool(args.resume_from is not None)

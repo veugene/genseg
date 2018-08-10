@@ -41,19 +41,22 @@ class progress_report(object):
             # Every time we're at the start of the next epoch, reset
             # the statistics.
             self.metrics = OrderedDict(((prefix+'loss', 0),))
-        iter_history = engine.state.output # only this iteration's history
-        loss = iter_history[0]
-        self.metrics[prefix+'loss'] += loss
-        for name, val in iter_history[-1].items():
-            name = prefix+name
-            if name not in self.metrics:
-                self.metrics[name] = 0
-            self.metrics[name] += val
-        # Average metrics over the epoch thus far.
+            self.counts  = OrderedDict(((prefix+'loss', 0),))
+        for name, val in engine.state.metrics.items():
+            pname = prefix+name
+            count = 1
+            if hasattr(engine.state, 'counts'):
+                count = engine.state.counts[name]
+            if pname not in self.counts:
+                self.counts[pname] = 0
+            self.counts[pname] += count
+            if pname not in self.metrics:
+                self.metrics[pname] = 0
+            self.metrics[pname] += val*count
+        # Average metrics over the values seen so far.
         metrics = OrderedDict()
-        denom = ((float(engine.state.iteration)-1) % self.epoch_length) + 1
         for name in self.metrics:
-            metrics[name] = self.metrics[name] / denom
+            metrics[name] = self.metrics[name]/max(float(self.counts[name]), 1)
         # Print to screen.
         desc = ""
         if hasattr(engine.state, 'epoch'):
