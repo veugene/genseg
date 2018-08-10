@@ -66,7 +66,9 @@ class setup_mnist_data(object):
         if not self.gen_train_online:
             # Pre-generate training data.
             self._training_set = \
-                self._generate_cluttered(len(self._x['train']), fold='train')
+                self._generate_cluttered(len(self._x['train']),
+                                         fold='train',
+                                         indices_seg=self._indices_seg)
         
     def _load_data(self):
         # Load.
