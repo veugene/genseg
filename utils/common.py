@@ -69,7 +69,7 @@ class experiment(object):
             append=append,
             epoch_length=epoch_length,
             log_path=os.path.join(self.experiment_path, fn))
-        engine.add_event_handler(Events.ITERATION_COMPLETED, progress)
+        progress.attach(engine)
         return engine
     
     def setup_checkpoints(self, trainer, evaluator,

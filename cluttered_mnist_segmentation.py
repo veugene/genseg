@@ -22,10 +22,9 @@ from ignite.handlers import ModelCheckpoint
 
 from utils.common import (experiment,
                           image_saver)
-from utils.ignite import (metrics_handler,
-                          scoring_function)
-from utils.metrics import (dice_loss,
-                           accuracy)
+from utils.ignite import scoring_function
+from utils.metrics import (batchwise_loss_accumulator,
+                           dice_loss)
 from utils.data import (setup_mnist_data,
                         autorewind)
 from model import configs
@@ -121,111 +120,97 @@ if __name__ == '__main__':
             m = m.cuda()
         return s, h, m, indices
     
-    # Set up metrics.
-    metrics = {'train': None, 'valid': None}
-    for key in ['train', 'valid']:
-        metrics_dict = OrderedDict((
-            ('dice',   dice_loss(1, 0)),
-            ('g_dice', dice_loss(1, 0, accumulate=True))
-            ))
-        metrics[key] = metrics_handler(metrics_dict)
-    
     # Training loop.
     def training_function(engine, batch):
         experiment_state.model.train()
         experiment_state.optimizer.zero_grad()
         A, B, M, indices = prepare_batch(batch, args.labeled_fraction)
-        losses, outputs = experiment_state.model.evaluate(A, B, M, indices,
-                                                          compute_grad=True)
+        outputs = experiment_state.model.evaluate(A, B, M, indices,
+                                                  compute_grad=True)
         experiment_state.optimizer.step()
-        metrics_dict = {}
-        counts_dict  = {}
-        if len(indices)>0:
-            with torch.no_grad():
-                metrics_dict = metrics['train'](outputs['seg'], M)
-                counts_dict  = dict([(key, len(M)) for key in metrics_dict])
-        metrics_dict['rec']  = losses['rec'].item() if losses['rec'] else 0
-        metrics_dict['loss'] = losses['loss'].item()
-        counts_dict['rec']   = len(A)
-        counts_dict['loss']  = len(A)
-        setattr(engine.state, 'metrics', metrics_dict)
-        setattr(engine.state, 'counts',  counts_dict)
-        return losses, metrics_dict
+        outputs = dict([(k, v.detach()) for k, v in outputs.items()])
+        return outputs
     
     # Validation loop.
     def validation_function(engine, batch):
         experiment_state.model.eval()
         A, B, M, indices = prepare_batch(batch)
         with torch.no_grad():
-            losses, outputs = experiment_state.model.evaluate(
-                                        A, B, M, indices, compute_grad=False)
-            metrics_dict = metrics['valid'](outputs['seg'], M)
-            counts_dict  = dict([(key, len(M)) for key in metrics_dict])
-        metrics_dict['rec']  = losses['rec'].item() if losses['rec'] else 0
-        metrics_dict['loss'] = losses['loss'].item()
-        counts_dict['rec']   = len(A)
-        counts_dict['loss']  = len(A)
-        setattr(engine.state, 'metrics', metrics_dict)
-        setattr(engine.state, 'counts',  counts_dict)
+            outputs = experiment_state.model.evaluate(A, B, M, indices,
+                                                      compute_grad=False)
+        outputs = dict([(k, v.detach()) for k, v in outputs.items()])
+        
         # Prepare images to save to disk.
         s, h, m, _ = zip(*batch)
         images = (np.array(s), np.array(h), np.array(m))
         images += tuple([np.squeeze(outputs[key].cpu().numpy(), 1)[:len(A)]
-                        for key in outputs.keys() if outputs[key] is not None])
+                         for key in outputs.keys() if outputs[key] is not None
+                         and key.startswith('out_')])
         setattr(engine.state, 'save_images', images)
         
-        return losses, metrics_dict
+        return outputs
     
     # Get engines.
-    append = bool(args.resume_from is not None)
+    engines = {}
     epoch_length_train = args.epoch_length if args.epoch_length is not None \
                  else (     len(data._training_set)//args.batch_size_train
                        +int(len(data._training_set)%args.batch_size_train>0))
-    trainer   = experiment_state.setup_engine(training_function,
-                                              append=append,
-                                              epoch_length=epoch_length_train)
+    engines['train'] = experiment_state.setup_engine(
+        training_function,
+        append=bool(args.resume_from is not None),
+        epoch_length=epoch_length_train)
     epoch_length_val =(     len(data._validation_set)//args.batch_size_valid
                        +int(len(data._validation_set)%args.batch_size_valid>0))
-    evaluator = experiment_state.setup_engine(validation_function,
-                                              prefix='val',
-                                              append=append,
-                                              epoch_length=epoch_length_val)
+    engines['valid'] = experiment_state.setup_engine(
+        validation_function,
+        prefix='val',
+        append=bool(args.resume_from is not None),
+        epoch_length=epoch_length_val)
     epoch_length_test=(     len(data._testing_set)//args.batch_size_valid
                        +int(len(data._testing_set)%args.batch_size_valid>0))
-    tester    = experiment_state.setup_engine(validation_function,
-                                              prefix='test',
-                                              append=append,
-                                              epoch_length=epoch_length_test)
+    engines['test'] = experiment_state.setup_engine(
+        validation_function,
+        prefix='test',
+        append=bool(args.resume_from is not None),
+        epoch_length=epoch_length_test)
     
-    # Reset global Dice score counts every epoch (or validation run).
-    func = lambda key : metrics[key].measure_functions['g_dice'].reset_counts
-    trainer.add_event_handler(  Events.EPOCH_STARTED, func('train'))
-    evaluator.add_event_handler(Events.EPOCH_STARTED, func('valid'))
+    # Set up metrics.
+    for key in engines:
+        l_dice = dice_loss(target_class=1,
+                        output_transform=lambda x: (x['out_seg'], x['mask']))
+        l_rec  = batchwise_loss_accumulator(
+                        output_transform=lambda x: (x['l_rec'], x['out_rec']))
+        l_all = batchwise_loss_accumulator(
+                        output_transform=lambda x: (x['loss'], x['out_rec']))
+        l_dice.attach(engines[key], name='dice')
+        l_rec.attach(engines[key],  name='l_rec')
+        l_all.attach(engines[key],  name='loss')
 
     # Set up validation.
-    trainer.add_event_handler(Events.EPOCH_COMPLETED,
-                              lambda _: evaluator.run(loader_valid))
+    engines['train'].add_event_handler(Events.EPOCH_COMPLETED,
+                             lambda _: engines['valid'].run(loader_valid))
     
     # Set up image saving.
     image_saver_obj = image_saver(
         save_path=os.path.join(experiment_state.experiment_path,
                                "validation_outputs"),
         name_images='save_images',
-        score_function=scoring_function('metrics', 'g_dice'))
-    evaluator.add_event_handler(Events.ITERATION_COMPLETED, image_saver_obj)
+        score_function=scoring_function('dice'))
+    engines['valid'].add_event_handler(Events.ITERATION_COMPLETED, 
+                                       image_saver_obj)
     
     # Set up model checkpointing.
-    score_function = scoring_function('metrics', 'g_dice')
-    experiment_state.setup_checkpoints(trainer, evaluator,
+    score_function = scoring_function('dice')
+    experiment_state.setup_checkpoints(engines['train'], engines['valid'],
                                        score_function=score_function)
     
     '''
     Train.
     '''
-    trainer.run(loader_train, max_epochs=args.epochs)
+    engines['train'].run(loader_train, max_epochs=args.epochs)
     
     '''
     Test.
     '''
     print("\nTESTING\n")
-    tester.run(loader_test)
+    engines['test'].run(loader_test)

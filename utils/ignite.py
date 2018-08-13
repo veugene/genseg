@@ -1,10 +1,12 @@
 from __future__ import (print_function,
                         division)
 import os
-import numpy as np
 from collections import OrderedDict
+import numpy as np
 from scipy.misc import imsave
 from tqdm import tqdm
+import torch
+from ignite.engine import Events
 
 
 class progress_report(object):
@@ -27,38 +29,26 @@ class progress_report(object):
         print(desc, file=file)
 
     def __call__(self, engine):
+        # If no epoch length is defined, try to get it from the data loader.
         if self.epoch_length is None:
-            # If no epoch length is defined, see if we can pull it
-            # out of the data loader.
             if hasattr(engine.state.dataloader, '__len__'):
                 self.epoch_length = len(engine.state.dataloader)
             else:
                 self.epoch_length = np.inf
+        
+        # Setup prefix.
         prefix = ""
         if self.prefix is not None:
             prefix = "{}_".format(self.prefix)
-        if (engine.state.iteration-1) % self.epoch_length == 0:
-            # Every time we're at the start of the next epoch, reset
-            # the statistics.
-            self.metrics = OrderedDict(((prefix+'loss', 0),))
-            self.counts  = OrderedDict(((prefix+'loss', 0),))
-        for name, val in engine.state.metrics.items():
-            pname = prefix+name
-            count = 1
-            if hasattr(engine.state, 'counts'):
-                count = engine.state.counts[name]
-            if pname not in self.counts:
-                self.counts[pname] = 0
-            self.counts[pname] += count
-            if pname not in self.metrics:
-                self.metrics[pname] = 0
-            self.metrics[pname] += val*count
-        # Average metrics over the values seen so far.
-        metrics = OrderedDict()
-        for name in self.metrics:
-            metrics[name] = self.metrics[name]/max(float(self.counts[name]), 1)
+        
         # Print to screen.
         desc = ""
+        metrics = {}
+        if hasattr(engine.state, 'metrics'):
+            metrics = dict([(key, val.item())
+                            if isinstance(val, torch.Tensor)
+                            else (key, val)
+                            for key, val in engine.state.metrics.items()])
         if hasattr(engine.state, 'epoch'):
             desc += "Epoch {}".format(engine.state.epoch)
         if self.progress_bar:
@@ -74,38 +64,22 @@ class progress_report(object):
                         self.log_string(desc, metrics, file=logfile)
         else:
             self.log_string(desc, metrics)
-
-
-class metrics_handler(object):
-    def __init__(self, measure_functions_dict=None):
-        self.measure_functions = measure_functions_dict
-        if measure_functions_dict is None:
-            self.measure_functions = OrderedDict()
-
-    def __call__(self, output, target):
-        measures = OrderedDict()
-        for m in self.measure_functions:
-            measures[m] = self.measure_functions[m](output, target).item()
-        return measures
-
-    def add(self, metric_name, function):
-        self.measure_functions[metric_name] = function
+    
+    def attach(self, engine):
+        engine.add_event_handler(Events.ITERATION_COMPLETED, self)
 
 
 class scoring_function(object):
-    def __init__(self, metrics_name, loss_name=None, period=1):
+    def __init__(self, metric_name=None, period=1):
         """
-        metrics_name : the name of the dictionary in the state
-          object storing the metrics to monitor.
-        loss_name : loss to monitor. This is one of the keys in
-          engine.state.output[-1] of the trainer.
+        metric_name : metric to monitor. This is one of the keys in
+          `engine.state.metrics` of the trainer.
         period : only consider saving the best model every
           this many epochs.
         """
-        self.metrics_name = metrics_name
-        if loss_name is None:
-            loss_name = 'val_loss'
-        self.loss_name = loss_name
+        if metric_name is None:
+            metric_name = 'val_loss'
+        self.metric_name = metric_name
         self.period = period
         self.epochs_since_last_save = 0
         
@@ -113,7 +87,7 @@ class scoring_function(object):
         self.epochs_since_last_save += 1
         if self.epochs_since_last_save >= self.period:
             self.epochs_since_last_save = 0
-            quantity = getattr(engine.state, self.metrics_name)[self.loss_name]
+            quantity = engine.state.metrics[self.metric_name]
             # Since we're always trying to minimize things, return
             # the -ve of whatever that is.
             return -quantity

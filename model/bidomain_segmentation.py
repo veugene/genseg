@@ -250,13 +250,14 @@ class segmentation_model(nn.Module):
                                          max_norm=self.disc_clip_norm)
         
         # Compile outputs and return.
-        losses  = {'seg'   : loss_segmentation,
-                   'disc_A': loss_disc_A,
-                   'disc_B': loss_disc_B,
-                   'loss'  : loss_G}
-        outputs = {'x_AB'  : x_AB,
-                   'x_BA'  : x_BA,
-                   'x_ABA' : x_ABA,
-                   'x_BAB' : x_BAB,
-                   'seg'   : x_AM}
+        outputs = {'loss'    : loss_G,
+                   'l_seg'   : loss_segmentation,
+                   'l_disc_A': loss_disc_A,
+                   'l_disc_B': loss_disc_B,
+                   'out_AB'  : x_AB,
+                   'out_BA'  : x_BA,
+                   'out_ABA' : x_ABA,
+                   'out_BAB' : x_BAB,
+                   'out_seg' : x_AM,
+                   'mask'    : mask}
         return losses, outputs
