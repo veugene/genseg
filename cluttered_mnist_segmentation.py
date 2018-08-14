@@ -21,7 +21,8 @@ from ignite.handlers import ModelCheckpoint
 
 from utils.common import (experiment,
                           image_saver,
-                          scoring_function)
+                          scoring_function,
+                          summary_tracker)
 from utils.metrics import (batchwise_loss_accumulator,
                            dice_loss)
 from utils.data import (setup_mnist_data,
@@ -185,21 +186,24 @@ if __name__ == '__main__':
         epoch_length=epoch_length_test)
     
     # Set up metrics.
+    def _rec_or_seg(x):
+        if x['out_rec'] is not None:
+            return x['out_rec']
+        if x['out_seg'] is not None:
+            return x['out_seg']
+        raise AssertionError("Internal error. No keys 'out_rec' or 'out_seg'.")
+    metrics = {}
     for key in engines:
-        l_dice = dice_loss(target_class=1,
+        metrics[key] = {}
+        metrics[key]['dice'] = dice_loss(target_class=1,
                         output_transform=lambda x: (x['out_seg'], x['mask']))
-        l_rec  = batchwise_loss_accumulator(
+        metrics[key]['rec']  = batchwise_loss_accumulator(
                         output_transform=lambda x: (x['l_rec'], x['out_rec']))
-        l_all = batchwise_loss_accumulator(
-                        output_transform=lambda x: (x['loss'], x['out_rec']
-                                                            or x['out_seg'])
-                                                   if x['out_rec'] is None
-                                                   or x['out_seg'] is None
-                                                   else
-                                                   (x['loss'], x['out_rec']))
-        l_dice.attach(engines[key], name='dice')
-        l_rec.attach(engines[key],  name='l_rec')
-        l_all.attach(engines[key],  name='loss')
+        metrics[key]['loss'] = batchwise_loss_accumulator(
+                        output_transform=lambda x: (x['loss'], _rec_or_seg(x)))
+        metrics[key]['dice'].attach(engines[key], name='dice')
+        metrics[key]['rec'].attach(engines[key],  name='rec')
+        metrics[key]['loss'].attach(engines[key], name='loss')
 
     # Set up validation.
     engines['train'].add_event_handler(Events.EPOCH_COMPLETED,
@@ -218,6 +222,18 @@ if __name__ == '__main__':
     score_function = scoring_function('dice')
     experiment_state.setup_checkpoints(engines['train'], engines['valid'],
                                        score_function=score_function)
+    
+    # Set up tensorboard logging.
+    # -> Log everything except 'mask' and model outputs.
+    trackers = {}
+    for key in engines:
+        trackers[key] = summary_tracker(
+            path=experiment_state.experiment_path,
+            output_transform=lambda x: (dict([(k, v) for k, v in x.items()
+                                              if not k.startswith('out_')
+                                              and k!='mask']),
+                                        len(_rec_or_seg(x))))
+        trackers[key].attach(engines[key], prefix=key)
     
     '''
     Train.

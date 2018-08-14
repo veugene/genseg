@@ -1,6 +1,10 @@
 from __future__ import (print_function,
                         division)
 
+import matplotlib
+matplotlib.use('agg')   # should be at start; allows use without $DISPLAY
+import matplotlib.pyplot as plt
+
 from collections import OrderedDict
 from datetime import datetime
 import imp
@@ -10,6 +14,7 @@ import sys
 import numpy as np
 import scipy.misc
 from scipy.misc import imsave
+import tensorflow as tf
 import torch
 from tqdm import tqdm
 from ignite.engine import (Engine,
@@ -401,3 +406,133 @@ def count_params(module, trainable_only=True):
         parameters = filter(lambda p: p.requires_grad, parameters)
     num = sum([np.prod(p.size()) for p in parameters])
     return num 
+
+
+class summary_tracker(object):
+    """
+    Accumulate statistics.
+    
+    path : path to save tensorboard event files to.
+    output_transform : function mapping Engine output to
+        `value_dict` - Dict of torch tensors for which to accumulate stats.
+        `n_items`    - # of elements in the batch used to compute values.
+    """
+    def __init__(self, path, output_transform=lambda x: x):
+        self.path = path
+        self.output_transform = output_transform
+        self.summary_writer = tf.summary.FileWriter(path)
+        self._metric_value_dict = OrderedDict()
+        self._item_counter = 0
+        self._epoch = 1
+    
+    def _iteration_completed(self, engine, prefix=None):
+        output = self.output_transform(engine.state.output)
+        self._update(output, prefix)
+    
+    def _epoch_completed(self, engine):
+        self._write(self._epoch)
+        self._epoch += 1
+    
+    def _update(self, output, prefix=None):
+        _value_dict, n_items = output
+        value_dict = OrderedDict()
+        for key in _value_dict:
+            # Convert torch tensors to numpy.
+            if _value_dict[key] is not None:
+                value_dict[key] = _value_dict[key].cpu().numpy()
+        for _key, val in value_dict.items():
+            # Prefix key, if requested.
+            key = _key
+            if prefix is not None:
+                key = "{}_{}".format(prefix, key)
+                
+            # Initialize
+            init_keys = None
+            if len(val.shape)==3:
+                init_keys = [key+'_image_mean', key+'_image_std']
+            elif len(val.shape)==0:
+                init_keys = [key]
+            else:
+                init_keys = [key+'_min', key+'_max', key+'_mean', key+'_std']
+            for k in init_keys:
+                if k not in self._metric_value_dict:
+                    self._metric_value_dict[k] = np.zeros(val.shape[1:],
+                                                          dtype=np.float32)
+
+            # Matrix: log image. Update mean, var. Online - Welford's method.
+            if len(val.shape)==3:
+                mean = self._metric_value_dict[key+'_image_mean']
+                var  = self._metric_value_dict[key+'_image_std']
+                count = 0
+                for i, elem in enumerate(val):
+                    # Update mean, var.
+                    count += 1
+                    old_mean = mean
+                    mean += (elem-mean)/float(count)
+                    var  += (elem-mean)*(elem-old_mean)
+                self._metric_value_dict[key+'_image_mean'] = mean
+                self._metric_value_dict[key+'_image_std']  = var
+            
+            # Non-image.
+            else:
+                a, b = self._item_counter, n_items
+                labels, reductions = [], []
+                if len(val.shape)==0:       # Scalar.
+                    labels.append('')
+                    reductions.append(lambda x: x)
+                else:
+                    axes = tuple(range(1, len(val.shape)))
+                    labels.extend(['_min', '_max', '_mean', '_std'])
+                    reductions.extend([lambda x: np.amin(x, axis=axes),
+                                       lambda x: np.amax(x, axis=axes),
+                                       lambda x: np.mean(x, axis=axes),
+                                       lambda x:  np.std(x, axis=axes)])
+                for l, f in zip(labels, reductions):
+                    old_mean = self._metric_value_dict[key+l]
+                    reduced_val = np.mean(f(val))
+                    mean = (old_mean*a + reduced_val*b) / float(a+b)
+                    self._metric_value_dict[key+l] = mean
+                
+        # Increment counter.
+        self._item_counter += n_items
+    
+    def _write(self, epoch=None):
+        '''
+        Write summaries to event. Increments step count.
+        
+        global_step : typically, the current epoch.
+        '''
+        for key, val in self._metric_value_dict.items():
+            s_value = None
+            if key.endswith('_image_std') or key.endswith('_image_mean'):
+                if key.endswith('_image_std'):
+                    # Turn variance into standard deviation
+                    val = np.sqrt(val)
+                s = io.BytesIO()
+                plt.imsave(s, val, format='png')
+                img = tf.Summary.Image(encoded_image_string=s.getvalue(),
+                                       height=val.shape[0],
+                                       width=val.shape[1])
+                s_value = tf.Summary.Value(tag=key, image=img)
+            else:
+                s_value = tf.Summary.Value(tag=key, simple_value=val)
+            self.summary_writer.add_summary(tf.Summary(value=[s_value]),
+                                            global_step=epoch)
+            self.summary_writer.flush()
+        self._item_counter = 0
+        self._metric_value_dict = OrderedDict()
+    
+    def attach(self, engine, prefix=None):
+        '''
+        prefix : A string to prefix onto the value names.
+        '''
+        engine.add_event_handler(Events.ITERATION_COMPLETED,
+                                 self._iteration_completed, prefix)
+        engine.add_event_handler(Events.EPOCH_COMPLETED,
+                                 self._epoch_completed)
+    
+    def __del__(self):
+        if self.summary_writer is not None:
+            self.summary_writer.flush()
+            self.summary_writer.close()
+            self.summary_writer = None
