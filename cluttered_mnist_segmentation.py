@@ -8,7 +8,6 @@ import shutil
 import argparse
 from datetime import datetime
 import warnings
-#import imp
 
 import numpy as np
 from scipy.misc import imsave
@@ -21,8 +20,8 @@ from ignite.engine import (Events,
 from ignite.handlers import ModelCheckpoint
 
 from utils.common import (experiment,
-                          image_saver)
-from utils.ignite import scoring_function
+                          image_saver,
+                          scoring_function)
 from utils.metrics import (batchwise_loss_accumulator,
                            dice_loss)
 from utils.data import (setup_mnist_data,
