@@ -1,4 +1,5 @@
 import os
+import warnings
 
 import gzip
 import numpy as np
@@ -40,14 +41,15 @@ class setup_mnist_data(object):
     
     def __init__(self, data_dir, n_valid, n_clutter=8, size_clutter=8,
                  size_output=100, segment_fraction=1,
-                 yield_only_labeled=False, gen_train_online=True,
-                 verbose=False, rng=None):
+                 unlabeled_digits=None, yield_only_labeled=False,
+                 gen_train_online=True, verbose=False, rng=None):
         self.data_dir = data_dir
         self.n_valid = n_valid
         self.n_clutter = n_clutter
         self.size_clutter = size_clutter
         self.size_output = size_output
         self.segment_fraction = segment_fraction
+        self.unlabeled_digits = unlabeled_digits
         self.yield_only_labeled = yield_only_labeled
         self.gen_train_online = gen_train_online
         self.verbose = verbose
@@ -101,7 +103,19 @@ class setup_mnist_data(object):
         
         # Provide segmentation masks for these training cases.
         n_segment = max(1, int(self.segment_fraction*len(x_train)+0.5))
-        self._indices_seg = set(self.rng.permutation(len(x_train))[:n_segment]) 
+        indices_seg = [i
+                       for i in range(len(x_train))
+                       if y_train[i] not in (self.unlabeled_digits or [])]
+        random_order = self.rng.permutation(len(indices_seg))
+        indices_seg  = [indices_seg[i] for i in random_order]
+        self._indices_seg = set(indices_seg[:n_segment])
+        if len(self._indices_seg) < n_segment:
+            actual_fraction = len(self._indices_seg)/float(len(x_train))
+            warnings.warn("After limiting the digits that could be labeled, "
+                          "the labeled data contains only {:.2f}% of the "
+                          "source data rather than the requested fraction "
+                          "({:.2f}%).".format(actual_fraction*100,
+                                              self.segment_fraction*100))
         if self.yield_only_labeled:
             x_train = x_train[list(self._indices_seg)]
             y_train = y_train[list(self._indices_seg)]
