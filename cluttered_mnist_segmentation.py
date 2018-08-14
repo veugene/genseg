@@ -106,7 +106,7 @@ if __name__ == '__main__':
     loader_valid = autorewind(partial(data.gen_valid, args.batch_size_valid))
     loader_test  = autorewind(partial(data.gen_test,  args.batch_size_valid))
     
-    def prepare_batch(batch, labeled_fraction=1.):
+    def prepare_batch(batch):
         s, h, m, _ = zip(*batch)
         
         # Identify indices of examples with masks.
@@ -123,15 +123,23 @@ if __name__ == '__main__':
             m = m.cuda()
         return s, h, m, indices
     
+    # Helper for training/validation loops : detach variables from graph.
+    def detach(x):
+        detached = dict([(k, v.detach())
+                         if isinstance(v, Variable)
+                         else (k, v)
+                         for k, v in x.items()])
+        return detached
+    
     # Training loop.
     def training_function(engine, batch):
         experiment_state.model.train()
         experiment_state.optimizer.zero_grad()
-        A, B, M, indices = prepare_batch(batch, args.labeled_fraction)
+        A, B, M, indices = prepare_batch(batch)
         outputs = experiment_state.model.evaluate(A, B, M, indices,
                                                   compute_grad=True)
         experiment_state.optimizer.step()
-        outputs = dict([(k, v.detach()) for k, v in outputs.items()])
+        outputs = detach(outputs)
         return outputs
     
     # Validation loop.
@@ -141,7 +149,7 @@ if __name__ == '__main__':
         with torch.no_grad():
             outputs = experiment_state.model.evaluate(A, B, M, indices,
                                                       compute_grad=False)
-        outputs = dict([(k, v.detach()) for k, v in outputs.items()])
+        outputs = detach(outputs)
         
         # Prepare images to save to disk.
         s, h, m, _ = zip(*batch)
