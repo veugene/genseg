@@ -45,9 +45,9 @@ class progress_report(object):
         desc = ""
         metrics = {}
         if hasattr(engine.state, 'metrics'):
-            metrics = dict([(key, val.item())
+            metrics = dict([(prefix+key, val.item())
                             if isinstance(val, torch.Tensor)
-                            else (key, val)
+                            else (prefix+key, val)
                             for key, val in engine.state.metrics.items()])
         if hasattr(engine.state, 'epoch'):
             desc += "Epoch {}".format(engine.state.epoch)
