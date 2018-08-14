@@ -66,7 +66,7 @@ class dice_loss(metric):
         # Get outputs.
         y_pred, y_true = output
         assert len(y_pred)==len(y_true)
-        if len(y_true)==0:
+        if y_true is None or len(y_true)==0:
             return
         y_pred = sum([y_pred[:,i:i+1] for i in self.target_index])
         
@@ -120,7 +120,7 @@ class batchwise_loss_accumulator(metric):
     
     def update(self, output):
         loss, target = output
-        if len(target)==0:
+        if target is None or len(target)==0:
             return
         self._count += len(target)
         self._total += loss*len(target)
