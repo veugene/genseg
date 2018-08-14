@@ -191,7 +191,12 @@ if __name__ == '__main__':
         l_rec  = batchwise_loss_accumulator(
                         output_transform=lambda x: (x['l_rec'], x['out_rec']))
         l_all = batchwise_loss_accumulator(
-                        output_transform=lambda x: (x['loss'], x['out_rec']))
+                        output_transform=lambda x: (x['loss'], x['out_rec']
+                                                            or x['out_seg'])
+                                                   if x['out_rec'] is None
+                                                   or x['out_seg'] is None
+                                                   else
+                                                   (x['loss'], x['out_rec']))
         l_dice.attach(engines[key], name='dice')
         l_rec.attach(engines[key],  name='l_rec')
         l_all.attach(engines[key],  name='loss')
