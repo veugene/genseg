@@ -11,6 +11,7 @@ import imp
 import os
 import sys
 
+from natsort import natsorted
 import numpy as np
 import scipy.misc
 from scipy.misc import imsave
@@ -49,10 +50,11 @@ class experiment(object):
         else:
             self.experiment_path = args.resume_from
             args = self._load_and_merge_args(parser)
-            state_file = sorted([fn for fn in os.listdir(args.resume_from)
-                                 if fn.startswith('state_dict_')
-                                 and fn.endswith('.pth')])[-1]
+            state_file = natsorted([fn for fn in os.listdir(args.resume_from)
+                                    if fn.startswith('state_dict_')
+                                    and fn.endswith('.pth')])[-1]
             state_from = os.path.join(args.resume_from, state_file)
+            print("Resuming from {}.".format(state_from))
             model, optimizer = self._load_state(load_from=state_from,
                                                 optimizer_name=args.optimizer)
         if not args.cpu:
@@ -108,7 +110,7 @@ class experiment(object):
                                     require_empty=False)
         def _on_epoch_completed(engine, model_dict):
             checkpoint_last_handler(engine, model_dict)
-            self._increment_epoch
+            self._increment_epoch(engine)
         trainer.add_event_handler(Events.EPOCH_COMPLETED,
                                   _on_epoch_completed,
                                   self.model_dict)
