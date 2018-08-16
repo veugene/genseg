@@ -71,6 +71,8 @@ def get_parser():
     parser.add_argument('--pregenerate_training_set', action='store_true')
     parser.add_argument('--n_valid', type=int, default=500)
     parser.add_argument('--cpu', default=False, action='store_true')
+    parser.add_argument('--nb_io_workers', type=int, default=1)
+    parser.add_argument('--nb_proc_workers', type=int, default=1)
     parser.add_argument('--rseed', type=int, default=1234)
     return parser
 
@@ -152,13 +154,19 @@ if __name__ == '__main__':
                             batch_size=args.batch_size_train,
                             sample_random=True,
                             preprocessor=preprocessor(warp=args.augment_data),
-                            rng=np.random.RandomState(args.rseed)),
+                            rng=np.random.RandomState(args.rseed),
+                            nb_io_workers=args.nb_io_workers,
+                            nb_proc_workers=args.nb_proc_workers),
         'valid': data_flow([mnist_data_valid(data)],
                             batch_size=args.batch_size_valid,
-                            preprocessor=preprocessor(warp=False)),
+                            preprocessor=preprocessor(warp=False),
+                            nb_io_workers=args.nb_io_workers,
+                            nb_proc_workers=args.nb_proc_workers),
         'test':  data_flow([mnist_data_test(data)],
                             batch_size=args.batch_size_valid,
-                            preprocessor=preprocessor(warp=False))}
+                            preprocessor=preprocessor(warp=False),
+                            nb_io_workers=args.nb_io_workers,
+                            nb_proc_workers=args.nb_proc_workers)}
     
     # Helper for training/validation loops : detach variables from graph.
     def detach(x):
