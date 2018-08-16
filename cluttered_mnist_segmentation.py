@@ -86,20 +86,7 @@ if __name__ == '__main__':
     assert args.labeled_fraction > 0
     torch.manual_seed(args.rseed)
     
-    # Prepare data.
-    data = setup_mnist_data(
-        data_dir='./data/mnist',
-        n_valid=args.n_valid,
-        n_clutter=args.n_clutter,
-        size_clutter=args.size_clutter,
-        size_output=args.size_output,
-        segment_fraction=args.labeled_fraction,
-        unlabeled_digits=args.unlabeled_digits,
-        yield_only_labeled=args.yield_only_labeled,
-        gen_train_online=args.epoch_length is not None,
-        verbose=True,
-        rng=np.random.RandomState(args.rseed))
-    
+    # Data preprocessing (including data augmentation).
     def preprocessor(warp=False):
         def f(batch):
             s, h, m, _ = zip(*batch[0])
@@ -117,6 +104,7 @@ if __name__ == '__main__':
             return s, h, m
         return f
     
+    # Function to convert data to pytorch usable form.
     def prepare_batch(batch):
         s, h, m = batch
         # Identify indices of examples with masks.
@@ -132,6 +120,19 @@ if __name__ == '__main__':
             m = m.cuda()
         return s, h, m, indices
     
+    # Prepare data.
+    data = setup_mnist_data(
+        data_dir='./data/mnist',
+        n_valid=args.n_valid,
+        n_clutter=args.n_clutter,
+        size_clutter=args.size_clutter,
+        size_output=args.size_output,
+        segment_fraction=args.labeled_fraction,
+        unlabeled_digits=args.unlabeled_digits,
+        yield_only_labeled=args.yield_only_labeled,
+        gen_train_online=args.epoch_length is not None,
+        verbose=True,
+        rng=np.random.RandomState(args.rseed))
     n_samples_train = None if args.epoch_length is None \
                            else args.epoch_length*args.batch_size_train
     loader = {
@@ -147,7 +148,6 @@ if __name__ == '__main__':
         'test':  data_flow([mnist_data_test(data)],
                             batch_size=args.batch_size_valid,
                             preprocessor=preprocessor(warp=False))}
-    
     
     # Helper for training/validation loops : detach variables from graph.
     def detach(x):
