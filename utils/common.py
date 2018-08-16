@@ -440,7 +440,7 @@ class summary_tracker(object):
         value_dict = OrderedDict()
         for key in _value_dict:
             # Convert torch tensors to numpy.
-            if _value_dict[key] is not None:
+            if isinstance(_value_dict[key], torch.Tensor):
                 value_dict[key] = _value_dict[key].cpu().numpy()
         for _key, val in value_dict.items():
             # Prefix key, if requested.
