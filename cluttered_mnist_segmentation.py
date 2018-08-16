@@ -54,6 +54,7 @@ def get_parser():
     parser.add_argument('--unlabeled_digits', type=int, default=None,
                         nargs='+')
     parser.add_argument('--yield_only_labeled', action='store_true')
+    parser.add_argument('--augment_data', action='store_true')
     parser.add_argument('--batch_size_train', type=int, default=20)
     parser.add_argument('--batch_size_valid', type=int, default=20)
     parser.add_argument('--epoch_length', type=int, default=None,
@@ -86,6 +87,16 @@ if __name__ == '__main__':
     assert args.labeled_fraction > 0
     torch.manual_seed(args.rseed)
     
+    # Data augmentation settings.
+    da_kwargs = {'rotation_range': 3.,
+                 'zoom_range': 0.1,
+                 'horizontal_flip': True,
+                 'vertical_flip': True,
+                 'fill_mode': 'reflect',
+                 'spline_warp': True,
+                 'warp_sigma': 5,
+                 'warp_grid_size': 3}
+    
     # Data preprocessing (including data augmentation).
     def preprocessor(warp=False):
         def f(batch):
@@ -95,8 +106,8 @@ if __name__ == '__main__':
             m = [np.expand_dims(x, 0) if x is not None else None for x in m]
             if warp:
                 for i, (s_, h_, m_) in enumerate(zip(s, h, m)):
-                    sm_ = image_random_transform(s_, m_)
-                    h_  = image_random_transform(h_)
+                    sm_ = image_random_transform(s_, m_, **da_kwargs)
+                    h_  = image_random_transform(h_, **da_kwargs)
                     if m_ is None:
                         sm_ = (sm_, None)
                     s[i], m[i] = sm_
@@ -140,7 +151,7 @@ if __name__ == '__main__':
                                              length=n_samples_train)],
                             batch_size=args.batch_size_train,
                             sample_random=True,
-                            preprocessor=preprocessor(warp=True),
+                            preprocessor=preprocessor(warp=args.augment_data),
                             rng=np.random.RandomState(args.rseed)),
         'valid': data_flow([mnist_data_valid(data)],
                             batch_size=args.batch_size_valid,
