@@ -14,10 +14,12 @@ from scipy.misc import imsave
 import torch
 from torch.autograd import Variable
 import ignite
-
 from ignite.engine import (Events,
                            Engine)
 from ignite.handlers import ModelCheckpoint
+
+from data_tools.io import data_flow
+from data_tools.data_augmentation import image_random_transform
 
 from utils.common import (experiment,
                           image_saver,
@@ -26,7 +28,9 @@ from utils.common import (experiment,
 from utils.metrics import (batchwise_loss_accumulator,
                            dice_loss)
 from utils.data import (setup_mnist_data,
-                        autorewind)
+                        mnist_data_train,
+                        mnist_data_valid,
+                        mnist_data_test)
 from model import configs
 
 import itertools
@@ -83,7 +87,6 @@ if __name__ == '__main__':
     torch.manual_seed(args.rseed)
     
     # Prepare data.
-    rng = np.random.RandomState(args.rseed)
     data = setup_mnist_data(
         data_dir='./data/mnist',
         n_valid=args.n_valid,
@@ -95,33 +98,56 @@ if __name__ == '__main__':
         yield_only_labeled=args.yield_only_labeled,
         gen_train_online=args.epoch_length is not None,
         verbose=True,
-        rng=rng)
-    if args.epoch_length is None:
-        loader_train = autorewind(partial(data.gen_train,
-                                          args.batch_size_train))
-    else:
-        loader_train = autorewind(partial(data.gen_train,
-                                          args.batch_size_train,
-                                          args.epoch_length))
-    loader_valid = autorewind(partial(data.gen_valid, args.batch_size_valid))
-    loader_test  = autorewind(partial(data.gen_test,  args.batch_size_valid))
+        rng=np.random.RandomState(args.rseed))
+    
+    def preprocessor(warp=False):
+        def f(batch):
+            s, h, m, _ = zip(*batch[0])
+            s = np.expand_dims(s, 1)
+            h = np.expand_dims(h, 1)
+            m = [np.expand_dims(x, 0) if x is not None else None for x in m]
+            if warp:
+                for i, (s_, h_, m_) in enumerate(zip(s, h, m)):
+                    sm_ = image_random_transform(s_, m_)
+                    h_  = image_random_transform(h_)
+                    if m_ is None:
+                        sm_ = (sm_, None)
+                    s[i], m[i] = sm_
+                    h[i]       = h_
+            return s, h, m
+        return f
     
     def prepare_batch(batch):
-        s, h, m, _ = zip(*batch)
-        
+        s, h, m = batch
         # Identify indices of examples with masks.
         indices = [i for i, mask in enumerate(m) if mask is not None]
-        m_      = [m[i] for i in indices]
-        
+        m       = [m[i] for i in indices]
         # Prepare for pytorch.
-        s = Variable(torch.from_numpy(np.expand_dims(s, 1)))
-        h = Variable(torch.from_numpy(np.expand_dims(h, 1)))
-        m = Variable(torch.from_numpy(np.expand_dims(m_, 1)))
+        s = Variable(torch.from_numpy(s))
+        h = Variable(torch.from_numpy(h))
+        m = Variable(torch.from_numpy(np.array(m)))
         if not args.cpu:
             s = s.cuda()
             h = h.cuda()
             m = m.cuda()
         return s, h, m, indices
+    
+    n_samples_train = None if args.epoch_length is None \
+                           else args.epoch_length*args.batch_size_train
+    loader = {
+        'train': data_flow([mnist_data_train(data,
+                                             length=n_samples_train)],
+                            batch_size=args.batch_size_train,
+                            sample_random=True,
+                            preprocessor=preprocessor(warp=True),
+                            rng=np.random.RandomState(args.rseed)),
+        'valid': data_flow([mnist_data_valid(data)],
+                            batch_size=args.batch_size_valid,
+                            preprocessor=preprocessor(warp=False)),
+        'test':  data_flow([mnist_data_test(data)],
+                            batch_size=args.batch_size_valid,
+                            preprocessor=preprocessor(warp=False))}
+    
     
     # Helper for training/validation loops : detach variables from graph.
     def detach(x):
@@ -152,38 +178,32 @@ if __name__ == '__main__':
         outputs = detach(outputs)
         
         # Prepare images to save to disk.
-        s, h, m, _ = zip(*batch)
-        images = (np.array(s), np.array(h), np.array(m))
-        images += tuple([np.squeeze(outputs[key].cpu().numpy(), 1)[:len(A)]
-                         for key in outputs.keys() if outputs[key] is not None
-                         and key.startswith('out_')])
+        images = batch[:3]+tuple([outputs[key].cpu().numpy()[:len(A)]
+                                  for key in outputs
+                                  if outputs[key] is not None
+                                  and key.startswith('out_')])
+        images = tuple([np.squeeze(x, 1) for x in images])
         setattr(engine.state, 'save_images', images)
         
         return outputs
     
     # Get engines.
     engines = {}
-    epoch_length_train = args.epoch_length if args.epoch_length is not None \
-                 else (     len(data._training_set)//args.batch_size_train
-                       +int(len(data._training_set)%args.batch_size_train>0))
+    append = bool(args.resume_from is not None)
     engines['train'] = experiment_state.setup_engine(
-        training_function,
-        append=bool(args.resume_from is not None),
-        epoch_length=epoch_length_train)
-    epoch_length_val =(     len(data._validation_set)//args.batch_size_valid
-                       +int(len(data._validation_set)%args.batch_size_valid>0))
+                                            training_function,
+                                            append=append,
+                                            epoch_length=len(loader['train']))
     engines['valid'] = experiment_state.setup_engine(
-        validation_function,
-        prefix='val',
-        append=bool(args.resume_from is not None),
-        epoch_length=epoch_length_val)
-    epoch_length_test=(     len(data._testing_set)//args.batch_size_valid
-                       +int(len(data._testing_set)%args.batch_size_valid>0))
+                                            validation_function,
+                                            prefix='val',
+                                            append=append,
+                                            epoch_length=len(loader['valid']))
     engines['test'] = experiment_state.setup_engine(
-        validation_function,
-        prefix='test',
-        append=bool(args.resume_from is not None),
-        epoch_length=epoch_length_test)
+                                            validation_function,
+                                            prefix='test',
+                                            append=append,
+                                            epoch_length=len(loader['test']))
     
     # Set up metrics.
     def _rec_or_seg(x):
@@ -207,7 +227,7 @@ if __name__ == '__main__':
 
     # Set up validation.
     engines['train'].add_event_handler(Events.EPOCH_COMPLETED,
-                             lambda _: engines['valid'].run(loader_valid))
+                             lambda _: engines['valid'].run(loader['valid']))
     
     # Set up image saving.
     image_saver_obj = image_saver(
@@ -238,10 +258,10 @@ if __name__ == '__main__':
     '''
     Train.
     '''
-    engines['train'].run(loader_train, max_epochs=args.epochs)
+    engines['train'].run(loader['train'], max_epochs=args.epochs)
     
     '''
     Test.
     '''
     print("\nTESTING\n")
-    engines['test'].run(loader_test)
+    engines['test'].run(loader['test'])

@@ -1,9 +1,11 @@
 import os
 import warnings
 
+import codecs
 import gzip
 import numpy as np
-import codecs
+from torch.utils.data import (Dataset,
+                              DataLoader)
 
 
 class setup_mnist_data(object):
@@ -262,41 +264,42 @@ class setup_mnist_data(object):
             sample = self._generate_cluttered_sample(fold, indices_seg)
             output_list.append(sample)
         return output_list
-    
-    def _gen_train_online(self, batch_size, n_batches):
-        for _ in range(n_batches):
-            batch = self._generate_cluttered(num=batch_size,
-                                             fold='train',
-                                             indices_seg=self._indices_seg)
-            yield batch
-            
-    def _gen_train(self, batch_size):
-        for i in range(0, len(self._training_set), batch_size):
-            batch = self._training_set[i:i+batch_size]
-            yield batch
-    
-    def gen_train(self, *args, **kwargs):
-        if self.gen_train_online:
-            return self._gen_train_online(*args, **kwargs)
+
+
+class mnist_data_train(Dataset):
+    def __init__(self, data, length=None):
+        self.data = data
+        self.length = length
+    def __getitem__(self, idx):
+        x = None
+        if self.data.gen_train_online:
+            return self.data._generate_cluttered_sample('train',
+                                                        self.data._indices_seg)
         else:
-            return self._gen_train(*args, **kwargs)
-    
-    def gen_valid(self, batch_size):
-        for i in range(0, len(self._validation_set), batch_size):
-            batch = self._validation_set[i:i+batch_size]
-            yield batch
-    
-    def gen_test(self, batch_size):
-        for i in range(0, len(self._testing_set), batch_size):
-            batch = self._testing_set[i:i+batch_size]
-            yield batch
+            return self.data._training_set[idx]
+    def __len__(self):
+        if self.data.gen_train_online:
+            return self.length
+        else:
+            return len(self.data._training_set)
 
 
-class autorewind(object):
-    def __init__(self, generator_function):
-        self.generator_function = generator_function
-    def __iter__(self):
-        return self.generator_function()
+class mnist_data_valid(Dataset):
+    def __init__(self, data):
+        self.data = data
+    def __getitem__(self, idx):
+        return self.data._validation_set[idx]
+    def __len__(self):
+        return len(self.data._validation_set)
+
+
+class mnist_data_test(Dataset):
+    def __init__(self, data):
+        self.data = data
+    def __getitem__(self, idx):
+        return self.data._testing_set[idx]
+    def __len__(self):
+        return len(self.data._testing_set)
 
 
 if __name__=='__main__':
@@ -304,23 +307,29 @@ if __name__=='__main__':
     Interactive debug code.
     
     """
-    mnist_data = setup_mnist_data(data_dir='data',
-                                  n_valid=500,
-                                  n_clutter=50,
-                                  size_clutter=10,
-                                  size_output=100,
-                                  verbose=True,
-                                  rng=np.random.RandomState(1234))
+    data = setup_mnist_data(data_dir='data',
+                            n_valid=500,
+                            n_clutter=50,
+                            size_clutter=10,
+                            size_output=100,
+                            verbose=True,
+                            rng=np.random.RandomState(1234))
+    loader_kwargs = {'batch_size': 10,
+                     'shuffle': True,
+                     'num_workers': 1}
     
-    data_gen = {'train': mnist_data.gen_train(batch_size=10, n_batches=10),
-                'valid': mnist_data.gen_valid(batch_size=10),
-                'test':  mnist_data.gen_test(batch_size=10)}
+    loader = {'train': iter(DataLoader(mnist_data_train(data, length=10),
+                                       **loader_kwargs)),
+              'valid': iter(DataLoader(mnist_data_valid(data),
+                                       **loader_kwargs)),
+              'test':  iter(DataLoader(mnist_data_test(data),
+                                       **loader_kwargs))}
     
     import matplotlib.pyplot as plt
     def make_panel(batch, axis, ax_handle):
-        precat = [np.concatenate(list(zip(*batch['train'][:]))[axis], axis=0),
-                  np.concatenate(list(zip(*batch['valid'][:]))[axis], axis=0),
-                  np.concatenate(list(zip(*batch['test'][:]))[axis], axis=0)]
+        precat = [np.concatenate(list(zip(*batch['train'][:3]))[axis], axis=0),
+                  np.concatenate(list(zip(*batch['valid'][:3]))[axis], axis=0),
+                  np.concatenate(list(zip(*batch['test'][:3]))[axis], axis=0)]
         cat = np.concatenate(precat, axis=1)
         cat[range(0, cat.shape[0], 100), :] = 1
         cat[:, range(0, cat.shape[1], 100)] = 1
@@ -328,7 +337,8 @@ if __name__=='__main__':
     fig, ax = plt.subplots(1, 3)
     plt.gray()
     for i in range(10):
-        batch = dict([(key, next(data_gen[key])) for key in data_gen])
+        batch = dict([(key, [x.cpu().numpy() for x in next(loader[key])])
+                      for key in loader])
         print("batch {}: shape_train={}, shape_valid={}, shape_test={}"
               "".format(i, len(batch['train']), len(batch['valid']),
                         len(batch['test'])))
