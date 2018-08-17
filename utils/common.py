@@ -218,10 +218,10 @@ class experiment(object):
             raise ValueError("Specified resume path does not exist: {}"
                              "".format(args.resume_from))
         
-        with open(os.path.join(args.resume_from, "cmd.sh"), 'r') as arg_file:
+        with open(os.path.join(args.resume_from, "args.txt"), 'r') as arg_file:
             # Remove first word when parsing arguments from file.
-            arg_line = arg_file.read().split(' ')[1:]
-            args_from_file = parser.parse_args(arg_line)
+            _args = arg_file.read().split('\n')[1:]
+            args_from_file = parser.parse_args(_args)
             setattr(args_from_file, 'resume_from',
                     getattr(args, 'resume_from'))
             args = args_from_file
@@ -237,8 +237,8 @@ class experiment(object):
         path = os.path.join(save_path, experiment_id)
         if not os.path.exists(path):
             os.makedirs(path)
-        with open(os.path.join(path, "cmd.sh"), 'w') as f:
-            f.write(' '.join(sys.argv))
+        with open(os.path.join(path, "args.txt"), 'w') as f:
+            f.write('\n'.join(sys.argv))
         return path, experiment_id
 
 
