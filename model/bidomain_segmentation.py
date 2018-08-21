@@ -14,7 +14,7 @@ class segmentation_model(nn.Module):
                  mutual_information, loss_seg=dice_loss(), loss_rec=mae,
                  z_size=(50,), z_constant=0, lambda_disc=1, lambda_x_id=10,
                  lambda_z_id=1, lambda_const=1, lambda_cyc=0, lambda_mi=1,
-                 lambda_mi=1, lambda_seg=1, disc_clip_norm=1., rng=None):
+                 lambda_seg=1, disc_clip_norm=None, rng=None):
         super(segmentation_model, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.f_factor           = f_factor
@@ -233,16 +233,16 @@ class segmentation_model(nn.Module):
             self.disc_B.zero_grad()
         
         # Discriminator losses.
-        loss_disc_A = loss_disc_B = 0
+        loss_D = 0
         if self.lambda_disc:
-            loss_disc_A = (  mse(self.disc_A(x_A), 1)
-                           + mse(self.disc_A(x_BA.detach()), 0))
-            loss_disc_B = (  mse(self.disc_B(x_B), 1)
-                           + mse(self.disc_B(x_AB.detach()), 0))
-            loss_G += self.lambda_disc * (loss_disc_A+loss_disc_B)
+            loss_disc_A_1 = mse(self.disc_A(x_A), 1)
+            loss_disc_A_0 = mse(self.disc_A(x_BA.detach()), 0)
+            loss_disc_B_1 = mse(self.disc_A(x_B), 1)
+            loss_disc_B_0 = mse(self.disc_A(x_AB.detach()), 0)
+            loss_D = self.lambda_disc*( loss_disc_A_0+loss_disc_A_1
+                                       +loss_disc_B_0+loss_disc_B_1)
         if self.lambda_disc and compute_grad:
-            loss_disc_A.backward()
-            loss_disc_B.backward()
+            loss_D.backward()
             if self.disc_clip_norm:
                 nn.utils.clip_grad_norm_(self.disc_A.parameters(),
                                          max_norm=self.disc_clip_norm)
@@ -252,8 +252,7 @@ class segmentation_model(nn.Module):
         # Compile outputs and return.
         outputs = {'loss'    : loss_G,
                    'l_seg'   : loss_segmentation,
-                   'l_disc_A': loss_disc_A,
-                   'l_disc_B': loss_disc_B,
+                   'l_D'     : loss_D,
                    'out_AB'  : x_AB,
                    'out_BA'  : x_BA,
                    'out_ABA' : x_ABA,
