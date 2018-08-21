@@ -4,6 +4,7 @@ from torch import nn
 from torch.autograd import Variable
 from fcn_maker.loss import dice_loss
 from .common import (dist_ratio_mse_abs,
+                     bce,
                      mae,
                      mse)
 
@@ -14,7 +15,8 @@ class segmentation_model(nn.Module):
                  mutual_information, loss_seg=dice_loss(), loss_rec=mae,
                  z_size=(50,), z_constant=0, lambda_disc=1, lambda_x_id=10,
                  lambda_z_id=1, lambda_const=1, lambda_cyc=0, lambda_mi=1,
-                 lambda_seg=1, disc_clip_norm=None, rng=None):
+                 lambda_seg=1, grad_penalty=None, disc_clip_norm=None,
+                 rng=None):
         super(segmentation_model, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.f_factor           = f_factor
@@ -40,6 +42,7 @@ class segmentation_model(nn.Module):
         self.lambda_cyc         = lambda_cyc
         self.lambda_mi          = lambda_mi
         self.lambda_seg         = lambda_seg
+        self.grad_penalty       = grad_penalty
         self.disc_clip_norm     = disc_clip_norm
         self.is_cuda            = False
         
@@ -186,8 +189,8 @@ class segmentation_model(nn.Module):
         loss_G = 0
         dist = self.loss_rec
         if self.lambda_disc:
-            loss_G += self.lambda_disc * mse(self.disc_B(x_AB), 1)
-            loss_G += self.lambda_disc * mse(self.disc_A(x_BA), 1)
+            loss_G += self.lambda_disc * bce(self.disc_B(x_AB), 1)
+            loss_G += self.lambda_disc * bce(self.disc_A(x_BA), 1)
         if self.lambda_x_id:
             loss_G += self.lambda_x_id * dist(x_AA, x_A)
             loss_G += self.lambda_x_id * dist(x_BB, x_B)
@@ -218,7 +221,7 @@ class segmentation_model(nn.Module):
         
         # Segment.
         loss_segmentation = 0
-        if self.lambda_seg and mask is not None:
+        if self.lambda_seg and mask is not None and len(mask)>0:
             loss_segmentation = self.loss_seg(x_AM, mask)
             loss_G += self.lambda_seg * loss_segmentation
             if self.lambda_z_id:
@@ -235,10 +238,34 @@ class segmentation_model(nn.Module):
         # Discriminator losses.
         loss_D = 0
         if self.lambda_disc:
-            loss_disc_A_1 = mse(self.disc_A(x_A), 1)
-            loss_disc_A_0 = mse(self.disc_A(x_BA.detach()), 0)
-            loss_disc_B_1 = mse(self.disc_A(x_B), 1)
-            loss_disc_B_0 = mse(self.disc_A(x_AB.detach()), 0)
+            if self.grad_penalty and compute_grad:
+                x_A.requires_grad = True
+                x_B.requires_grad = True
+            disc_A_real = self.disc_A(x_A)
+            disc_A_fake = self.disc_A(x_BA.detach())
+            disc_B_real = self.disc_A(x_B)
+            disc_B_fake = self.disc_A(x_AB.detach())
+            loss_disc_A_1 = bce(disc_A_real, 1)
+            loss_disc_A_0 = bce(disc_A_fake, 0)
+            loss_disc_B_1 = bce(disc_B_real, 1)
+            loss_disc_B_0 = bce(disc_B_fake, 0)
+            if self.grad_penalty and compute_grad:
+                def _compute_grad_norm(disc_in, disc_out, disc):
+                    ones = torch.ones_like(disc_out)
+                    if disc_in.is_cuda:
+                        ones = ones.cuda()
+                    grad = torch.autograd.grad(disc_out,
+                                               disc_in,
+                                               grad_outputs=ones,
+                                               retain_graph=True,
+                                               create_graph=True,
+                                               only_inputs=True)[0]
+                    grad_norm = (grad.view(grad.size()[0],-1)**2).sum(-1)
+                    return torch.mean(grad_norm)
+                grad_norm_A = _compute_grad_norm(x_A, disc_A_real, self.disc_A)
+                grad_norm_B = _compute_grad_norm(x_B, disc_B_real, self.disc_B)
+                loss_disc_A_1 += self.grad_penalty*grad_norm_A
+                loss_disc_B_1 += self.grad_penalty*grad_norm_B
             loss_D = self.lambda_disc*( loss_disc_A_0+loss_disc_A_1
                                        +loss_disc_B_0+loss_disc_B_1)
         if self.lambda_disc and compute_grad:

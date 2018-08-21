@@ -401,7 +401,16 @@ class mlp(nn.Module):
 def dist_ratio_mse_abs(x, y, eps=1e-7):
     return torch.mean((x-y)**2) / (torch.mean(torch.abs(x-y))+eps)
     
-    
+
+def bce(prediction, target):
+    if not hasattr(target, '__len__'):
+        target = torch.ones_like(prediction)*target
+        if prediction.is_cuda:
+            target = target.cuda()
+        target = Variable(target)
+    return nn.BCELoss()(prediction, target)
+
+
 def mse(prediction, target):
     if not hasattr(target, '__len__'):
         target = torch.ones_like(prediction)*target
