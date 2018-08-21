@@ -68,7 +68,7 @@ class segmentation_model(nn.Module):
             loss.backward()
         
         # Compile outputs and return.
-        outputs = {'loss'   : loss,
+        outputs = {'l_all'  : loss,
                    'l_seg'  : loss_segmentation,
                    'l_rec'  : loss_reconstruction,
                    'out_rec': x_rec,
