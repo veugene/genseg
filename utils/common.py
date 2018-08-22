@@ -9,6 +9,7 @@ from collections import (defaultdict,
                          OrderedDict)
 from datetime import datetime
 import imp
+import io
 import os
 import sys
 
