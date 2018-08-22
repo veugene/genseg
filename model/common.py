@@ -407,7 +407,6 @@ def bce(prediction, target, reduce=False):
         target = torch.ones_like(prediction)*target
         if prediction.is_cuda:
             target = target.cuda()
-        target = Variable(target)
     return nn.BCELoss(reduce=reduce)(prediction, target)
 
 
@@ -416,7 +415,6 @@ def mse(prediction, target, reduce=False):
         target = torch.ones_like(prediction)*target
         if prediction.is_cuda:
             target = target.cuda()
-        target = Variable(target)
     return nn.MSELoss(reduce=reduce)(prediction, target)
 
 
