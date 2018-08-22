@@ -10,7 +10,9 @@ from fcn_maker.loss import dice_loss
 from model.common import (encoder,
                           decoder,
                           instance_normalization,
-                          mae)
+                          dist_ratio_mse_abs,
+                          mae,
+                          mse)
 from model.ae_segmentation import segmentation_model
 
 
@@ -51,11 +53,11 @@ def build_model():
     
     model = segmentation_model(encoder=encoder(**encoder_kwargs),
                                decoder_rec=decoder(**decoder_kwargs),
-                               decoder_seg=decoder(**decoder_kwargs,
+                               decoder_seg=decoder(**decoder_kwargs
                                               output_transform=torch.sigmoid),
-                               loss_rec=mae,
+                               loss_rec=dist_ratio_mse_abs,
                                loss_seg=dice_loss(),
-                               lambda_rec=0.,
+                               lambda_rec=1.,
                                lambda_seg=10.,
                                rng=np.random.RandomState(1234))
     

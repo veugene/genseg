@@ -51,7 +51,8 @@ def build_model():
     
     model = segmentation_model(encoder=encoder(**encoder_kwargs),
                                decoder_rec=decoder(**decoder_kwargs),
-                               decoder_seg=decoder(**decoder_kwargs),
+                               decoder_seg=decoder(**decoder_kwargs,
+                                              output_transform=torch.sigmoid),
                                loss_rec=mae,
                                loss_seg=dice_loss(),
                                lambda_rec=1.,

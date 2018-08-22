@@ -251,10 +251,11 @@ class encoder(nn.Module):
 
 class decoder(nn.Module):
     def __init__(self, input_shape, output_shape, num_conv_blocks, block_type,
-                 num_channels_list, skip=True, dropout=0.,
-                 normalization=instance_normalization, norm_kwargs=None,
-                 conv_padding=True, vector_in=False, upsample_mode='conv',
-                 init='kaiming_normal_', nonlinearity='ReLU', ndim=2):
+                 num_channels_list, output_transform=None, skip=True,
+                 dropout=0., normalization=instance_normalization,
+                 norm_kwargs=None, conv_padding=True, vector_in=False,
+                 upsample_mode='conv', init='kaiming_normal_',
+                 nonlinearity='ReLU', ndim=2):
         super(decoder, self).__init__()
         
         # ndim must be only 2 or 3.
@@ -272,6 +273,7 @@ class decoder(nn.Module):
         self.num_conv_blocks = num_conv_blocks
         self.block_type = block_type
         self.num_channels_list = num_channels_list
+        self.output_transform = output_transform
         self.skip = skip
         self.dropout = dropout
         self.normalization = normalization
@@ -341,7 +343,7 @@ class decoder(nn.Module):
                                   kernel_size=1,
                                   ndim=self.ndim)
         
-    def forward(self, x, segment=False):
+    def forward(self, x):
         out = x
         if self.vector_in:
             out = self.fc(out)
@@ -362,11 +364,8 @@ class decoder(nn.Module):
             if not out.is_contiguous():
                 out = out.contiguous()
         out = self.output(out)
-        if segment:
-            if self.out_channels==1:
-                out = torch.sigmoid(out)
-            else:
-                out = torch.softmax(out, dim=1)
+        if self.output_transform is not None:
+            out = self.output_transform(out)
         return out
     
     

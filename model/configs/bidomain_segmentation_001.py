@@ -55,6 +55,7 @@ def build_model():
         'num_conv_blocks'   : 5,
         'block_type'        : basic_block,
         'num_channels_list' : [50, 50, 30, 20, 1],
+        'output_transform'  : torch.sigmoid,
         'skip'              : True,
         'dropout'           : 0.,
         'normalization'     : instance_normalization,
@@ -148,6 +149,7 @@ def build_model():
             out = self.encoder(x)
             out = self.nlin(out)
             out = self.final_conv(out)
+            out = torch.sigmoid(out)
             return out
     
     
@@ -187,9 +189,9 @@ def build_model():
         def __init__(self, *args, **kwargs):
             super(g_decoder, self).__init__()
             self.model = decoder(*args, **kwargs)
-        def forward(self, common, residual, unique, segment=False):
+        def forward(self, common, residual, unique):
             x = sum([common, residual, unique])
-            return self.model(x, segment=segment)
+            return self.model(x)
     
     vector_size = np.product(bottleneck_size)
     submodel = {
