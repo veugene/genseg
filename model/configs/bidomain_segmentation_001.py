@@ -10,8 +10,8 @@ from fcn_maker.loss import dice_loss
 from model.common import (encoder,
                           decoder,
                           instance_normalization)
-from model.bidomain_segmentation import (segmentation_model,
-                                         mine)
+from model.bidomain_segmentation import segmentation_model
+from model.mine import mine
 
 
 def build_model():
@@ -50,7 +50,7 @@ def build_model():
         'ndim'              : 2}
     
     decoder_kwargs = {
-        'input_shape'       : (150,)+bottleneck_size[1:],
+        'input_shape'       : bottleneck_size,
         'output_shape'      : image_size,
         'num_conv_blocks'   : 5,
         'block_type'        : basic_block,
@@ -185,11 +185,11 @@ def build_model():
         
     class g_decoder(nn.Module):
         def __init__(self, *args, **kwargs):
-            super(g_decoder).__init__()
+            super(g_decoder, self).__init__()
             self.model = decoder(*args, **kwargs)
-        def forward(self, common, residual, unique):
+        def forward(self, common, residual, unique, segment=False):
             x = sum([common, residual, unique])
-            return self.model(x)
+            return self.model(x, segment=segment)
     
     vector_size = np.product(bottleneck_size)
     submodel = {
@@ -208,7 +208,7 @@ def build_model():
                                                     n_hidden=100)}
     
     model = segmentation_model(**submodel,
-                               loss_segmentation=dice_loss(),
+                               loss_seg=dice_loss(),
                                z_size=bottleneck_size,
                                z_constant=0,
                                **lambdas,
