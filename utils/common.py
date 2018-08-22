@@ -5,7 +5,8 @@ import matplotlib
 matplotlib.use('agg')   # should be at start; allows use without $DISPLAY
 import matplotlib.pyplot as plt
 
-from collections import OrderedDict
+from collections import (defaultdict,
+                         OrderedDict)
 from datetime import datetime
 import imp
 import os
@@ -424,7 +425,7 @@ class summary_tracker(object):
         self.output_transform = output_transform
         self.summary_writer = tf.summary.FileWriter(path)
         self._metric_value_dict = OrderedDict()
-        self._item_counter = 0
+        self._item_counter = defaultdict(int)
         self._epoch = 1
     
     def _iteration_completed(self, engine, prefix=None):
@@ -436,13 +437,14 @@ class summary_tracker(object):
         self._epoch += 1
     
     def _update(self, output, prefix=None):
-        _value_dict, n_items = output
+        _value_dict = output
         value_dict = OrderedDict()
         for key in _value_dict:
             # Convert torch tensors to numpy.
-            if isinstance(_value_dict[key], torch.Tensor):
-                value_dict[key] = _value_dict[key].cpu().numpy()
-        for _key, val in value_dict.items():
+            val, count = _value_dict[key]
+            if isinstance(val, torch.Tensor):
+                value_dict[key] = (val.cpu().numpy(), count)
+        for _key, (val, count) in value_dict.items():
             # Prefix key, if requested.
             key = _key
             if prefix is not None:
@@ -477,7 +479,7 @@ class summary_tracker(object):
             
             # Non-image.
             else:
-                a, b = self._item_counter, n_items
+                a, b = self._item_counter[key], count
                 labels, reductions = [], []
                 if len(val.shape)==0:       # Scalar.
                     labels.append('')
@@ -495,8 +497,8 @@ class summary_tracker(object):
                     mean = (old_mean*a + reduced_val*b) / float(a+b)
                     self._metric_value_dict[key+l] = mean
                 
-        # Increment counter.
-        self._item_counter += n_items
+            # Increment counter.
+            self._item_counter[key] += count
     
     def _write(self, epoch=None):
         '''
@@ -521,7 +523,7 @@ class summary_tracker(object):
             self.summary_writer.add_summary(tf.Summary(value=[s_value]),
                                             global_step=epoch)
             self.summary_writer.flush()
-        self._item_counter = 0
+        self._item_counter = defaultdict(int)
         self._metric_value_dict = OrderedDict()
     
     def attach(self, engine, prefix=None):

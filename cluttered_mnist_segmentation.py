@@ -266,11 +266,16 @@ if __name__ == '__main__':
     # Set up tensorboard logging.
     # -> Log everything except 'mask' and model outputs.
     trackers = {}
+    def _tuple(x):
+        if isinstance(x, torch.Tensor) and x.dim()>0:
+            return (torch.mean(x, dim=0), len(x))
+        return (x, 1)
     for key in engines:
         trackers[key] = summary_tracker(
             path=experiment_state.experiment_path,
-            output_transform=lambda x: dict([(k, v) for k, v in x.items()
-                                              if k.startswith('l_')]))
+            output_transform=lambda x: dict([(k, _tuple(v))
+                                             for k, v in x.items()
+                                             if k.startswith('l_')]))
         trackers[key].attach(engines[key], prefix=key)
     
     '''
