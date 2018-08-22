@@ -234,14 +234,14 @@ if __name__ == '__main__':
                         output_transform=lambda x: (x['out_seg'], x['mask']))
         if isinstance(experiment_state.model, model_ae):
             metrics[key]['loss'] = batchwise_loss_accumulator(
-                        output_transform=lambda x: (x['l_all'], x['out_rec']))
+                            output_transform=lambda x: x['l_all'])
             metrics[key]['rec']  = batchwise_loss_accumulator(
-                        output_transform=lambda x: (x['l_rec'], x['out_rec']))
+                            output_transform=lambda x: x['l_rec'])
         if isinstance(experiment_state.model, model_gan):
             metrics[key]['G']    = batchwise_loss_accumulator(
-                        output_transform=lambda x: (x['l_G'], x['out_AB']))
+                            output_transform=lambda x: x['l_G'])
             metrics[key]['D']    = batchwise_loss_accumulator(
-                        output_transform=lambda x: (x['l_D'], x['out_AB']))
+                            output_transform=lambda x: x['l_D'])
         for name, m in metrics[key].items():
             m.attach(engines[key], name=name)
 
@@ -263,17 +263,15 @@ if __name__ == '__main__':
     experiment_state.setup_checkpoints(engines['train'], engines['valid'],
                                        score_function=score_function)
     
-    ## Set up tensorboard logging.
-    ## -> Log everything except 'mask' and model outputs.
-    #trackers = {}
-    #for key in engines:
-        #trackers[key] = summary_tracker(
-            #path=experiment_state.experiment_path,
-            #output_transform=lambda x: (dict([(k, v) for k, v in x.items()
-                                              #if not k.startswith('out_')
-                                              #and k!='mask']),
-                                        #len(_rec_or_seg(x))))
-        #trackers[key].attach(engines[key], prefix=key)
+    # Set up tensorboard logging.
+    # -> Log everything except 'mask' and model outputs.
+    trackers = {}
+    for key in engines:
+        trackers[key] = summary_tracker(
+            path=experiment_state.experiment_path,
+            output_transform=lambda x: dict([(k, v) for k, v in x.items()
+                                              if k.startswith('l_')]))
+        trackers[key].attach(engines[key], prefix=key)
     
     '''
     Train.

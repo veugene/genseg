@@ -1,3 +1,4 @@
+from collections import defaultdict
 import numpy as np
 import torch
 from torch import nn
@@ -7,6 +8,7 @@ from .common import (dist_ratio_mse_abs,
                      bce,
                      mae,
                      mse)
+from .mine import mine
 
 
 class segmentation_model(nn.Module):
@@ -185,58 +187,82 @@ class segmentation_model(nn.Module):
             if self.lambda_z_id:
                 s_AM, a_AM, b_AM = self.encode(x_AM)
         
-        # Generator losses.
-        loss_G = 0
-        dist = self.loss_rec
+        # Generator loss.
+        loss_gen = defaultdict(int)
         if self.lambda_disc:
-            loss_G += self.lambda_disc * bce(self.disc_B(x_AB), 1)
-            loss_G += self.lambda_disc * bce(self.disc_A(x_BA), 1)
-        if self.lambda_x_id:
-            loss_G += self.lambda_x_id * dist(x_AA, x_A)
-            loss_G += self.lambda_x_id * dist(x_BB, x_B)
-        if self.lambda_z_id:
-            loss_G += self.lambda_z_id * dist(s_AB['common'],
-                                              z_AB['common'].detach())
-            loss_G += self.lambda_z_id * dist(s_AB['residual'],
-                                              z_AB['residual'])   # detached
-            loss_G += self.lambda_z_id * dist(s_AB['unique'],
-                                              z_AB['unique'])     # detached
-            loss_G += self.lambda_z_id * dist(s_BA['common'],
-                                              z_BA['common'].detach())
-            loss_G += self.lambda_z_id * dist(s_BA['residual'],
-                                              z_BA['residual'])   # detached
-            loss_G += self.lambda_z_id * dist(s_BA['unique'],
-                                              z_BA['unique'])     # detached
-        if self.lambda_const:
-            loss_G += self.lambda_const * dist(s_B['unique'],
-                                               self._z_constant(batch_size))
-        if self.lambda_cyc:
-            loss_G += self.lambda_cyc * dist(x_ABA, x_A)
-            loss_G += self.lambda_cyc * dist(x_BAB, x_B)
-        if self.lambda_mi:
-            loss_G += self.lambda_mi * self.mi_estimator.evaluate(a_A, b_A)
-            loss_G += self.lambda_mi * self.mi_estimator.evaluate(a_B, b_B)
-            loss_G += self.lambda_mi * self.mi_estimator.evaluate(a_AB, b_AB)
-            loss_G += self.lambda_mi * self.mi_estimator.evaluate(a_BA, b_BA)
+            loss_gen['AB'] = self.lambda_disc*bce(self.disc_B(x_AB), 1)
+            loss_gen['BA'] = self.lambda_disc*bce(self.disc_A(x_BA), 1)
         
-        # Segment.
-        loss_segmentation = 0
+        # Reconstruction loss.
+        loss_rec = defaultdict(int)
+        dist = self.loss_rec
+        if self.lambda_x_id:
+            loss_rec['AA'] = self.lambda_x_id*dist(x_AA, x_A)
+            loss_rec['BB'] = self.lambda_x_id*dist(x_BB, x_B)
+        if self.lambda_z_id:
+            loss_rec['zc_AB'] = self.lambda_z_id*dist(s_AB['common'],
+                                                      z_AB['common'].detach())
+            loss_rec['zr_AB'] = self.lambda_z_id*dist(s_AB['residual'],
+                                                      z_AB['residual'])
+            loss_rec['zu_AB'] = self.lambda_z_id*dist(s_AB['unique'],
+                                                      z_AB['unique'])
+            loss_rec['zc_BU'] = self.lambda_z_id*dist(s_BA['common'],
+                                                      z_BA['common'].detach())
+            loss_rec['zr_BU'] = self.lambda_z_id*dist(s_BA['residual'],
+                                                      z_BA['residual'])
+            loss_rec['zu_BU'] = self.lambda_z_id*dist(s_BA['unique'],
+                                                      z_BA['unique'])
+        
+        # Constant 'unique' representation for B -- loss.
+        loss_const_B = 0
+        if self.lambda_const:
+            loss_const_B = self.lambda_const*dist(s_B['unique'],
+                                                  self._z_constant(batch_size))
+        
+        # Cycle consistency loss.
+        loss_cyc = defaultdict(int)
+        if self.lambda_cyc:
+            loss_cyc['ABA'] = self.lambda_cyc*dist(x_ABA, x_A)
+            loss_cyc['BAB'] = self.lambda_cyc*dist(x_BAB, x_B)
+        
+        # Mutual mutual information loss.
+        loss_mi = defaultdict(int)
+        if self.lambda_mi:
+            loss_mi['A'] = ( self.lambda_mi
+                            *self.mi_estimator.evaluate(a_A, b_A))
+            loss_mi['BA'] = ( self.lambda_mi
+                             *self.mi_estimator.evaluate(a_BA, b_BA))
+        
+        # Segmentation loss.
+        loss_seg = 0
         if self.lambda_seg and mask is not None and len(mask)>0:
-            loss_segmentation = self.loss_seg(x_AM, mask)
-            loss_G += self.lambda_seg * loss_segmentation
-            if self.lambda_z_id:
-                loss_G += (  self.lambda_z_id
-                           * dist(s_AM['unique'], z_AM['unique'].detach()))
+            loss_seg = self.lambda_seg*self.loss_seg(x_AM, mask)
+        
+        # All generator losses combined.
+        def _reduce(loss):
+            def _mean(x):
+                if not isinstance(x, torch.Tensor) or x.dim()<=1:
+                    return x
+                else:
+                    return x.view(x.size(0), -1).mean(1)
+            if not hasattr(loss, '__len__'): loss = [loss]
+            return sum([_mean(v) for v in loss])
+        loss_G = ( _reduce(loss_gen.values())
+                  +_reduce(loss_rec.values())
+                  +_reduce(loss_cyc.values())
+                  +_reduce(loss_mi.values())
+                  +_reduce([loss_const_B])
+                  +_reduce([loss_seg]))
         
         # Compute generator gradients.
         if compute_grad:
-            loss_G.backward()
+            loss_G.mean().backward()
         if compute_grad and self.lambda_disc:
             self.disc_A.zero_grad()
             self.disc_B.zero_grad()
         
         # Discriminator losses.
-        loss_D = 0
+        loss_disc = defaultdict(int)
         if self.lambda_disc:
             if self.grad_penalty and compute_grad:
                 x_A.requires_grad = True
@@ -266,10 +292,11 @@ class segmentation_model(nn.Module):
                 grad_norm_B = _compute_grad_norm(x_B, disc_B_real, self.disc_B)
                 loss_disc_A_1 += self.grad_penalty*grad_norm_A
                 loss_disc_B_1 += self.grad_penalty*grad_norm_B
-            loss_D = self.lambda_disc*( loss_disc_A_0+loss_disc_A_1
-                                       +loss_disc_B_0+loss_disc_B_1)
+            loss_disc['A'] = self.lambda_disc*(loss_disc_A_0+loss_disc_A_1)/2.
+            loss_disc['B'] = self.lambda_disc*(loss_disc_B_0+loss_disc_B_1)/2.
+        loss_D = _reduce(loss_disc['A']+loss_disc['B'])
         if self.lambda_disc and compute_grad:
-            loss_D.backward()
+            loss_D.mean().backward()
             if self.disc_clip_norm:
                 nn.utils.clip_grad_norm_(self.disc_A.parameters(),
                                          max_norm=self.disc_clip_norm)
@@ -277,13 +304,38 @@ class segmentation_model(nn.Module):
                                          max_norm=self.disc_clip_norm)
         
         # Compile outputs and return.
-        outputs = {'l_G'     : loss_G,
-                   'l_D'     : loss_D,
-                   'l_seg'   : loss_segmentation,
-                   'out_AB'  : x_AB,
-                   'out_BA'  : x_BA,
-                   'out_ABA' : x_ABA,
-                   'out_BAB' : x_BAB,
-                   'out_seg' : x_AM,
-                   'mask'    : mask}
-        return losses, outputs
+        outputs = {'l_G'        : loss_G,
+                   'l_D'        : loss_D,
+                   'l_gen_AB'   : loss_gen['AB'],
+                   'l_gen_BA'   : loss_gen['BA'],
+                   'l_rec_AA'   : loss_rec['AA'],
+                   'l_rec_BB'   : loss_rec['BB'],
+                   'l_rec'      : loss_rec['AA']+loss_rec['BB'],
+                   'l_rec_zc_AB': loss_rec['zc_AB'],
+                   'l_rec_zr_AB': loss_rec['zr_AB'],
+                   'l_rec_zu_AB': loss_rec['zu_AB'],
+                   'l_rec_z_AB' : loss_rec['zc_AB']+loss_rec['zr_AB']
+                                 +loss_rec['zu_AB'],
+                   'l_rec_zc_BA': loss_rec['zc_BA'],
+                   'l_rec_zr_BA': loss_rec['zr_BA'],
+                   'l_rec_zu_BA': loss_rec['zu_BA'],
+                   'l_rec_z_BA' : loss_rec['zc_BA']+loss_rec['zr_BA']
+                                 +loss_rec['zu_BA'],
+                   'l_rec_z'    : loss_rec['zc_AB']+loss_rec['zc_BA']
+                                 +loss_rec['zr_AB']+loss_rec['zr_BA']
+                                 +loss_rec['zu_AB']+loss_rec['zu_BA'],
+                   'l_const_B'  : loss_const_B,
+                   'l_cyc_ABA'  : loss_cyc['ABA'],
+                   'l_cyc_BAB'  : loss_cyc['BAB'],
+                   'l_cyc'      : loss_cyc['ABA']+loss_cyc['BAB'],
+                   'l_mi_A'     : loss_mi['A'],
+                   'l_mi_AB'    : loss_mi['AB'],
+                   'l_mi'       : loss_mi['A']+loss_mi['AB'],
+                   'l_seg'      : loss_seg,
+                   'out_AB'     : x_AB,
+                   'out_BA'     : x_BA,
+                   'out_ABA'    : x_ABA,
+                   'out_BAB'    : x_BAB,
+                   'out_seg'    : x_AM,
+                   'mask'       : mask}
+        return outputs

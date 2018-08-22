@@ -42,35 +42,41 @@ class segmentation_model(nn.Module):
             return self._evaluate(x, mask, mask_indices, compute_grad)
     
     def _evaluate(self, x, mask=None, mask_indices=None, compute_grad=False):
-        loss_reconstruction = 0
-        loss_segmentation   = 0
+        loss_rec = 0
+        loss_seg = 0
         
         code  = self.encoder(x)
         x_rec = None
         y     = None
         
+        def _mean(x):
+            if not isinstance(x, torch.Tensor) or x.dim()<=1:
+                return x
+            else:
+                return x.view(x.size(0), -1).mean(1)
+        
         # Reconstruct.
         if self.lambda_rec:
             x_rec = self.decoder_rec(code)
-            loss_reconstruction = self.loss_rec(x_rec, x)
+            loss_rec = _mean(self.loss_rec(x_rec, x))
         
         # Segment.
         if mask is not None and self.lambda_seg:
             if mask_indices is None:
                 mask_indices = list(range(len(mask)))
             y = self.decoder_seg(code, segment=True)
-            loss_segmentation = self.loss_seg(y[mask_indices], mask)
+            loss_seg = _mean(self.loss_seg(y[mask_indices], mask))
         
         # Loss. Compute gradients, if requested.
-        loss = ( self.lambda_rec*loss_reconstruction
-                +self.lambda_seg*loss_segmentation)
+        loss = ( self.lambda_rec*loss_rec
+                +self.lambda_seg*loss_seg)
         if compute_grad:
-            loss.backward()
+            loss.mean().backward()
         
         # Compile outputs and return.
         outputs = {'l_all'  : loss,
-                   'l_seg'  : loss_segmentation,
-                   'l_rec'  : loss_reconstruction,
+                   'l_seg'  : loss_seg,
+                   'l_rec'  : loss_rec,
                    'out_rec': x_rec,
                    'out_seg': y[mask_indices],
                    'mask'   : mask}

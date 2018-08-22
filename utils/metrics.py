@@ -108,22 +108,22 @@ class dice_loss(metric):
 class batchwise_loss_accumulator(metric):
     """
     Accumulates a loss batchwise, weighted by the size of each batch.
-    The batch size is determined as the number of elements in the loss
-    `target`.
+    The batch size is determined as the length of the loss input.
     
-    output_transform : function that converts engine output to a
-        (`loss`, `target`) tuple, where `target` is the tensor of target
-        values against which the loss is computed.
+    output_transform : function that isolates the loss from the engine output.
     """
     def __init__(self, output_transform=lambda x: x):
         super(batchwise_loss_accumulator, self).__init__(output_transform)
     
-    def update(self, output):
-        loss, target = output
-        if target is None or len(target)==0:
+    def update(self, loss):
+        if loss is None:
             return
-        self._count += len(target)
-        self._total += loss*len(target)
+        if isinstance(loss, torch.Tensor) and loss.dim():
+            self._count += len(loss)
+            self._total += loss.mean()*len(loss)
+        else:
+            self._count += 1
+            self._total += loss
         
     def compute(self):
         return self._total/max(1., float(self._count))

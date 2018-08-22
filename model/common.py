@@ -402,26 +402,29 @@ def dist_ratio_mse_abs(x, y, eps=1e-7):
     return torch.mean((x-y)**2) / (torch.mean(torch.abs(x-y))+eps)
     
 
-def bce(prediction, target):
+def bce(prediction, target, reduce=False):
     if not hasattr(target, '__len__'):
         target = torch.ones_like(prediction)*target
         if prediction.is_cuda:
             target = target.cuda()
         target = Variable(target)
-    return nn.BCELoss()(prediction, target)
+    return nn.BCELoss(reduce=reduce)(prediction, target)
 
 
-def mse(prediction, target):
+def mse(prediction, target, reduce=False):
     if not hasattr(target, '__len__'):
         target = torch.ones_like(prediction)*target
         if prediction.is_cuda:
             target = target.cuda()
         target = Variable(target)
-    return nn.MSELoss()(prediction, target)
+    return nn.MSELoss(reduce=reduce)(prediction, target)
 
 
-def mae(prediction, target):
-    return torch.mean(torch.abs(prediction-target))
+def mae(prediction, target, reduce=False):
+    loss = torch.abs(prediction-target)
+    if reduce:
+        loss = torch.mean(loss)
+    return loss
     
     
 if __name__=='__main__':
