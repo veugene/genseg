@@ -175,7 +175,7 @@ class segmentation_model(nn.Module):
             
         # Segment.
         x_AM = None
-        if self.lambda_seg and mask is not None:
+        if self.lambda_seg and mask is not None and len(mask)>0:
             if mask_indices is None:
                 mask_indices = list(range(len(mask)))
             num_masks = len(mask_indices)
@@ -183,8 +183,6 @@ class segmentation_model(nn.Module):
                     'residual': self._z_constant(num_masks),
                     'unique'  : s_A['unique'][mask_indices]}
             x_AM = self.decode(**z_AM)
-            if self.lambda_z_id:
-                s_AM, a_AM, b_AM = self.encode(x_AM)
         
         # Generator loss.
         loss_gen = defaultdict(int)
