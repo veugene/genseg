@@ -98,8 +98,6 @@ def build_model():
         'disc'              : D}
     model = gan(**submodel,
                 z_size=bottleneck_size,
-                z_constant=0,
-                grad_penalty=1.,
-                disc_clip_norm=None)
+                z_constant=0)
     
     return model

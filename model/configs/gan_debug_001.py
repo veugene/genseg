@@ -136,8 +136,6 @@ def build_model():
         'disc'              : patch_discriminator(**discriminator_kwargs)}
     model = gan(**submodel,
                 z_size=bottleneck_size,
-                z_constant=0,
-                grad_penalty=1.,
-                disc_clip_norm=None)
+                z_constant=0)
     
     return model

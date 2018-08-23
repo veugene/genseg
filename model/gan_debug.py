@@ -13,8 +13,7 @@ from .mine import mine
 
 class gan(nn.Module):
     def __init__(self, g_common, g_residual, g_unique, g_output, disc,
-                 z_size=(50,), z_constant=0, grad_penalty=None,
-                 disc_clip_norm=None, rng=None):
+                 z_size=(50,), z_constant=0, rng=None):
         super(gan, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.g_common           = g_common
@@ -24,8 +23,6 @@ class gan(nn.Module):
         self.disc               = disc
         self.z_size             = z_size
         self.z_constant         = z_constant
-        self.grad_penalty       = grad_penalty
-        self.disc_clip_norm     = disc_clip_norm
         self.is_cuda            = False
         
     def _z_constant(self, batch_size):
@@ -56,11 +53,12 @@ class gan(nn.Module):
                             self.g_unique(unique))
         return out
     
-    def evaluate(self, x, compute_grad=False):
+    def evaluate(self, *args, compute_grad=False, **kwargs):
         with torch.set_grad_enabled(compute_grad):
-            return self._evaluate(x, compute_grad)
+            return self._evaluate(*args, compute_grad=compute_grad, **kwargs)
     
-    def _evaluate(self, x, compute_grad=False):
+    def _evaluate(self, x, grad_penalty=None, disc_clip_norm=None,  
+                  compute_grad=False):
         # Generate.
         batch_size = len(x)
         z = {'common'  : self._z_sample(batch_size),
@@ -77,13 +75,13 @@ class gan(nn.Module):
             self.disc.zero_grad()
         
         # Discriminator losses.
-        if self.grad_penalty and compute_grad:
+        if grad_penalty and compute_grad:
             x.requires_grad = True
         disc_real = self.disc(x)
         disc_fake = self.disc(x_gen.detach())
         loss_disc_1 = bce(disc_real, 1)
         loss_disc_0 = bce(disc_fake, 0)
-        if self.grad_penalty and compute_grad:
+        if grad_penalty and compute_grad:
             def _compute_grad_norm(disc_in, disc_out, disc):
                 ones = torch.ones_like(disc_out)
                 if disc_in.is_cuda:
@@ -97,13 +95,13 @@ class gan(nn.Module):
                 grad_norm = (grad.view(grad.size(0),-1)**2).sum(1)
                 return torch.mean(grad_norm)
             grad_norm = _compute_grad_norm(x, disc_real, self.disc)
-            loss_disc_1 += self.grad_penalty*grad_norm
+            loss_disc_1 += grad_penalty*grad_norm
         loss_D = (loss_disc_0+loss_disc_1)/2.
         if compute_grad:
             loss_D.mean().backward()
-            if self.disc_clip_norm:
+            if disc_clip_norm:
                 nn.utils.clip_grad_norm_(self.disc.parameters(),
-                                         max_norm=self.disc_clip_norm)
+                                         max_norm=disc_clip_norm)
         
         # Compile outputs and return.
         outputs = {'l_G'        : loss_G,

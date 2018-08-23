@@ -61,6 +61,8 @@ def get_parser():
     parser.add_argument('--learning_rate', type=float, default=0.001)
     parser.add_argument('--optimizer', type=str, default='amsgrad',
                         choices=['adam', 'amsgrad', 'rmsprop', 'sgd'])
+    parser.add_argument('--grad_penalty', type=float, default=None)
+    parser.add_argument('--disc_clip_norm', type=float, default=None)
     parser.add_argument('--n_clutter', type=int, default=8)
     parser.add_argument('--size_clutter', type=int, default=10)
     parser.add_argument('--size_output', type=int, default=100)
@@ -164,11 +166,15 @@ if __name__ == '__main__':
         return (out,)
     
     # Training loop.
+    eval_kwargs = {'grad_penalty'  : args.grad_penalty,
+                   'disc_clip_norm': args.disc_clip_norm}
     def training_function(engine, batch):
         experiment_state.model.train()
         experiment_state.optimizer.zero_grad()
         A = prepare_batch(batch)
-        outputs = experiment_state.model.evaluate(A, compute_grad=True)
+        outputs = experiment_state.model.evaluate(A,
+                                                  **eval_kwargs,
+                                                  compute_grad=True)
         experiment_state.optimizer.step()
         outputs = detach(outputs)
         setattr(engine.state, 'save_images', gen_image())
