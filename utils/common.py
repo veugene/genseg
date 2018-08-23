@@ -460,7 +460,7 @@ class summary_tracker(object):
             init_keys = None
             if len(val.shape)==3:
                 init_keys = [key+'_image_mean', key+'_image_std']
-            elif len(val.shape)==0:
+            elif len(val.shape) in [0, 1]:
                 init_keys = [key]
             else:
                 init_keys = [key+'_min', key+'_max', key+'_mean', key+'_std']
@@ -487,7 +487,7 @@ class summary_tracker(object):
             else:
                 a, b = self._item_counter[key], count
                 labels, reductions = [], []
-                if len(val.shape)==0:       # Scalar.
+                if len(val.shape) in [0, 1]:       # Scalar.
                     labels.append('')
                     reductions.append(lambda x: x)
                 else:
