@@ -86,20 +86,22 @@ class experiment(object):
         progress.attach(engine)
         return engine
     
-    def setup_checkpoints(self, trainer, evaluator,
+    def setup_checkpoints(self, trainer, evaluator=None,
                           score_function=None, n_saved=2):
-        # Checkpoint for best model performance.
-        checkpoint_best_handler = ModelCheckpoint(
-                                    dirname=self.experiment_path,
-                                    filename_prefix='best_state',
-                                    n_saved=n_saved,
-                                    score_function=score_function,
-                                    atomic=True,
-                                    create_dir=True,
-                                    require_empty=False)
-        evaluator.add_event_handler(Events.EPOCH_COMPLETED,
-                                    checkpoint_best_handler,
-                                    self.model_dict)
+        if evaluator is not None:
+            # Checkpoint for best model performance.
+            checkpoint_best_handler = ModelCheckpoint(
+                                        dirname=self.experiment_path,
+                                        filename_prefix='best_state',
+                                        n_saved=n_saved,
+                                        score_function=score_function,
+                                        atomic=True,
+                                        create_dir=True,
+                                        require_empty=False)
+            evaluator.add_event_handler(Events.EPOCH_COMPLETED,
+                                        checkpoint_best_handler,
+                                        self.model_dict)
+            checkpoint_last_handler._iteration = self._epoch[0]
         
         # Checkpoint at every epoch and increment epoch in `self.model_dict`.
         checkpoint_last_handler = ModelCheckpoint(
@@ -116,16 +118,13 @@ class experiment(object):
         trainer.add_event_handler(Events.EPOCH_COMPLETED,
                                   _on_epoch_completed,
                                   self.model_dict)
+        checkpoint_last_handler._iteration = self._epoch[0]
         
         # Setup initial epoch in the training engine.
         trainer.add_event_handler(Events.STARTED,
                                   lambda engine: setattr(engine.state,
                                                          "epoch",
                                                          self._epoch[0]))
-                                          
-        # Setup initial epoch in the checkpoint handlers.
-        checkpoint_last_handler._iteration = self._epoch[0]
-        checkpoint_best_handler._iteration = self._epoch[0]
         
         
     def _increment_epoch(self, engine):
