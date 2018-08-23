@@ -100,10 +100,10 @@ class setup_mnist_data(object):
         R = self.rng.permutation(len(x_train))
         x_train = x_train[R]
         y_train = y_train[R]
-        x_valid = x_train[-self.n_valid:]
-        y_valid = y_train[-self.n_valid:]
-        x_train = x_train[:-self.n_valid]
-        y_train = y_train[:-self.n_valid]
+        x_valid = x_train[len(x_train)-self.n_valid:]
+        y_valid = y_train[len(y_train)-self.n_valid:]
+        x_train = x_train[:len(x_train)-self.n_valid]
+        y_train = y_train[:len(y_train)-self.n_valid]
         
         # Provide segmentation masks for these training cases.
         n_segment = max(1, int(self.segment_fraction*len(x_train)+0.5))
