@@ -65,9 +65,9 @@ class dice_loss(metric):
         
         # Get outputs.
         y_pred, y_true = output
-        assert len(y_pred)==len(y_true)
         if y_true is None or len(y_true)==0:
             return
+        assert len(y_pred)==len(y_true)
         y_pred = sum([y_pred[:,i:i+1] for i in self.target_index])
         
         # Targer variable must not require a gradient.
