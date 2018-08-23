@@ -44,7 +44,8 @@ class setup_mnist_data(object):
     def __init__(self, data_dir, n_valid, n_clutter=8, size_clutter=8,
                  size_output=100, segment_fraction=1,
                  unlabeled_digits=None, yield_only_labeled=False,
-                 gen_train_online=True, verbose=False, rng=None):
+                 gen_train_online=True, background_noise=0.01,
+                 verbose=False, rng=None):
         self.data_dir = data_dir
         self.n_valid = n_valid
         self.n_clutter = n_clutter
@@ -54,6 +55,7 @@ class setup_mnist_data(object):
         self.unlabeled_digits = unlabeled_digits
         self.yield_only_labeled = yield_only_labeled
         self.gen_train_online = gen_train_online
+        self.background_noise = background_noise
         self.verbose = verbose
         self.rng = rng if rng is not None else np.random.RandomState()
         
@@ -211,8 +213,8 @@ class setup_mnist_data(object):
     def _generate_cluttered_sample(self, fold, indices_seg=None):
         # The background is noisy.
         def background():
-            return 0.01*self.rng.randn(self.size_output,
-                                       self.size_output).astype(np.float32)
+            noise = self.rng.randn(self.size_output, self.size_output)
+            return self.background_noise*noise.astype(np.float32)
         
         # Randomly sample a data point.
         idx_max = len(self._x[fold])

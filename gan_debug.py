@@ -64,6 +64,7 @@ def get_parser():
     parser.add_argument('--n_clutter', type=int, default=8)
     parser.add_argument('--size_clutter', type=int, default=10)
     parser.add_argument('--size_output', type=int, default=100)
+    parser.add_argument('--background_noise', type=float, default=0.01)
     parser.add_argument('--pregenerate_training_set', action='store_true')
     parser.add_argument('--n_valid', type=int, default=500)
     parser.add_argument('--cpu', default=False, action='store_true')
@@ -128,6 +129,7 @@ if __name__ == '__main__':
         size_clutter=args.size_clutter,
         size_output=args.size_output,
         gen_train_online=args.epoch_length is not None,
+        background_noise=args.background_noise,
         verbose=True,
         rng=np.random.RandomState(args.rseed))
     n_samples_train = None if args.epoch_length is None \
