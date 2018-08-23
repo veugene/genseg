@@ -256,11 +256,12 @@ score_function : a `scoring_function` that returns a score, given the Engine
 # TODO: implement per epoch evaluation and saving.
 class image_saver(object):
     def __init__(self, save_path, name_images, save_every=1,
-                 score_function=None):
+                 score_function=None, subdirs=True):
         self.save_path      = save_path
         self.name_images    = name_images
         self.save_every     = save_every
         self.score_function = score_function
+        self.subdirs        = subdirs
         self._max_score     = -np.inf
         self._call_counter  = 0
 
@@ -298,8 +299,10 @@ class image_saver(object):
         
         
         # Make sub-directory.
-        save_dir = os.path.join(self.save_path,
-                                "{}".format(self._call_counter))
+        save_dir = self.save_path
+        if self.subdirs:
+            save_dir = os.path.join(save_dir,
+                                    "{}".format(self._call_counter))
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
         
@@ -307,7 +310,10 @@ class image_saver(object):
         for i, im_set in enumerate(zip(*images)):
             row = np.concatenate(im_set, axis=1)
             im = scipy.misc.toimage(row, high=255., low=0.)
-            im.save(os.path.join(save_dir, "{}.jpg".format(i)))
+            name = "{}.jpg".format(i)
+            if not self.subdirs:
+                name = "{}_{}".format(self._call_counter, name)
+            im.save(os.path.join(save_dir, name))
 
 
 class progress_report(object):
