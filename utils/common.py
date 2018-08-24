@@ -101,7 +101,7 @@ class experiment(object):
             evaluator.add_event_handler(Events.EPOCH_COMPLETED,
                                         checkpoint_best_handler,
                                         self.model_dict)
-            checkpoint_last_handler._iteration = self._epoch[0]
+            checkpoint_best_handler._iteration = self._epoch[0]
         
         # Checkpoint at every epoch and increment epoch in `self.model_dict`.
         checkpoint_last_handler = ModelCheckpoint(
