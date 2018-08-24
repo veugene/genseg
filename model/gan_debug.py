@@ -67,7 +67,7 @@ class gan(nn.Module):
         x_gen = self.decode(**z)
         
         # Generator loss.
-        loss_G = bce(self.disc(x_gen), 1)
+        loss_G = bce(self.disc(x_gen), 1).view(-1,1)
         
         # Compute generator gradients.
         if compute_grad:
@@ -96,7 +96,7 @@ class gan(nn.Module):
                 return torch.mean(grad_norm)
             grad_norm = _compute_grad_norm(x, disc_real, self.disc)
             loss_disc_1 += grad_penalty*grad_norm
-        loss_D = (loss_disc_0+loss_disc_1)/2.
+        loss_D = (loss_disc_0+loss_disc_1).view(-1,1)/2.
         if compute_grad:
             loss_D.mean().backward()
             if disc_clip_norm:
