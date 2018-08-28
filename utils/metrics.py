@@ -65,7 +65,7 @@ class dice_loss(metric):
         
         # Get outputs.
         y_pred, y_true = output
-        if y_true is None or len(y_true)==0:
+        if y_true is None or len(y_true)==0 or y_pred is None:
             return
         assert len(y_pred)==len(y_true)
         y_pred = sum([y_pred[:,i:i+1] for i in self.target_index])
