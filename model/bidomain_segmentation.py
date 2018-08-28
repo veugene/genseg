@@ -71,10 +71,10 @@ class segmentation_model(nn.Module):
         super(segmentation_model, self).cpu(*args, **kwargs)
         
     def encode(self, x):
-        z_a, z_b = self.f_factor(x)
-        z_common = self.f_common(z_b)
+        z_a, z_b   = self.f_factor(x)
+        z_common   = self.f_common(z_b)
         z_residual = self.f_residual(z_b)
-        z_unique = self.f_unique(z_a)
+        z_unique   = self.f_unique(z_a)
         z = {'common'  : z_common,
              'residual': z_residual,
              'unique'  : z_unique}
@@ -157,7 +157,7 @@ class segmentation_model(nn.Module):
             x_BA = self.decode(**z_BA)
         
         # Reconstruct latent codes.
-        if self.lambda_z_id:
+        if self.lambda_z_id or self.lambda_cyc:
             s_AB, a_AB, b_AB = self.encode(x_AB)
             s_BA, a_BA, b_BA = self.encode(x_BA)
         
