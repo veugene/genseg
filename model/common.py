@@ -238,6 +238,7 @@ class encoder(nn.Module):
                                    init=self.init,
                                    nonlinearity=self.nonlinearity)
             shape = get_output_shape(self.fc._modules['fc'], shape)
+        self.output_shape = shape
             
     def forward(self, input):
         out = input
@@ -342,6 +343,7 @@ class decoder(nn.Module):
                                   out_channels=self.output_shape[0],
                                   kernel_size=1,
                                   ndim=self.ndim)
+        self.output_shape = shape
         
     def forward(self, x):
         out = x
