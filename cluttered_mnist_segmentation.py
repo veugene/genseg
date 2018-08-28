@@ -259,7 +259,7 @@ if __name__ == '__main__':
         save_path=os.path.join(experiment_state.experiment_path,
                                "validation_outputs"),
         name_images='save_images',
-        score_function=scoring_function('dice'))
+        subdirs=False)
     engines['valid'].add_event_handler(Events.ITERATION_COMPLETED, 
                                        image_saver_obj)
     
