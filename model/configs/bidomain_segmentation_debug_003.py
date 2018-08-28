@@ -131,9 +131,9 @@ def build_model():
     
     encoder_kwargs = {
         'input_shape'       : image_size,
-        'num_conv_blocks'   : 4,
+        'num_conv_blocks'   : 6,
         'block_type'        : basic_block,
-        'num_channels_list' : [N, N, N*2, N*4],
+        'num_channels_list' : [N, N, N*2, N*4, N*8, N*8],
         'skip'              : True,
         'dropout'           : 0.,
         'normalization'     : batch_normalization,
@@ -149,9 +149,9 @@ def build_model():
     decoder_kwargs = {
         'input_shape'       : encoder_output_size,
         'output_shape'      : image_size,
-        'num_conv_blocks'   : 4,
+        'num_conv_blocks'   : 6,
         'block_type'        : basic_block,
-        'num_channels_list' : [N*4, N*2, N, 1],
+        'num_channels_list' : [N*8, N*8, N*4, N*2, N, 1],
         'output_transform'  : torch.sigmoid,
         'skip'              : True,
         'dropout'           : 0.,
@@ -159,12 +159,13 @@ def build_model():
         'norm_kwargs'       : None,
         'conv_padding'      : True,
         'vector_in'         : False,
+        'upsample_mode'     : 'conv',
         'init'              : 'kaiming_normal_',
         'nonlinearity'      : lambda: nn.LeakyReLU(0.2),
         'ndim'              : 2}
     
     conv_stack_f_kwargs = {
-        'in_channels'       : N*2,
+        'in_channels'       : N*4,
         'out_channels'      : N,
         'num_blocks'        : 1,
         'block_type'        : basic_block,
@@ -179,7 +180,7 @@ def build_model():
     
     conv_stack_g_kwargs = {
         'in_channels'       : N,
-        'out_channels'      : N*2,
+        'out_channels'      : N*4,
         'num_blocks'        : 1,
         'block_type'        : basic_block,
         'skip'              : False,

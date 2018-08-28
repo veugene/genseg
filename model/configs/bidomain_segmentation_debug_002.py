@@ -159,6 +159,7 @@ def build_model():
         'norm_kwargs'       : None,
         'conv_padding'      : True,
         'vector_in'         : False,
+        'upsample_mode'     : 'conv',
         'init'              : 'kaiming_normal_',
         'nonlinearity'      : lambda: nn.LeakyReLU(0.2),
         'ndim'              : 2}
