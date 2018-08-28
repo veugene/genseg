@@ -21,7 +21,8 @@ from ignite.handlers import ModelCheckpoint
 from data_tools.io import data_flow
 from data_tools.data_augmentation import image_random_transform
 
-from utils.common import (experiment,
+from utils.common import (add_label,
+                          experiment,
                           image_saver,
                           scoring_function,
                           summary_tracker)
@@ -199,12 +200,14 @@ if __name__ == '__main__':
         outputs = detach(outputs)
         
         # Prepare images to save to disk.
+        all_keys = ['A','B','M']+list([key for key in outputs.keys()
+                                       if key.startswith('out_')
+                                       and outputs[key] is not None])
         images = batch[:3]+tuple([outputs[key].cpu().numpy()[:len(A)]
-                                  for key in outputs
-                                  if outputs[key] is not None
-                                  and key.startswith('out_')])
-        images = tuple([np.squeeze(x, 1) for x in images])
-        setattr(engine.state, 'save_images', images)
+                                  for key in all_keys[3:]])
+        images = [np.squeeze(x, 1) for x in images]
+        images = [add_label(x, key) for x, key in zip(images, all_keys)]
+        setattr(engine.state, 'save_images', tuple(images))
         
         return outputs
     

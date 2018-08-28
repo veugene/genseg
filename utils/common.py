@@ -15,6 +15,7 @@ import sys
 
 from natsort import natsorted
 import numpy as np
+from PIL import Image, ImageDraw
 import scipy.misc
 from scipy.misc import imsave
 import tensorflow as tf
@@ -314,6 +315,22 @@ class image_saver(object):
             if not self.subdirs:
                 name = "{}_{}".format(self._call_counter, name)
             im.save(os.path.join(save_dir, name))
+
+
+def add_label(images, label):
+    """
+    Labels a stack of grayscale 2D images.
+    """
+    out = np.zeros_like(images)
+    for i, im in enumerate(images):
+        a, b = im.min(), im.max()
+        step = (b-a)/255.
+        bins = np.arange(a, a+255*step, step)
+        im_p = Image.fromarray(np.digitize(im, bins).astype(np.uint8))
+        draw = ImageDraw.Draw(im_p)
+        draw.text((0, 0), label, fill=255)
+        out[i] = np.array(im_p)
+    return out
 
 
 class progress_report(object):
