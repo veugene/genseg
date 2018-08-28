@@ -208,7 +208,8 @@ if __name__ == '__main__':
         images = batch[:3]+tuple([outputs[key].cpu().numpy()[:len(A)]
                                   for key in all_keys[3:]])
         images = [np.squeeze(x, 1) for x in images]
-        images = [add_label(x, key) for x, key in zip(images, all_keys)]
+        images = [add_label(x, key) 
+                  for x, str.replace(key, 'out_', '') in zip(images, all_keys)]
         setattr(engine.state, 'save_images', tuple(images))
         
         return outputs
@@ -259,7 +260,8 @@ if __name__ == '__main__':
         save_path=os.path.join(experiment_state.experiment_path,
                                "validation_outputs"),
         name_images='save_images',
-        subdirs=False)
+        subdirs=False,
+        stack_batch=True)
     engines['valid'].add_event_handler(Events.ITERATION_COMPLETED, 
                                        image_saver_obj)
     

@@ -257,12 +257,13 @@ score_function : a `scoring_function` that returns a score, given the Engine
 # TODO: implement per epoch evaluation and saving.
 class image_saver(object):
     def __init__(self, save_path, name_images, save_every=1,
-                 score_function=None, subdirs=True):
+                 score_function=None, subdirs=True, stack_batch=False):
         self.save_path      = save_path
         self.name_images    = name_images
         self.save_every     = save_every
         self.score_function = score_function
         self.subdirs        = subdirs
+        self.stack_batch    = stack_batch
         self._max_score     = -np.inf
         self._call_counter  = 0
 
@@ -308,13 +309,24 @@ class image_saver(object):
             os.makedirs(save_dir)
         
         # Concatenate images across sets and save to disk.
+        all_rows = []
         for i, im_set in enumerate(zip(*images)):
             row = np.concatenate(im_set, axis=1)
-            im = scipy.misc.toimage(row, high=255., low=0.)
-            name = "{}.jpg".format(i)
+            if self.stack_batch:
+                all_rows.append(row)
+            else:
+                im = scipy.misc.toimage(row, high=255., low=0.)
+                name = "{}.jpg".format(i)
+                if not self.subdirs:
+                    name = "{}_{}".format(self._call_counter, name)
+                im.save(os.path.join(save_dir, name))
+        if self.stack_batch:
+            im_stack = np.concatenate(all_rows, 0)
+            im_stack = scipy.misc.toimage(im_stack, high=255., low=0.)
+            name = "stack.jpg"
             if not self.subdirs:
                 name = "{}_{}".format(self._call_counter, name)
-            im.save(os.path.join(save_dir, name))
+            im_stack.save(os.path.join(save_dir, name))
 
 
 def add_label(images, label):
