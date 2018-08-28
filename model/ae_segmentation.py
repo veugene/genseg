@@ -1,3 +1,4 @@
+from collections import OrderedDict
 import numpy as np
 import torch
 from torch import nn
@@ -74,10 +75,11 @@ class segmentation_model(nn.Module):
             loss.mean().backward()
         
         # Compile outputs and return.
-        outputs = {'l_all'  : loss,
-                   'l_seg'  : loss_seg,
-                   'l_rec'  : loss_rec,
-                   'out_rec': x_rec,
-                   'out_seg': y[mask_indices],
-                   'mask'   : mask}
+        outputs = OrderedDict((
+            ('l_all',   loss),
+            ('l_seg',   loss_seg),
+            ('l_rec',   loss_rec),
+            ('out_rec', x_rec),
+            ('out_seg', y[mask_indices]),
+            ('mask',    mask)))
         return outputs

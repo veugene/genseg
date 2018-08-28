@@ -1,4 +1,5 @@
-from collections import defaultdict
+from collections import (defaultdict,
+                         OrderedDict)
 import numpy as np
 import torch
 from torch import nn
@@ -301,38 +302,39 @@ class segmentation_model(nn.Module):
                                          max_norm=self.disc_clip_norm)
         
         # Compile outputs and return.
-        outputs = {'l_G'        : loss_G,
-                   'l_D'        : loss_D,
-                   'l_gen_AB'   : loss_gen['AB'],
-                   'l_gen_BA'   : loss_gen['BA'],
-                   'l_rec_AA'   : loss_rec['AA'],
-                   'l_rec_BB'   : loss_rec['BB'],
-                   'l_rec'      : loss_rec['AA']+loss_rec['BB'],
-                   'l_rec_zc_AB': loss_rec['zc_AB'],
-                   'l_rec_zr_AB': loss_rec['zr_AB'],
-                   'l_rec_zu_AB': loss_rec['zu_AB'],
-                   'l_rec_z_AB' : loss_rec['zc_AB']+loss_rec['zr_AB']
-                                 +loss_rec['zu_AB'],
-                   'l_rec_zc_BA': loss_rec['zc_BA'],
-                   'l_rec_zr_BA': loss_rec['zr_BA'],
-                   'l_rec_zu_BA': loss_rec['zu_BA'],
-                   'l_rec_z_BA' : loss_rec['zc_BA']+loss_rec['zr_BA']
-                                 +loss_rec['zu_BA'],
-                   'l_rec_z'    : loss_rec['zc_AB']+loss_rec['zc_BA']
-                                 +loss_rec['zr_AB']+loss_rec['zr_BA']
-                                 +loss_rec['zu_AB']+loss_rec['zu_BA'],
-                   'l_const_B'  : loss_const_B,
-                   'l_cyc_ABA'  : loss_cyc['ABA'],
-                   'l_cyc_BAB'  : loss_cyc['BAB'],
-                   'l_cyc'      : loss_cyc['ABA']+loss_cyc['BAB'],
-                   'l_mi_A'     : loss_mi['A'],
-                   'l_mi_AB'    : loss_mi['AB'],
-                   'l_mi'       : loss_mi['A']+loss_mi['AB'],
-                   'l_seg'      : loss_seg,
-                   'out_AB'     : x_AB,
-                   'out_BA'     : x_BA,
-                   'out_ABA'    : x_ABA,
-                   'out_BAB'    : x_BAB,
-                   'out_seg'    : x_AM,
-                   'mask'       : mask}
+        outputs = OrderedDict((
+            ('l_G',         loss_G),
+            ('l_D',         loss_D),
+            ('l_gen_AB',    loss_gen['AB']),
+            ('l_gen_BA',    loss_gen['BA']),
+            ('l_rec_AA',    loss_rec['AA']),
+            ('l_rec_BB',    loss_rec['BB']),
+            ('l_rec',       loss_rec['AA']+loss_rec['BB']),
+            ('l_rec_zc_AB', loss_rec['zc_AB']),
+            ('l_rec_zr_AB', loss_rec['zr_AB']),
+            ('l_rec_zu_AB', loss_rec['zu_AB']),
+            ('l_rec_z_AB',  loss_rec['zc_AB']+loss_rec['zr_AB']
+                           +loss_rec['zu_AB']),
+            ('l_rec_zc_BA', loss_rec['zc_BA']),
+            ('l_rec_zr_BA', loss_rec['zr_BA']),
+            ('l_rec_zu_BA', loss_rec['zu_BA']),
+            ('l_rec_z_BA',  loss_rec['zc_BA']+loss_rec['zr_BA']
+                           +loss_rec['zu_BA']),
+            ('l_rec_z',     loss_rec['zc_AB']+loss_rec['zc_BA']
+                           +loss_rec['zr_AB']+loss_rec['zr_BA']
+                           +loss_rec['zu_AB']+loss_rec['zu_BA']),
+            ('l_const_B',   loss_const_B),
+            ('l_cyc_ABA',   loss_cyc['ABA']),
+            ('l_cyc_BAB',   loss_cyc['BAB']),
+            ('l_cyc',       loss_cyc['ABA']+loss_cyc['BAB']),
+            ('l_mi_A',      loss_mi['A']),
+            ('l_mi_AB',     loss_mi['AB']),
+            ('l_mi',        loss_mi['A']+loss_mi['AB']),
+            ('l_seg',       loss_seg),
+            ('out_AB',      x_AB),
+            ('out_BA',      x_BA),
+            ('out_ABA',     x_ABA),
+            ('out_BAB',     x_BAB),
+            ('out_seg',     x_AM),
+            ('mask',        mask)))
         return outputs
