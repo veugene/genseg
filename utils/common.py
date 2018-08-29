@@ -257,13 +257,16 @@ score_function : a `scoring_function` that returns a score, given the Engine
 # TODO: implement per epoch evaluation and saving.
 class image_saver(object):
     def __init__(self, save_path, name_images, save_every=1,
-                 score_function=None, subdirs=True, stack_batch=False):
+                 score_function=None, subdirs=True, stack_batch=False,
+                 min_val=None, max_val=None):
         self.save_path      = save_path
         self.name_images    = name_images
         self.save_every     = save_every
         self.score_function = score_function
         self.subdirs        = subdirs
         self.stack_batch    = stack_batch
+        self.min_val        = min_val
+        self.max_val        = max_val
         self._max_score     = -np.inf
         self._call_counter  = 0
 
@@ -281,10 +284,14 @@ class image_saver(object):
                 return
         
         # Get images to save.
+        labels = None
         images = getattr(engine.state, self.name_images)
-        if not isinstance(images, tuple):
+        if not (isinstance(images, tuple) or isinstance(images, dict)):
             raise ValueError("Images in `engine.state.{}` should be stored "
-                "as a tuple of image stacks.".format(self.name_images))
+                "as a tuple of image stacks or as a dictionary of image "
+                "stacks with labels as keys.".format(self.name_images))
+        if isinstance(images, dict):
+            labels, images = zip(*images.items())
         n_images = len(images[0])
         shape = np.shape(images[0])
         for stack in images:
@@ -299,7 +306,6 @@ class image_saver(object):
                 raise ValueError("All image stacks must be 3-dimensional "
                     "(stacks of 2D images).")
         
-        
         # Make sub-directory.
         save_dir = self.save_path
         if self.subdirs:
@@ -308,41 +314,40 @@ class image_saver(object):
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
         
+        # Digitize all images.
+        images_digitized = []
+        for i, image_stack in enumerate(images):
+            image_stack_digitized = np.zeros_like(image_stack, dtype=np.uint8)
+            for j, im in enumerate(image_stack):
+                a = im.min() if self.min_val is None else self.min_val
+                b = im.max() if self.max_val is None else self.max_val
+                step = (b-a)/255.
+                bins = np.arange(a, a+255*step, step)
+                im_d = np.digitize(im, bins).astype(np.uint8)
+                if labels is not None:
+                    im_p = Image.fromarray(im_d, mode='L')
+                    draw = ImageDraw.Draw(im_p)
+                    draw.text((0, 0), labels[i], fill=255)
+                    im_d = np.array(im_p)
+                image_stack_digitized[j] = im_d
+            images_digitized.append(image_stack_digitized)
+        
         # Concatenate images across sets and save to disk.
+        def _save(im, filename):
+            if not self.subdirs:
+                name = "{}_{}".format(self._call_counter, filename)
+            im = Image.fromarray(im, mode='L')
+            im.save(os.path.join(save_dir, name))
         all_rows = []
-        for i, im_set in enumerate(zip(*images)):
+        for i, im_set in enumerate(zip(*images_digitized)):
             row = np.concatenate(im_set, axis=1)
             if self.stack_batch:
                 all_rows.append(row)
             else:
-                im = scipy.misc.toimage(row, high=255., low=0.)
-                name = "{}.jpg".format(i)
-                if not self.subdirs:
-                    name = "{}_{}".format(self._call_counter, name)
-                im.save(os.path.join(save_dir, name))
+                _save(row, "{}.jpg".format(i))
         if self.stack_batch:
             im_stack = np.concatenate(all_rows, 0)
-            im_stack = scipy.misc.toimage(im_stack, high=255., low=0.)
-            name = "stack.jpg"
-            if not self.subdirs:
-                name = "{}_{}".format(self._call_counter, name)
-            im_stack.save(os.path.join(save_dir, name))
-
-
-def add_label(images, label):
-    """
-    Labels a stack of grayscale 2D images.
-    """
-    out = np.zeros_like(images)
-    for i, im in enumerate(images):
-        a, b = im.min(), im.max()
-        step = (b-a)/255.
-        bins = np.arange(a, a+255*step, step)
-        im_p = Image.fromarray(np.digitize(im, bins).astype(np.uint8))
-        draw = ImageDraw.Draw(im_p)
-        draw.text((0, 0), label, fill=255)
-        out[i] = np.array(im_p)
-    return out
+            _save(im_stack, "stack.jpg")
 
 
 class progress_report(object):

@@ -21,8 +21,7 @@ from ignite.handlers import ModelCheckpoint
 from data_tools.io import data_flow
 from data_tools.data_augmentation import image_random_transform
 
-from utils.common import (add_label,
-                          experiment,
+from utils.common import (experiment,
                           image_saver,
                           scoring_function,
                           summary_tracker)
@@ -208,9 +207,8 @@ if __name__ == '__main__':
         images = batch[:3]+tuple([outputs[key].cpu().numpy()[:len(A)]
                                   for key in all_keys[3:]])
         images = [np.squeeze(x, 1) for x in images]
-        images = [add_label(x, key) 
-                  for x, str.replace(key, 'out_', '') in zip(images, all_keys)]
-        setattr(engine.state, 'save_images', tuple(images))
+        image_dict = OrderedDict(zip(all_keys, images))
+        setattr(engine.state, 'save_images', image_dict)
         
         return outputs
     
@@ -261,7 +259,9 @@ if __name__ == '__main__':
                                "validation_outputs"),
         name_images='save_images',
         subdirs=False,
-        stack_batch=True)
+        stack_batch=True,
+        min_val=0,
+        max_val=1)
     engines['valid'].add_event_handler(Events.ITERATION_COMPLETED, 
                                        image_saver_obj)
     
