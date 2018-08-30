@@ -267,8 +267,8 @@ class segmentation_model(nn.Module):
                 x_B.requires_grad = True
             disc_A_real = self.disc_A(x_A)
             disc_A_fake = self.disc_A(x_BA.detach())
-            disc_B_real = self.disc_A(x_B)
-            disc_B_fake = self.disc_A(x_AB.detach())
+            disc_B_real = self.disc_B(x_B)
+            disc_B_fake = self.disc_B(x_AB.detach())
             loss_disc_A_1 = bce(disc_A_real, 1)
             loss_disc_A_0 = bce(disc_A_fake, 0)
             loss_disc_B_1 = bce(disc_B_real, 1)
