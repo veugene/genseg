@@ -267,6 +267,7 @@ if __name__ == '__main__':
         stack_batch=True,
         min_val=0,
         max_val=1)
+    image_saver_obj._call_counter = experiment_state._epoch[0] # For resuming.
     engines['valid'].add_event_handler(Events.ITERATION_COMPLETED, 
                                        image_saver_obj)
     

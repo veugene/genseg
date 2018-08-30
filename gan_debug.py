@@ -210,6 +210,7 @@ if __name__ == '__main__':
         name_images='save_images',
         score_function=None,
         subdirs=False)
+    image_saver_obj._call_counter = experiment_state._epoch[0] # For resuming.
     engines['train'].add_event_handler(Events.EPOCH_COMPLETED, 
                                        image_saver_obj)
     
