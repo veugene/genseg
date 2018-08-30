@@ -16,8 +16,9 @@ from model.mine import mine
 
 
 def build_model():
-    N = 64
-    image_size = (1, 30, 30)
+    N = 1024
+    n_latent = 80
+    image_size = (1, 50, 50)
     lambdas = {
         'lambda_disc'       : 1,
         'lambda_x_id'       : 1,
@@ -41,46 +42,7 @@ def build_model():
                 a = a.contiguous()
             if not b.is_contiguous():
                 b = b.contiguous()
-            return a, b
-    
-    class conv_stack(nn.Module):
-        def __init__(self, in_channels, out_channels, num_blocks, block_type,
-                     skip=True, dropout=0.,
-                     normalization=instance_normalization, norm_kwargs=None,
-                     conv_padding=True, init='kaiming_normal_', 
-                     nonlinearity='ReLU', ndim=2):
-            super(conv_stack, self).__init__()
-            self.in_channels   = in_channels
-            self.out_channels  = out_channels
-            self.num_blocks    = num_blocks
-            self.block_type    = block_type
-            self.skip          = skip
-            self.dropout       = dropout
-            self.normalization = normalization
-            self.norm_kwargs   = norm_kwargs if norm_kwargs is not None else {}
-            self.conv_padding  = conv_padding
-            self.nonlinearity  = nonlinearity
-            self.ndim          = ndim
-            self.init          = init
-            assert num_blocks > 0
-            block_kwargs = {'num_filters': self.out_channels,
-                            'skip': self.skip,
-                            'dropout': self.dropout,
-                            'normalization': self.normalization,
-                            'norm_kwargs': self.norm_kwargs,
-                            'conv_padding': self.conv_padding,
-                            'init': self.init,
-                            'nonlinearity': self.nonlinearity,
-                            'ndim': self.ndim}
-            blocks = [block_type(in_channels=self.in_channels,
-                                 **block_kwargs)]
-            for i in range(num_blocks-1):
-                blocks.append(block_type(in_channels=self.out_channels,
-                                         **block_kwargs))
-            self.blocks = nn.Sequential(*tuple(blocks))
-        def forward(self, x):
-            return self.blocks(x)
-        
+            return a, b    
         
     class discriminator(nn.Module):
         def __init__(self, *args, **kwargs):
@@ -99,7 +61,6 @@ def build_model():
             out = self.final_conv(out)
             out = torch.sigmoid(out)
             return out
-    
     
     class mi_estimation_network(nn.Module):
         def __init__(self, x_size, z_size, n_hidden):
@@ -124,16 +85,22 @@ def build_model():
     class g_decoder(nn.Module):
         def __init__(self, *args, **kwargs):
             super(g_decoder, self).__init__()
+            self.tconv = nn.ConvTranspose2d(n_latent*3, N,
+                                            kernel_size=4,
+                                            stride=2,
+                                            padding=0)
             self.model = decoder(*args, **kwargs)
         def forward(self, common, residual, unique):
-            x = sum([common, residual, unique])
-            return self.model(x)
+            x = torch.cat([common, residual, unique], dim=1)
+            x = self.tconv(x)
+            x = self.model(x)
+            return x
     
     encoder_kwargs = {
         'input_shape'       : image_size,
-        'num_conv_blocks'   : 4,
+        'num_conv_blocks'   : 7,
         'block_type'        : basic_block,
-        'num_channels_list' : [N, N, N*2, N*4],
+        'num_channels_list' : [N//16, N//8, N//6, N//4, N//3, N//2, N],
         'skip'              : True,
         'dropout'           : 0.,
         'normalization'     : batch_normalization,
@@ -144,59 +111,31 @@ def build_model():
         'nonlinearity'      : lambda: nn.LeakyReLU(0.2),
         'ndim'              : 2}
     f_factor_inst = f_factor(**encoder_kwargs)
-    encoder_output_size = f_factor_inst.output_shape[0]
+    enc_out_shape = f_factor_inst.output_shape[0]
     
     decoder_kwargs = {
-        'input_shape'       : encoder_output_size,
+        'input_shape'       : (N,)+enc_out_shape[1:],
         'output_shape'      : image_size,
-        'num_conv_blocks'   : 4,
-        'block_type'        : basic_block,
-        'num_channels_list' : [N*4, N*2, N, 1],
+        'num_conv_blocks'   : 5,
+        'block_type'        : tiny_block,
+        'num_channels_list' : [N//2, N//4, N//8, N//16, 1],
         'output_transform'  : torch.sigmoid,
-        'skip'              : True,
+        'skip'              : False,
         'dropout'           : 0.,
         'normalization'     : batch_normalization,
         'norm_kwargs'       : None,
         'conv_padding'      : True,
         'vector_in'         : False,
-        'upsample_mode'     : 'conv',
         'init'              : 'kaiming_normal_',
-        'nonlinearity'      : lambda: nn.LeakyReLU(0.2),
-        'ndim'              : 2}
-    
-    conv_stack_f_kwargs = {
-        'in_channels'       : N*2,
-        'out_channels'      : N,
-        'num_blocks'        : 1,
-        'block_type'        : basic_block,
-        'skip'              : False,
-        'dropout'           : 0.,
-        'normalization'     : batch_normalization,
-        'norm_kwargs'       : None,
-        'conv_padding'      : True,
-        'init'              : 'kaiming_normal_',
-        'nonlinearity'      : lambda: nn.LeakyReLU(0.2),
-        'ndim'              : 2}
-    
-    conv_stack_g_kwargs = {
-        'in_channels'       : N,
-        'out_channels'      : N*2,
-        'num_blocks'        : 1,
-        'block_type'        : basic_block,
-        'skip'              : False,
-        'dropout'           : 0.,
-        'normalization'     : batch_normalization,
-        'norm_kwargs'       : None,
-        'conv_padding'      : True,
-        'init'              : 'kaiming_normal_',
-        'nonlinearity'      : lambda: nn.LeakyReLU(0.2),
+        'upsample_mode'     : 'repeat',
+        'nonlinearity'      : 'ReLU',
         'ndim'              : 2}
     
     discriminator_kwargs = {
         'input_shape'       : image_size,
-        'num_conv_blocks'   : 4,
+        'num_conv_blocks'   : 6,
         'block_type'        : tiny_block,
-        'num_channels_list' : [N, N, N*2, N*4],
+        'num_channels_list' : [N//16, N//16, N//8, N//4, N//2, N],
         'skip'              : False,
         'dropout'           : 0.,
         'normalization'     : batch_normalization,
@@ -207,16 +146,28 @@ def build_model():
         'nonlinearity'      : lambda: nn.LeakyReLU(0.2),
         'ndim'              : 2}
     
-    bottleneck_size = (N,)+encoder_output_size[1:]
-    vector_size = np.product(bottleneck_size)
+    class conv_bn_relu(nn.Module):
+        def __init__(self, in_channels, out_channels):
+            super(conv_bn_relu, self).__init__()
+            self.conv = nn.Conv2d(in_channels=in_channels,
+                                  out_channels=out_channels,
+                                  kernel_size=3,
+                                  padding=1)
+            self.bn = nn.BatchNorm2d(out_channels)
+        def forward(self, x):
+            return nn.functional.relu(self.bn(self.conv(x)))
+    
+    latent_shape = (n_latent,)+enc_out_shape[1:]
+    print("DEBUG: latent_shape={}".format(latent_shape))
+    vector_size = np.product(enc_out_shape)
     submodel = {
         'f_factor'          : f_factor_inst,
-        'f_common'          : conv_stack(**conv_stack_f_kwargs),
-        'f_residual'        : conv_stack(**conv_stack_f_kwargs),
-        'f_unique'          : conv_stack(**conv_stack_f_kwargs),
-        'g_common'          : conv_stack(**conv_stack_g_kwargs),
-        'g_residual'        : conv_stack(**conv_stack_g_kwargs),
-        'g_unique'          : conv_stack(**conv_stack_g_kwargs),
+        'f_common'          : conv_bn_relu(enc_out_shape[0], n_latent),
+        'f_residual'        : conv_bn_relu(enc_out_shape[0], n_latent),
+        'f_unique'          : conv_bn_relu(enc_out_shape[0], n_latent),
+        'g_common'          : lambda x:x,
+        'g_residual'        : lambda x:x,
+        'g_unique'          : lambda x:x,
         'g_output'          : g_decoder(**decoder_kwargs),
         'disc_A'            : discriminator(**discriminator_kwargs),
         'disc_B'            : discriminator(**discriminator_kwargs),
@@ -226,10 +177,8 @@ def build_model():
     
     model = segmentation_model(**submodel,
                                loss_seg=dice_loss(),
-                               z_size=bottleneck_size,
+                               z_size=latent_shape,
                                z_constant=0,
-                               **lambdas,
-                               grad_penalty=None,
-                               disc_clip_norm=None)
+                               **lambdas)
     
     return model
