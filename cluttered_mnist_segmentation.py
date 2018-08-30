@@ -292,6 +292,9 @@ if __name__ == '__main__':
                                              for k, v in x.items()
                                              if k.startswith('l_')]))
         trackers[key].attach(engines[key], prefix=key)
+    trackers['train'].summary_writer.add_text(
+        'experiment_config',
+        experiment_state.model._model_as_str)
     
     '''
     Train.
