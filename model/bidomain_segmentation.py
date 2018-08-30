@@ -286,49 +286,51 @@ class segmentation_model(nn.Module):
                     return torch.mean(grad_norm)
                 grad_norm_A = _compute_grad_norm(x_A, disc_A_real, self.disc_A)
                 grad_norm_B = _compute_grad_norm(x_B, disc_B_real, self.disc_B)
-                loss_disc_A_1 += self.grad_penalty*grad_norm_A
-                loss_disc_B_1 += self.grad_penalty*grad_norm_B
+                loss_disc_A_1 += grad_penalty*grad_norm_A
+                loss_disc_B_1 += grad_penalty*grad_norm_B
             loss_disc['A'] = self.lambda_disc*(loss_disc_A_0+loss_disc_A_1)/2.
             loss_disc['B'] = self.lambda_disc*(loss_disc_B_0+loss_disc_B_1)/2.
         loss_D = _reduce(loss_disc['A']+loss_disc['B'])
         if self.lambda_disc and compute_grad:
             loss_D.mean().backward()
-            if self.disc_clip_norm:
+            if disc_clip_norm:
                 nn.utils.clip_grad_norm_(self.disc_A.parameters(),
-                                         max_norm=self.disc_clip_norm)
+                                         max_norm=disc_clip_norm)
                 nn.utils.clip_grad_norm_(self.disc_B.parameters(),
-                                         max_norm=self.disc_clip_norm)
+                                         max_norm=disc_clip_norm)
         
         # Compile outputs and return.
         outputs = OrderedDict((
             ('l_G',         loss_G),
             ('l_D',         loss_D),
-            ('l_gen_AB',    loss_gen['AB']),
-            ('l_gen_BA',    loss_gen['BA']),
-            ('l_rec_AA',    loss_rec['AA']),
-            ('l_rec_BB',    loss_rec['BB']),
-            ('l_rec',       loss_rec['AA']+loss_rec['BB']),
-            ('l_rec_zc_AB', loss_rec['zc_AB']),
-            ('l_rec_zr_AB', loss_rec['zr_AB']),
-            ('l_rec_zu_AB', loss_rec['zu_AB']),
-            ('l_rec_z_AB',  loss_rec['zc_AB']+loss_rec['zr_AB']
-                           +loss_rec['zu_AB']),
-            ('l_rec_zc_BA', loss_rec['zc_BA']),
-            ('l_rec_zr_BA', loss_rec['zr_BA']),
-            ('l_rec_zu_BA', loss_rec['zu_BA']),
-            ('l_rec_z_BA',  loss_rec['zc_BA']+loss_rec['zr_BA']
-                           +loss_rec['zu_BA']),
-            ('l_rec_z',     loss_rec['zc_AB']+loss_rec['zc_BA']
-                           +loss_rec['zr_AB']+loss_rec['zr_BA']
-                           +loss_rec['zu_AB']+loss_rec['zu_BA']),
-            ('l_const_B',   loss_const_B),
-            ('l_cyc_ABA',   loss_cyc['ABA']),
-            ('l_cyc_BAB',   loss_cyc['BAB']),
-            ('l_cyc',       loss_cyc['ABA']+loss_cyc['BAB']),
-            ('l_mi_A',      loss_mi['A']),
-            ('l_mi_AB',     loss_mi['AB']),
-            ('l_mi',        loss_mi['A']+loss_mi['AB']),
-            ('l_seg',       loss_seg),
+            ('l_DA',        _reduce([loss_disc['A']])),
+            ('l_DB',        _reduce([loss_disc['B']])),
+            ('l_gen_AB',    _reduce([loss_gen['AB']])),
+            ('l_gen_BA',    _reduce([loss_gen['BA']])),
+            ('l_rec_AA',    _reduce([loss_rec['AA']])),
+            ('l_rec_BB',    _reduce([loss_rec['BB']])),
+            ('l_rec',       _reduce([loss_rec['AA']+loss_rec['BB']])),
+            ('l_rec_zc_AB', _reduce([loss_rec['zc_AB']])),
+            ('l_rec_zr_AB', _reduce([loss_rec['zr_AB']])),
+            ('l_rec_zu_AB', _reduce([loss_rec['zu_AB']])),
+            ('l_rec_z_AB',  _reduce([loss_rec['zc_AB']+loss_rec['zr_AB']
+                                    +loss_rec['zu_AB']])),
+            ('l_rec_zc_BA', _reduce([loss_rec['zc_BA']])),
+            ('l_rec_zr_BA', _reduce([loss_rec['zr_BA']])),
+            ('l_rec_zu_BA', _reduce([loss_rec['zu_BA']])),
+            ('l_rec_z_BA',  _reduce([loss_rec['zc_BA']+loss_rec['zr_BA']
+                                    +loss_rec['zu_BA']])),
+            ('l_rec_z',     _reduce([loss_rec['zc_AB']+loss_rec['zc_BA']
+                                    +loss_rec['zr_AB']+loss_rec['zr_BA']
+                                    +loss_rec['zu_AB']+loss_rec['zu_BA']])),
+            ('l_const_B',   _reduce([loss_const_B])),
+            ('l_cyc_ABA',   _reduce([loss_cyc['ABA']])),
+            ('l_cyc_BAB',   _reduce([loss_cyc['BAB']])),
+            ('l_cyc',       _reduce([loss_cyc['ABA']+loss_cyc['BAB']])),
+            ('l_mi_A',      _reduce([loss_mi['A']])),
+            ('l_mi_AB',     _reduce([loss_mi['AB']])),
+            ('l_mi',        _reduce([loss_mi['A']+loss_mi['AB']])),
+            ('l_seg',       _reduce([loss_seg])),
             ('out_AB',      x_AB),
             ('out_BA',      x_BA),
             ('out_ABA',     x_ABA),
