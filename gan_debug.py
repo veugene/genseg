@@ -154,17 +154,6 @@ if __name__ == '__main__':
                          for k, v in x.items()])
         return detached
     
-    # Set up image generation for evaluation.
-    zc = experiment_state.model._z_sample(20*20)
-    zr = experiment_state.model._z_sample(20*20)
-    zu = experiment_state.model._z_sample(20*20)
-    def gen_image():
-        out = experiment_state.model.decode(zc, zr, zu).detach().cpu().numpy()
-        out = np.transpose(out.reshape(20, 20, out.shape[-2], out.shape[-1]),
-                           (0,2,1,3)).reshape(1, 20*out.shape[-2],
-                                                 20*out.shape[-1])
-        return (out,)
-    
     # Training loop.
     eval_kwargs = {'grad_penalty'  : args.grad_penalty,
                    'disc_clip_norm': args.disc_clip_norm}
@@ -177,7 +166,6 @@ if __name__ == '__main__':
                                                   compute_grad=True)
         experiment_state.optimizer.step()
         outputs = detach(outputs)
-        setattr(engine.state, 'save_images', gen_image())
         return outputs
     
     # Get engines.
@@ -187,6 +175,22 @@ if __name__ == '__main__':
                                             training_function,
                                             append=append,
                                             epoch_length=len(loader['train']))
+    
+    # Set up image generation for evaluation.
+    zc = experiment_state.model._z_sample(20*20)
+    zr = experiment_state.model._z_sample(20*20)
+    zu = experiment_state.model._z_sample(20*20)
+    def gen_image():
+        with torch.no_grad():
+            out = experiment_state.model.decode(zc, zr, zu)
+        out = out.detach().cpu().numpy()
+        out = np.transpose(out.reshape(20, 20, out.shape[-2], out.shape[-1]),
+                           (0,2,1,3)).reshape(1, 20*out.shape[-2],
+                                                 20*out.shape[-1])
+        return (out,)
+    engines['train'].add_event_handler(
+        Events.EPOCH_COMPLETED,
+        lambda engine: setattr(engine.state, 'save_images', gen_image()))
     
     # Set up metrics.
     metrics = {}
