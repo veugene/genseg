@@ -249,8 +249,10 @@ if __name__ == '__main__':
         if isinstance(experiment_state.model, model_gan):
             metrics[key]['G']    = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_G'])
-            metrics[key]['D']    = batchwise_loss_accumulator(
-                            output_transform=lambda x: x['l_D'])
+            metrics[key]['DA']   = batchwise_loss_accumulator(
+                            output_transform=lambda x: x['l_DA'])
+            metrics[key]['DB']   = batchwise_loss_accumulator(
+                            output_transform=lambda x: x['l_DB'])
         for name, m in metrics[key].items():
             m.attach(engines[key], name=name)
 
