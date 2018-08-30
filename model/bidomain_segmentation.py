@@ -53,9 +53,11 @@ class segmentation_model(nn.Module):
             ret = ret.cuda()
         return ret
     
-    def _z_sample(self, batch_size):
-        ret = Variable(torch.randn((batch_size,)
-                                    +self.z_size).type(torch.float32))
+    def _z_sample(self, batch_size, rng=None):
+        if rng is None:
+            rng = self.rng
+        sample = rng.randn(batch_size, *self.z_size).astype(np.float32)
+        ret = Variable(torch.from_numpy(sample))
         if self.is_cuda:
             ret = ret.cuda()
         return ret
@@ -84,21 +86,21 @@ class segmentation_model(nn.Module):
                             self.g_unique(unique))
         return out
     
-    def translate_AB(self, x_A):
+    def translate_AB(self, x_A, rng=None):
         batch_size = len(x_A)
         s_A, _, _ = self.encode(x_A)
         z_A = {'common'  : s_A['common'],
-               'residual': self._z_sample(batch_size),
+               'residual': self._z_sample(batch_size, rng=rng),
                'unique'  : self._z_constant(batch_size)}
         x_AB = self.decode(**z_A)
         return x_AB
     
-    def translate_BA(self, x_B):
+    def translate_BA(self, x_B, rng=None):
         batch_size = len(x_B)
         s_B, _, _ = self.encode(x_B)
         z_B = {'common'  : s_B['common'],
-               'residual': self._z_sample(batch_size),
-               'unique'  : self._z_sample(batch_size)}
+               'residual': self._z_sample(batch_size, rng=rng),
+               'unique'  : self._z_sample(batch_size, rng=rng)}
         x_BA = self.decode(**z_B)
         return x_BA
     
@@ -117,7 +119,7 @@ class segmentation_model(nn.Module):
             return self._evaluate(x_A, x_B, mask, mask_indices,
                                   compute_grad=compute_grad, **kwargs)
     
-    def _evaluate(self, x_A, x_B, mask=None, mask_indices=None,
+    def _evaluate(self, x_A, x_B, mask=None, mask_indices=None, rng=None,
                   grad_penalty=None, disc_clip_norm=None, compute_grad=False):
         assert len(x_A)==len(x_B)
         batch_size = len(x_A)
@@ -147,11 +149,11 @@ class segmentation_model(nn.Module):
         x_AB = x_BA = None
         if self.lambda_disc or self.lambda_z_id:
             z_AB = {'common'  : s_A['common'],
-                    'residual': self._z_sample(batch_size),
+                    'residual': self._z_sample(batch_size, rng=rng),
                     'unique'  : self._z_constant(batch_size)}
             z_BA = {'common'  : s_B['common'],
-                    'residual': self._z_sample(batch_size),
-                    'unique'  : self._z_sample(batch_size)}
+                    'residual': self._z_sample(batch_size, rng=rng),
+                    'unique'  : self._z_sample(batch_size, rng=rng)}
             x_AB = self.decode(**z_AB)
             x_BA = self.decode(**z_BA)
         
