@@ -291,15 +291,14 @@ class decoder(nn.Module):
         
         # Compute all intermediate conv shapes by working backward from the 
         # output shape.
-        s = np.array(self.output_shape[1:])
-        self._conv_shapes = [self.output_shape]
-        for i in range(0, self.num_conv_blocks):
-            shape = (self.num_channels_list[-i],)+tuple((s+s%2)//2**i)
-            self._conv_shapes.append(shape)
-        # TODO: make shape deduction generic for all block types.
-        self._conv_shapes[-1] = ((self.num_channels_list[0],)
-                                 +self._conv_shapes[-1][1:])
-        self._conv_shapes = self._conv_shapes[::-1]
+        self._shapes = [self.output_shape,
+                        (self.num_channels_list[-2],)+self.output_shape[1:]]
+        for i in range(2, self.num_conv_blocks):
+            s = np.array(self._shapes[-1][1:])
+            shape = (self.num_channels_list[-i-1],)+tuple((s+s%2)//2)
+            self._shapes.append(shape)
+        self._shapes.append(self.input_shape)
+        self._shapes = self._shapes[::-1]
         
         '''
         Set up blocks.
@@ -308,7 +307,7 @@ class decoder(nn.Module):
         shape = self.input_shape
         if self.vector_in:
             out_features = ( self.num_channels_list[0]
-                            *int(np.product(self._conv_shapes[0][1:])))
+                            *int(np.product(self._shapes[0][1:])))
             self.fc = norm_nlin_fc(in_features=self.in_channels,
                                    out_features=out_features,
                                    normalization=None,
@@ -316,7 +315,7 @@ class decoder(nn.Module):
                                    init=self.init,
                                    nonlinearity=self.nonlinearity)
             last_channels = out_features
-            shape = self._conv_shapes[0]
+            shape = self._shapes[0]
         last_channels = shape[0]
         for i in range(self.num_conv_blocks, 0, -1):
             upsample = bool(i>1)    # Not on last layer.
@@ -349,10 +348,10 @@ class decoder(nn.Module):
         out = x
         if self.vector_in:
             out = self.fc(out)
-            out = out.view(out.size(0), *self._conv_shapes[0])
+            out = out.view(out.size(0), *self._shapes[0])
         for m, shape_in, shape_out in zip(self.blocks,
-                                          self._conv_shapes[:-1],
-                                          self._conv_shapes[1:]):
+                                          self._shapes[:-1],
+                                          self._shapes[1:]):
             spatial_shape_in = tuple(max(out.size(i+1),
                                          shape_out[i]-shape_in[i])
                                      for i in range(1, self.ndim+1))
