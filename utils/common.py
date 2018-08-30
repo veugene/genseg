@@ -18,7 +18,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 import scipy.misc
 from scipy.misc import imsave
-import tensorflow as tf
+import tensorboardX as tb
 import torch
 from tqdm import tqdm
 from ignite.engine import (Engine,
@@ -463,7 +463,7 @@ class summary_tracker(object):
     def __init__(self, path, output_transform=lambda x: x):
         self.path = path
         self.output_transform = output_transform
-        self.summary_writer = tf.summary.FileWriter(path)
+        self.summary_writer = tb.SummaryWriter(path)
         self._metric_value_dict = OrderedDict()
         self._item_counter = defaultdict(int)
         self._epoch = 1
@@ -552,17 +552,14 @@ class summary_tracker(object):
                 if key.endswith('_image_std'):
                     # Turn variance into standard deviation
                     val = np.sqrt(val)
-                s = io.BytesIO()
-                plt.imsave(s, val, format='png')
-                img = tf.Summary.Image(encoded_image_string=s.getvalue(),
-                                       height=val.shape[0],
-                                       width=val.shape[1])
-                s_value = tf.Summary.Value(tag=key, image=img)
+                self.summary_writer.add_image(tag=key,
+                                              img_tensor=val,
+                                              global_step=epoch)
             else:
-                s_value = tf.Summary.Value(tag=key, simple_value=val)
-            self.summary_writer.add_summary(tf.Summary(value=[s_value]),
-                                            global_step=epoch)
-            self.summary_writer.flush()
+                self.summary_writer.add_scalar(tag=key,
+                                               scalar_value=val,
+                                               global_step=epoch)
+            self.summary_writer.file_writer.flush()
         self._item_counter = defaultdict(int)
         self._metric_value_dict = OrderedDict()
     
@@ -577,6 +574,5 @@ class summary_tracker(object):
     
     def __del__(self):
         if self.summary_writer is not None:
-            self.summary_writer.flush()
             self.summary_writer.close()
             self.summary_writer = None
