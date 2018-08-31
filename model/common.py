@@ -249,6 +249,7 @@ class encoder(nn.Module):
         if self.vector_out:
             out = out.view(out.size(0), -1)
             out = self.fc(out)
+        out = nn.functional.relu(out)
         return out
     
 
