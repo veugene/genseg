@@ -456,27 +456,24 @@ class summary_tracker(object):
     Accumulate statistics.
     
     path : path to save tensorboard event files to.
-    output_transform : function mapping Engine output to
-        `value_dict` - Dict of torch tensors for which to accumulate stats.
-        `n_items`    - # of elements in the batch used to compute values.
     """
-    def __init__(self, path, output_transform=lambda x: x):
+    def __init__(self, path):
         self.path = path
-        self.output_transform = output_transform
         self.summary_writer = tb.SummaryWriter(path)
-        self._metric_value_dict = OrderedDict()
-        self._item_counter = defaultdict(int)
+        self._metric_value_dict = []
+        self._item_counter = []
+        self._output_transform = []
         self._epoch = 1
     
-    def _iteration_completed(self, engine, prefix=None):
-        output = self.output_transform(engine.state.output)
-        self._update(output, prefix)
+    def _iteration_completed(self, engine, prefix, idx):
+        output = self._output_transform[idx](engine.state.output)
+        self._update(output, prefix, idx)
     
-    def _epoch_completed(self, engine):
-        self._write(self._epoch)
+    def _epoch_completed(self, engine, idx):
+        self._write(self._epoch, idx)
         self._epoch += 1
     
-    def _update(self, output, prefix=None):
+    def _update(self, output, prefix, idx):
         _value_dict = output
         value_dict = OrderedDict()
         for key in _value_dict:
@@ -499,14 +496,14 @@ class summary_tracker(object):
             else:
                 init_keys = [key+'_min', key+'_max', key+'_mean', key+'_std']
             for k in init_keys:
-                if k not in self._metric_value_dict:
-                    self._metric_value_dict[k] = np.zeros(val.shape[1:],
-                                                          dtype=np.float32)
+                if k not in self._metric_value_dict[idx].keys():
+                    self._metric_value_dict[idx][k] = np.zeros(val.shape[1:],
+                                                            dtype=np.float32)
 
             # Matrix: log image. Update mean, var. Online - Welford's method.
             if len(val.shape)==3:
-                mean = self._metric_value_dict[key+'_image_mean']
-                var  = self._metric_value_dict[key+'_image_std']
+                mean = self._metric_value_dict[idx][key+'_image_mean']
+                var  = self._metric_value_dict[idx][key+'_image_std']
                 count = 0
                 for i, elem in enumerate(val):
                     # Update mean, var.
@@ -514,12 +511,12 @@ class summary_tracker(object):
                     old_mean = mean
                     mean += (elem-mean)/float(count)
                     var  += (elem-mean)*(elem-old_mean)
-                self._metric_value_dict[key+'_image_mean'] = mean
-                self._metric_value_dict[key+'_image_std']  = var
+                self._metric_value_dict[idx][key+'_image_mean'] = mean
+                self._metric_value_dict[idx][key+'_image_std']  = var
             
             # Non-image.
             else:
-                a, b = self._item_counter[key], count
+                a, b = self._item_counter[idx][key], count
                 labels, reductions = [], []
                 if len(val.shape) in [0, 1]:       # Scalar.
                     labels.append('')
@@ -532,21 +529,21 @@ class summary_tracker(object):
                                        lambda x: np.mean(x, axis=axes),
                                        lambda x:  np.std(x, axis=axes)])
                 for l, f in zip(labels, reductions):
-                    old_mean = self._metric_value_dict[key+l]
+                    old_mean = self._metric_value_dict[idx][key+l]
                     reduced_val = np.mean(f(val))
                     mean = (old_mean*a + reduced_val*b) / float(a+b)
-                    self._metric_value_dict[key+l] = mean
+                    self._metric_value_dict[idx][key+l] = mean
                 
             # Increment counter.
-            self._item_counter[key] += count
+            self._item_counter[idx][key] += count
     
-    def _write(self, epoch=None):
+    def _write(self, epoch, idx):
         '''
         Write summaries to event. Increments step count.
         
         global_step : typically, the current epoch.
         '''
-        for key, val in self._metric_value_dict.items():
+        for key, val in self._metric_value_dict[idx].items():
             s_value = None
             if key.endswith('_image_std') or key.endswith('_image_mean'):
                 if key.endswith('_image_std'):
