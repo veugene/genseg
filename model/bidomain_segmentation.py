@@ -333,6 +333,8 @@ class segmentation_model(nn.Module):
             ('l_mi_AB',     _reduce([loss_mi['AB']])),
             ('l_mi',        _reduce([loss_mi['A']+loss_mi['AB']])),
             ('l_seg',       _reduce([loss_seg])),
+            ('out_AA',      x_AA),
+            ('out_BB',      x_BB),
             ('out_AB',      x_AB),
             ('out_BA',      x_BA),
             ('out_ABA',     x_ABA),
