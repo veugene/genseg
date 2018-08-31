@@ -199,16 +199,16 @@ class segmentation_model(nn.Module):
             loss_rec['BB'] = self.lambda_x_id*dist(x_BB, x_B)
         if self.lambda_z_id:
             loss_rec['zc_AB'] = self.lambda_z_id*dist(s_AB['common'],
-                                                      z_AB['common'].detach())
+                                                      z_AB['common'])
             loss_rec['zr_AB'] = self.lambda_z_id*dist(s_AB['residual'],
                                                       z_AB['residual'])
             loss_rec['zu_AB'] = self.lambda_z_id*dist(s_AB['unique'],
                                                       z_AB['unique'])
-            loss_rec['zc_BU'] = self.lambda_z_id*dist(s_BA['common'],
-                                                      z_BA['common'].detach())
-            loss_rec['zr_BU'] = self.lambda_z_id*dist(s_BA['residual'],
+            loss_rec['zc_BA'] = self.lambda_z_id*dist(s_BA['common'],
+                                                      z_BA['common'])
+            loss_rec['zr_BA'] = self.lambda_z_id*dist(s_BA['residual'],
                                                       z_BA['residual'])
-            loss_rec['zu_BU'] = self.lambda_z_id*dist(s_BA['unique'],
+            loss_rec['zu_BA'] = self.lambda_z_id*dist(s_BA['unique'],
                                                       z_BA['unique'])
         
         # Constant 'unique' representation for B -- loss.
