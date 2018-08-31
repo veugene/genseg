@@ -16,14 +16,13 @@ import sys
 from natsort import natsorted
 import numpy as np
 from PIL import Image, ImageDraw
-import scipy.misc
-from scipy.misc import imsave
 import tensorboardX as tb
 import torch
 from tqdm import tqdm
 from ignite.engine import (Engine,
                            Events)
 from ignite.handlers import ModelCheckpoint
+from ignite.metrics import Metric
 
 
 """
@@ -243,113 +242,6 @@ class experiment(object):
             f.write('\n'.join(sys.argv))
         return path, experiment_id
 
-
-"""
-Save sets of 2D images to file.
-
-save_path : path to save the images to (a new folder is created on every call).
-name_images : the name of the attribute, in the Engine state, which contains
-    the tuple of image stacks to save.
-save_every : save images every `save_every` number of calls.
-score_function : a `scoring_function` that returns a score, given the Engine
-    state; save images only whenever a new max score is attained.
-"""
-# TODO: implement per epoch evaluation and saving.
-class image_saver(object):
-    def __init__(self, save_path, name_images, save_every=1,
-                 score_function=None, subdirs=True, stack_batch=False,
-                 min_val=None, max_val=None):
-        self.save_path      = save_path
-        self.name_images    = name_images
-        self.save_every     = save_every
-        self.score_function = score_function
-        self.subdirs        = subdirs
-        self.stack_batch    = stack_batch
-        self.min_val        = min_val
-        self.max_val        = max_val
-        self._max_score     = -np.inf
-        self._call_counter  = 0
-
-    def __call__(self, engine):
-        self._call_counter += 1
-        if self._call_counter%self.save_every:
-            return
-        
-        # If tracking a score, only save whenever a max score is reached.
-        if self.score_function is not None:
-            score = float(self.score_function(engine))
-            if score > self._max_score:
-                self._max_score = score
-            else:
-                return
-        
-        # Get images to save.
-        labels = None
-        images = getattr(engine.state, self.name_images)
-        if not (isinstance(images, tuple) or isinstance(images, dict)):
-            raise ValueError("Images in `engine.state.{}` should be stored "
-                "as a tuple of image stacks or as a dictionary of image "
-                "stacks with labels as keys.".format(self.name_images))
-        if isinstance(images, dict):
-            labels, images = zip(*images.items())
-        n_images = len(images[0])
-        shape = np.shape(images[0])
-        for stack in images:
-            if len(stack)!=n_images:
-                raise ValueError("Every stack of images in the "
-                    "`engine.state.{}` tuple must have the same length."
-                    "".format(self.name_images))
-            stack_shape = np.shape(stack)
-            if stack_shape!=shape:
-                raise ValueError("All images must have the same shape.")
-            if len(stack_shape)!=3:
-                raise ValueError("All image stacks must be 3-dimensional "
-                    "(stacks of 2D images).")
-        
-        # Make sub-directory.
-        save_dir = self.save_path
-        if self.subdirs:
-            save_dir = os.path.join(save_dir,
-                                    "{}".format(self._call_counter))
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
-        
-        # Digitize all images.
-        images_digitized = []
-        for i, image_stack in enumerate(images):
-            image_stack_digitized = np.zeros_like(image_stack, dtype=np.uint8)
-            for j, im in enumerate(image_stack):
-                a = im.min() if self.min_val is None else self.min_val
-                b = im.max() if self.max_val is None else self.max_val
-                step = (b-a)/255.
-                bins = np.arange(a, a+255*step, step)
-                im_d = np.digitize(im, bins).astype(np.uint8)
-                if labels is not None:
-                    im_p = Image.fromarray(im_d, mode='L')
-                    draw = ImageDraw.Draw(im_p)
-                    draw.text((0, 0), labels[i], fill=255)
-                    im_d = np.array(im_p)
-                image_stack_digitized[j] = im_d
-            images_digitized.append(image_stack_digitized)
-        
-        # Concatenate images across sets and save to disk.
-        def _save(im, filename):
-            if not self.subdirs:
-                name = "{}_{}".format(self._call_counter, filename)
-            im = Image.fromarray(im, mode='L')
-            im.save(os.path.join(save_dir, name))
-        all_rows = []
-        for i, im_set in enumerate(zip(*images_digitized)):
-            row = np.concatenate(im_set, axis=1)
-            if self.stack_batch:
-                all_rows.append(row)
-            else:
-                _save(row, "{}.jpg".format(i))
-        if self.stack_batch:
-            im_stack = np.concatenate(all_rows, 0)
-            _save(im_stack, "stack.jpg")
-
-
 class progress_report(object):
     """
     Log progress to screen and/or file. Relies on `Metric` objects to
@@ -557,19 +449,100 @@ class summary_tracker(object):
                                                scalar_value=val,
                                                global_step=epoch)
             self.summary_writer.file_writer.flush()
-        self._item_counter = defaultdict(int)
-        self._metric_value_dict = OrderedDict()
+        self._item_counter[idx] = defaultdict(int)
+        self._metric_value_dict[idx] = OrderedDict()
     
-    def attach(self, engine, prefix=None):
+    def attach(self, engine, prefix=None, output_transform=lambda x:x):
         '''
         prefix : A string to prefix onto the value names.
+        output_transform : function mapping Engine output to
+        `value_dict` - Dict of torch tensors for which to accumulate stats.
+        `n_items`    - # of elements in the batch used to compute values.
         '''
+        idx = len(self._output_transform)
+        self._metric_value_dict.append(OrderedDict())
+        self._item_counter.append(defaultdict(int))
+        self._output_transform.append(output_transform)
         engine.add_event_handler(Events.ITERATION_COMPLETED,
-                                 self._iteration_completed, prefix)
+                                 self._iteration_completed, prefix, idx)
         engine.add_event_handler(Events.EPOCH_COMPLETED,
-                                 self._epoch_completed)
+                                 self._epoch_completed, idx)
     
     def __del__(self):
         if self.summary_writer is not None:
             self.summary_writer.close()
             self.summary_writer = None
+
+
+class image_logger(Metric):
+    """
+    Expects `output` as a dictionary or list of image lists.
+    """
+    def __init__(self, num_vis, output_transform=lambda x:x,
+                 summary_tracker=None, min_val=None, max_val=None):
+        super(image_logger, self).__init__(output_transform)
+        self.num_vis = num_vis
+        self.min_val = min_val
+        self.max_val = max_val
+        self.summary_tracker = summary_tracker
+        self._epoch = 0
+    
+    def reset(self):
+        self._labels = None
+        self._images = []
+    
+    def update(self, output):
+        if isinstance(output, dict):
+            labels, images = zip(*output.items())
+        else:
+            labels, images = None, output
+        self._labels = labels
+        if len(self._images) < len(images):
+            self._images = [[] for _ in images]
+        for i, stack in enumerate(images):
+            self._images[i].extend(stack)    
+    
+    def compute(self):
+        # Select a subset of images.
+        images = [stack[:self.num_vis] for stack in self._images]
+        
+        # Digitize all images.
+        images_digitized = []
+        for image_stack in images:
+            image_stack_digitized = np.zeros_like(image_stack, dtype=np.uint8)
+            for i, im in enumerate(image_stack):
+                a = im.min() if self.min_val is None else self.min_val
+                b = im.max() if self.max_val is None else self.max_val
+                step = (b-a)/255.
+                bins = np.arange(a, a+255*step, step)
+                im_d = np.digitize(im, bins).astype(np.uint8)
+                image_stack_digitized[i] = im_d
+            images_digitized.append(image_stack_digitized)
+        
+        # Make columns.
+        image_columns = []
+        for i, column in enumerate(images_digitized):
+            col = np.concatenate(column, axis=0)
+            if self._labels is not None:
+                col_pil = Image.fromarray(col, mode='L')
+                draw = ImageDraw.Draw(col_pil)
+                draw.text((0, 0), self._labels[i], fill=255)
+                col = np.array(col_pil)
+            image_columns.append(col)
+        
+        # Join columns.
+        final_image = np.concatenate(image_columns, axis=1)
+        
+        # Log to tensorboard.
+        if self.summary_tracker is not None:
+            self.summary_tracker.summary_writer.add_image(
+                'outputs',
+                final_image,
+                global_step=self._epoch)
+            self.summary_tracker.summary_writer.file_writer.flush()
+            
+        # Update epoch count.
+        self._epoch += 1
+        
+        return final_image
+    

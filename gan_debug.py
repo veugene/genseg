@@ -22,7 +22,6 @@ from data_tools.io import data_flow
 from data_tools.data_augmentation import image_random_transform
 
 from utils.common import (experiment,
-                          image_saver,
                           scoring_function,
                           summary_tracker)
 from utils.metrics import (batchwise_loss_accumulator,
@@ -176,22 +175,6 @@ if __name__ == '__main__':
                                             append=append,
                                             epoch_length=len(loader['train']))
     
-    # Set up image generation for evaluation.
-    zc = experiment_state.model._z_sample(20*20)
-    zr = experiment_state.model._z_sample(20*20)
-    zu = experiment_state.model._z_sample(20*20)
-    def gen_image():
-        with torch.no_grad():
-            out = experiment_state.model.decode(zc, zr, zu)
-        out = out.detach().cpu().numpy()
-        out = np.transpose(out.reshape(20, 20, out.shape[-2], out.shape[-1]),
-                           (0,2,1,3)).reshape(1, 20*out.shape[-2],
-                                                 20*out.shape[-1])
-        return (out,)
-    engines['train'].add_event_handler(
-        Events.EPOCH_COMPLETED,
-        lambda engine: setattr(engine.state, 'save_images', gen_image()))
-    
     # Set up metrics.
     metrics = {}
     for key in engines:
@@ -202,17 +185,6 @@ if __name__ == '__main__':
                         output_transform=lambda x: x['l_D'])
         for name, m in metrics[key].items():
             m.attach(engines[key], name=name)
-
-    # Set up image saving.
-    image_saver_obj = image_saver(
-        save_path=os.path.join(experiment_state.experiment_path,
-                               "generator_outputs"),
-        name_images='save_images',
-        score_function=None,
-        subdirs=False)
-    image_saver_obj._call_counter = experiment_state._epoch[0] # For resuming.
-    engines['train'].add_event_handler(Events.EPOCH_COMPLETED, 
-                                       image_saver_obj)
     
     # Set up model checkpointing.
     experiment_state.setup_checkpoints(engines['train'])
@@ -235,6 +207,22 @@ if __name__ == '__main__':
     tracker.summary_writer.add_text(
         'experiment_config',
         experiment_state.model._model_as_str)
+    
+    # Set up image logging to tensorboard.
+    zc = experiment_state.model._z_sample(20*20)
+    zr = experiment_state.model._z_sample(20*20)
+    zu = experiment_state.model._z_sample(20*20)
+    def gen_image():
+        with torch.no_grad():
+            out = experiment_state.model.decode(zc, zr, zu)
+        out = out.detach().cpu().numpy()
+        out = np.transpose(out.reshape(20, 20, out.shape[-2], out.shape[-1]),
+                           (0,2,1,3)).reshape(1, 20*out.shape[-2],
+                                                 20*out.shape[-1])
+        return out
+    engines['train'].add_event_handler(
+        Events.EPOCH_COMPLETED,
+        lambda _: tracker.summary_writer.add_image('outputs', gen_image()))
     
     '''
     Train.

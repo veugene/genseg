@@ -10,7 +10,6 @@ from datetime import datetime
 import warnings
 
 import numpy as np
-from scipy.misc import imsave
 import torch
 from torch.autograd import Variable
 import ignite
@@ -22,7 +21,7 @@ from data_tools.io import data_flow
 from data_tools.data_augmentation import image_random_transform
 
 from utils.common import (experiment,
-                          image_saver,
+                          image_logger,
                           scoring_function,
                           summary_tracker)
 from utils.metrics import (batchwise_loss_accumulator,
@@ -75,6 +74,7 @@ def get_parser():
     parser.add_argument('--background_noise', type=float, default=0.01)
     parser.add_argument('--pregenerate_training_set', action='store_true')
     parser.add_argument('--n_valid', type=int, default=500)
+    parser.add_argument('--n_vis', type=int, default=20)
     parser.add_argument('--cpu', default=False, action='store_true')
     parser.add_argument('--nb_io_workers', type=int, default=1)
     parser.add_argument('--nb_proc_workers', type=int, default=1)
@@ -200,22 +200,13 @@ if __name__ == '__main__':
     def validation_function(engine, batch):
         experiment_state.model.eval()
         A, B, M, indices = prepare_batch(batch)
+        outputs = OrderedDict(zip(['out_A', 'out_B', 'out_M'], [A, B, M]))
         with torch.no_grad():
-            outputs = experiment_state.model.evaluate(A, B, M, indices,
-                                                      compute_grad=False,
-                                                      rng=engine.rng)
-        outputs = detach(outputs)
-        
-        # Prepare images to save to disk.
-        all_keys = ['A','B','M']+list([key for key in outputs.keys()
-                                       if key.startswith('out_')
-                                       and outputs[key] is not None])
-        images = batch[:3]+tuple([outputs[key].cpu().numpy()[:len(A)]
-                                  for key in all_keys[3:]])
-        images = [np.squeeze(x, 1) for x in images]
-        image_dict = OrderedDict(zip(all_keys, images))
-        setattr(engine.state, 'save_images', image_dict)
-        
+            _outputs = experiment_state.model.evaluate(A, B, M, indices,
+                                                       compute_grad=False,
+                                                       rng=engine.rng)
+        _outputs = detach(_outputs)
+        outputs.update(_outputs)
         return outputs
     
     # Get engines.
@@ -266,19 +257,6 @@ if __name__ == '__main__':
     engines['train'].add_event_handler(Events.EPOCH_COMPLETED,
                              lambda _: engines['valid'].run(loader['valid']))
     
-    # Set up image saving.
-    image_saver_obj = image_saver(
-        save_path=os.path.join(experiment_state.experiment_path,
-                               "validation_outputs"),
-        name_images='save_images',
-        subdirs=False,
-        stack_batch=True,
-        min_val=0,
-        max_val=1)
-    image_saver_obj._call_counter = experiment_state._epoch[0] # For resuming.
-    engines['valid'].add_event_handler(Events.ITERATION_COMPLETED, 
-                                       image_saver_obj)
-    
     # Set up model checkpointing.
     score_function = scoring_function('dice')
     experiment_state.setup_checkpoints(engines['train'], engines['valid'],
@@ -302,6 +280,19 @@ if __name__ == '__main__':
     tracker.summary_writer.add_text(
         'experiment_config',
         experiment_state.model._model_as_str)
+    
+    # Set up image logging to tensorboard.
+    def _p(val): return np.squeeze(val.cpu().numpy(), 1)
+    save_image = image_logger(
+        summary_tracker=tracker,
+        num_vis=min(args.n_vis, args.n_valid),
+        output_transform=lambda x: OrderedDict([(k.replace('out_',''), _p(v))
+                                                for k, v in x.items()
+                                                if k.startswith('out_')
+                                                and v is not None]),
+        min_val=0,
+        max_val=1)
+    save_image.attach(engines['valid'], name='save_image')
     
     '''
     Train.
