@@ -223,13 +223,13 @@ class segmentation_model(nn.Module):
             loss_cyc['ABA'] = self.lambda_cyc*dist(x_ABA, x_A)
             loss_cyc['BAB'] = self.lambda_cyc*dist(x_BAB, x_B)
         
-        # Mutual mutual information loss.
-        loss_mi = defaultdict(int)
+        # Mutual information loss for generator.
+        loss_mi_gen = defaultdict(int)
         if self.lambda_mi:
-            loss_mi['A'] = ( self.lambda_mi
-                            *self.mi_estimator.evaluate(a_A, b_A))
-            loss_mi['BA'] = ( self.lambda_mi
-                             *self.mi_estimator.evaluate(a_BA, b_BA))
+            loss_mi_gen['A'] =  -( self.lambda_mi
+                                  *self.mi_estimator.evaluate(a_A, b_A))
+            loss_mi_gen['BA'] = -( self.lambda_mi
+                                  *self.mi_estimator.evaluate(a_BA, b_BA))
         
         # Segmentation loss.
         loss_seg = 0
@@ -248,16 +248,25 @@ class segmentation_model(nn.Module):
         loss_G = ( _reduce(loss_gen.values())
                   +_reduce(loss_rec.values())
                   +_reduce(loss_cyc.values())
-                  +_reduce(loss_mi.values())
+                  +_reduce(loss_mi_gen.values())
                   +_reduce([loss_const_B])
                   +_reduce([loss_seg]))
         
         # Compute generator gradients.
         if compute_grad:
             loss_G.mean().backward()
+        self.mutual_information.zero_grad()
         if compute_grad and self.lambda_disc:
             self.disc_A.zero_grad()
             self.disc_B.zero_grad()
+        
+        # Mutual information loss for estimator.
+        loss_mi_est = defaultdict(int)
+        loss_mi_est['A']  = self.mi_estimator.evaluate(a_A.detach(),
+                                                       b_A.detach())
+        if self.lambda_z_id or self.lambda_cyc:
+            loss_mi_est['BA'] = self.mi_estimator.evaluate(a_BA.detach(),
+                                                           b_BA.detach())
         
         # Discriminator losses.
         loss_disc = defaultdict(int)
@@ -329,9 +338,9 @@ class segmentation_model(nn.Module):
             ('l_cyc_ABA',   _reduce([loss_cyc['ABA']])),
             ('l_cyc_BAB',   _reduce([loss_cyc['BAB']])),
             ('l_cyc',       _reduce([loss_cyc['ABA']+loss_cyc['BAB']])),
-            ('l_mi_A',      _reduce([loss_mi['A']])),
-            ('l_mi_AB',     _reduce([loss_mi['AB']])),
-            ('l_mi',        _reduce([loss_mi['A']+loss_mi['AB']])),
+            ('l_mi_A',      loss_mi_est['A']),
+            ('l_mi_BA',     loss_mi_est['BA']),
+            ('l_mi',        loss_mi_est['A']+loss_mi_est['BA']),
             ('l_seg',       _reduce([loss_seg])),
             ('out_AA',      x_AA),
             ('out_BB',      x_BB),
