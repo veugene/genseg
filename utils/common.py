@@ -355,15 +355,15 @@ class summary_tracker(object):
         self._metric_value_dict = []
         self._item_counter = []
         self._output_transform = []
-        self._epoch = 1
+        self._epoch = []
     
     def _iteration_completed(self, engine, prefix, idx):
         output = self._output_transform[idx](engine.state.output)
         self._update(output, prefix, idx)
     
     def _epoch_completed(self, engine, idx):
-        self._write(self._epoch, idx)
-        self._epoch += 1
+        self._write(self._epoch[idx], idx)
+        self._epoch[idx] += 1
     
     def _update(self, output, prefix, idx):
         _value_dict = output
@@ -463,6 +463,7 @@ class summary_tracker(object):
         self._metric_value_dict.append(OrderedDict())
         self._item_counter.append(defaultdict(int))
         self._output_transform.append(output_transform)
+        self._epoch.append(1)
         engine.add_event_handler(Events.ITERATION_COMPLETED,
                                  self._iteration_completed, prefix, idx)
         engine.add_event_handler(Events.EPOCH_COMPLETED,
