@@ -202,7 +202,8 @@ if __name__ == '__main__':
         A, B, M, indices = prepare_batch(batch)
         with torch.no_grad():
             outputs = experiment_state.model.evaluate(A, B, M, indices,
-                                                      compute_grad=False)
+                                                      compute_grad=False,
+                                                      rng=engine.rng)
         outputs = detach(outputs)
         
         # Prepare images to save to disk.
@@ -234,6 +235,11 @@ if __name__ == '__main__':
                                             prefix='test',
                                             append=append,
                                             epoch_length=len(loader['test']))
+    for key in ['valid', 'test']:
+        engines[key].add_event_handler(
+            Events.STARTED,
+            lambda engine: setattr(engine, 'rng', np.random.RandomState(0)))
+    
     
     # Set up metrics.
     metrics = {}
