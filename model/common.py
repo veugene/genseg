@@ -64,9 +64,9 @@ def get_output_shape(layer, input_shape):
     if isinstance(layer, convolution):
         out_shape = compute_conv_out_shape(input_shape=input_shape,
                                            out_channels=layer.out_channels,
-                                           padding=layer.padding,
-                                           kernel_size=layer.kernel_size,
-                                           stride=layer.stride)
+                                           padding=layer.op.padding,
+                                           kernel_size=layer.op.kernel_size,
+                                           stride=layer.op.stride)
         return out_shape
     elif isinstance(layer, nn.Linear):
         return (layer.out_features,)
