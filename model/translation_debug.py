@@ -88,14 +88,9 @@ class translation_model(nn.Module):
     def translate_AB(self, x_A, rng=None):
         batch_size = len(x_A)
         s_A, _, _, skip_A = self.encode_A(x_A)
-        #lc, lr, lu = len(s_A['common']), self.z_size[0], self.z_size[0]
-        #scale = (lc+lr)/float(lc+lr+lu)
-        #z_A = {'common'  : s_A['common']*scale,
-               #'residual': self._z_sample(batch_size, rng=rng)*scale,
-               #'unique'  : self._z_constant(batch_size)}
-        z_AB = {'common'  : s_A['common'],
-                'residual': self._z_sample(batch_size, rng=rng),
-                'unique'  : self._z_sample(batch_size, rng=rng)}
+        z_A = {'common'  : s_A['common'],
+               'residual': self._z_sample(batch_size, rng=rng),
+               'unique'  : self._z_constant(batch_size)}
         x_AB = self.decode_B(**z_AB, skip_info=skip_A)
         return x_AB
     
@@ -128,32 +123,24 @@ class translation_model(nn.Module):
             or self.lambda_cyc
             or self.lambda_mi):
                 s_B, a_B, b_B, skip_B = self.encode_B(x_B)
-        lc, lr, lu = len(s_A['common']), self.z_size[0], self.z_size[0]
-        scale = (lc+lr)/float(lc+lr+lu)
         
         # Reconstruct inputs.
         if self.lambda_x_id:
             z_AA = {'common'  : s_A['common'],
                     'residual': s_A['residual'],
                     'unique'  : s_A['unique']}
-            #z_BB = {'common'  : s_B['common']*scale,
-                    #'residual': s_B['residual']*scale,
-                    #'unique'  : self._z_constant(batch_size)}
             z_BB = {'common'  : s_B['common'],
                     'residual': s_B['residual'],
-                    'unique'  : s_B['unique']}
+                    'unique'  : self._z_constant(batch_size)}
             x_AA = self.decode_A(**z_AA, skip_info=skip_A)
             x_BB = self.decode_B(**z_BB, skip_info=skip_B)
         
         # Translate.
         x_AB = x_BA = None
         if self.lambda_disc or self.lambda_z_id:
-            #z_AB = {'common'  : s_A['common']*scale,
-                    #'residual': self._z_sample(batch_size, rng=rng)*scale,
-                    #'unique'  : self._z_constant(batch_size)}
             z_AB = {'common'  : s_A['common'],
                     'residual': self._z_sample(batch_size, rng=rng),
-                    'unique'  : self._z_sample(batch_size, rng=rng)}
+                    'unique'  : self._z_constant(batch_size)}
             z_BA = {'common'  : s_B['common'],
                     'residual': self._z_sample(batch_size, rng=rng),
                     'unique'  : self._z_sample(batch_size, rng=rng)}
