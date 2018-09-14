@@ -16,7 +16,8 @@ class translation_model(nn.Module):
     def __init__(self, encoder_A, decoder_A, encoder_B, decoder_B,
                  disc_A, disc_B, mutual_information, loss_rec=mae,
                  z_size=(50,), lambda_disc=1, lambda_x_id=10, lambda_z_id=1,
-                 lambda_const=1, lambda_cyc=0, lambda_mi=1, rng=None):
+                 lambda_const=1, lambda_cyc=0, lambda_mi=1, rng=None,
+                 debug_no_constant=False):
         super(translation_model, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.encoder_A          = encoder_A
@@ -35,8 +36,8 @@ class translation_model(nn.Module):
         self.lambda_const       = lambda_const
         self.lambda_cyc         = lambda_cyc
         self.lambda_mi          = lambda_mi
+        self.debug_no_constant  = debug_no_constant
         self.is_cuda            = False
-        #self._z_constant_param  = torch.nn.Parameter(torch.zeros(1))
         
     def _z_constant(self, batch_size):
         ret = Variable(torch.zeros((batch_size,)+self.z_size,
@@ -54,6 +55,17 @@ class translation_model(nn.Module):
         if self.is_cuda:
             ret = ret.cuda()
         return ret
+    
+    def _scale(self, z_dict):
+        # Unique is constant; scale up the other variations.
+        if self.debug_no_constant:
+            return z_dict
+        lc, lr, lu = len(z_dict['common']), self.z_size[0], self.z_size[0]
+        scale = (lc+lr)/float(lc+lr+lu)
+        z_scaled = {'common'  : z_dict['common']*scale,
+                    'residual': z_dict['residual']*scale,
+                    'unique'  : z_dict['unique']}
+        return z_scaled
     
     def cuda(self, *args, **kwargs):
         self.is_cuda = True
@@ -88,10 +100,12 @@ class translation_model(nn.Module):
     def translate_AB(self, x_A, rng=None):
         batch_size = len(x_A)
         s_A, _, _, skip_A = self.encode_A(x_A)
-        z_A = {'common'  : s_A['common'],
-               'residual': self._z_sample(batch_size, rng=rng),
-               'unique'  : self._z_constant(batch_size)}
-        x_AB = self.decode_B(**z_AB, skip_info=skip_A)
+        z_AB = {'common'  : s_A['common'],
+                'residual': self._z_sample(batch_size, rng=rng),
+                'unique'  : self._z_constant(batch_size)}
+        if self.debug_no_constant:
+            z_AB['unique'] = self._z_sample(batch_size, rng=rng)
+        x_AB = self.decode_B(**self._scale(z_AB), skip_info=skip_A)
         return x_AB
     
     def translate_BA(self, x_B, rng=None):
@@ -132,8 +146,10 @@ class translation_model(nn.Module):
             z_BB = {'common'  : s_B['common'],
                     'residual': s_B['residual'],
                     'unique'  : self._z_constant(batch_size)}
+            if self.debug_no_constant:
+                z_BB['unique'] = s_B['unique']
             x_AA = self.decode_A(**z_AA, skip_info=skip_A)
-            x_BB = self.decode_B(**z_BB, skip_info=skip_B)
+            x_BB = self.decode_B(**self._scale(z_BB), skip_info=skip_B)
         
         # Translate.
         x_AB = x_BA = None
@@ -141,10 +157,12 @@ class translation_model(nn.Module):
             z_AB = {'common'  : s_A['common'],
                     'residual': self._z_sample(batch_size, rng=rng),
                     'unique'  : self._z_constant(batch_size)}
+            if self.debug_no_constant:
+                z_AB['unique'] = self._z_sample(batch_size, rng=rng)
             z_BA = {'common'  : s_B['common'],
                     'residual': self._z_sample(batch_size, rng=rng),
                     'unique'  : self._z_sample(batch_size, rng=rng)}
-            x_AB = self.decode_B(**z_AB, skip_info=skip_A)
+            x_AB = self.decode_B(**self._scale(z_AB), skip_info=skip_A)
             x_BA = self.decode_A(**z_BA, skip_info=skip_B)
         
         # Reconstruct latent codes.
