@@ -125,7 +125,9 @@ class experiment(object):
                                   lambda engine: setattr(engine.state,
                                                          "epoch",
                                                          self._epoch[0]))
-        
+
+    def get_epoch(self):
+        return self._epoch[0]
         
     def _increment_epoch(self, engine):
         self._epoch[0] += 1
@@ -152,7 +154,7 @@ class experiment(object):
         
         # Experiment metadata.
         self.experiment_id = saved_dict['experiment_id']
-        self._epoch = saved_dict['epoch']
+        self._epoch[0] = saved_dict['epoch'][0]+1
         
         return model, optimizer
     
@@ -234,13 +236,14 @@ class experiment(object):
 
     def _setup_experiment_directory(self, name, save_path):
         experiment_time = "{0:%Y-%m-%d}_{0:%H-%M-%S}".format(datetime.now())
-        experiment_id   = "{}_{}".format(name, experiment_time)
+        experiment_id   = "{}_{}".format(experiment_time, name)
         path = os.path.join(save_path, experiment_id)
         if not os.path.exists(path):
             os.makedirs(path)
         with open(os.path.join(path, "args.txt"), 'w') as f:
             f.write('\n'.join(sys.argv))
         return path, experiment_id
+
 
 class progress_report(object):
     """
@@ -349,8 +352,9 @@ class summary_tracker(object):
     
     path : path to save tensorboard event files to.
     """
-    def __init__(self, path):
+    def __init__(self, path, initial_epoch=0):
         self.path = path
+        self.initial_epoch = initial_epoch
         self.summary_writer = tb.SummaryWriter(path)
         self._metric_value_dict = []
         self._item_counter = []
@@ -463,7 +467,7 @@ class summary_tracker(object):
         self._metric_value_dict.append(OrderedDict())
         self._item_counter.append(defaultdict(int))
         self._output_transform.append(output_transform)
-        self._epoch.append(1)
+        self._epoch.append(self.initial_epoch)
         engine.add_event_handler(Events.ITERATION_COMPLETED,
                                  self._iteration_completed, prefix, idx)
         engine.add_event_handler(Events.EPOCH_COMPLETED,
@@ -479,14 +483,14 @@ class image_logger(Metric):
     """
     Expects `output` as a dictionary or list of image lists.
     """
-    def __init__(self, num_vis, output_transform=lambda x:x,
+    def __init__(self, num_vis, output_transform=lambda x:x, initial_epoch=0,
                  summary_tracker=None, min_val=None, max_val=None):
         super(image_logger, self).__init__(output_transform)
         self.num_vis = num_vis
         self.min_val = min_val
         self.max_val = max_val
         self.summary_tracker = summary_tracker
-        self._epoch = 0
+        self._epoch = initial_epoch
     
     def reset(self):
         self._labels = None

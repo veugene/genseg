@@ -267,7 +267,8 @@ if __name__ == '__main__':
                                        score_function=score_function)
     
     # Set up tensorboard logging for losses.
-    tracker = summary_tracker(experiment_state.experiment_path)
+    tracker = summary_tracker(experiment_state.experiment_path,
+                              initial_epoch=experiment_state.get_epoch())
     def _tuple(x):
         if isinstance(x, torch.Tensor) and x.dim()>0:
             return (torch.mean(x, dim=0), len(x))
@@ -288,14 +289,13 @@ if __name__ == '__main__':
     # Set up image logging to tensorboard.
     def _p(val): return np.squeeze(val.cpu().numpy(), 1)
     save_image = image_logger(
+        initial_epoch=experiment_state.get_epoch(),
         summary_tracker=tracker,
         num_vis=min(args.n_vis, args.n_valid),
         output_transform=lambda x: OrderedDict([(k.replace('out_',''), _p(v))
                                                 for k, v in x.items()
                                                 if k.startswith('out_')
-                                                and v is not None]),
-        min_val=0,
-        max_val=1)
+                                                and v is not None]))
     save_image.attach(engines['valid'], name='save_image')
     
     '''
