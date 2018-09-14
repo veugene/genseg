@@ -255,9 +255,11 @@ class translation_model(nn.Module):
         loss_mi_est = defaultdict(int)
         loss_mi_est['A']  = self.mi_estimator.evaluate(a_A.detach(),
                                                        b_A.detach())
+        if compute_grad: loss_mi_est['A'].mean().backward()
         if self.lambda_z_id or self.lambda_cyc:
             loss_mi_est['BA'] = self.mi_estimator.evaluate(a_BA.detach(),
                                                            b_BA.detach())
+            if compute_grad: loss_mi_est['BA'].mean().backward()
         
         # Discriminator losses.
         loss_disc = defaultdict(int)
