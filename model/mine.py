@@ -4,7 +4,7 @@ from torch import nn
 from torch.autograd import Variable
 
 
-class mine(object):
+class mine(nn.Module):
     """
     MINE: Mutual information neural estimator.
     https://arxiv.org/abs/1801.04062
@@ -12,10 +12,11 @@ class mine(object):
     TODO: reduce bias in MINE gradient estimation.
     """
     def __init__(self, estimation_network, rng=None):
+        super(mine, self).__init__()
         self.estimation_network = estimation_network
         self.rng = rng if rng else np.random.RandomState()
         
-    def evaluate(self, x, z, z_marginal=None):
+    def forward(self, x, z, z_marginal=None):
         if z_marginal is None:
             permutation = self.rng.permutation(len(z))
             z_marginal = z[permutation]
@@ -27,7 +28,6 @@ class mine(object):
 
 
 def _run_mine():
-    from torch import nn
     from matplotlib import pyplot as plt
     import time
     
@@ -102,7 +102,7 @@ def _run_mine():
         x = torch.from_numpy(x.astype(np.float32)).cuda()
         z = torch.from_numpy(z.astype(np.float32)).cuda()
         z_marginal = torch.from_numpy(z_marginal.astype(np.float32)).cuda()
-        loss = mi_estimator.evaluate(x, z, z_marginal)
+        loss = mi_estimator(x, z, z_marginal)
                 
         loss.backward()
         norm = nn.utils.clip_grad_norm_(model.parameters(), max_norm=1)

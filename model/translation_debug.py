@@ -12,6 +12,16 @@ from .common import (dist_ratio_mse_abs,
 from .mine import mine
 
 
+def _reduce(loss):
+    def _mean(x):
+        if not isinstance(x, torch.Tensor) or x.dim()<=1:
+            return x
+        else:
+            return x.view(x.size(0), -1).mean(1)
+    if not hasattr(loss, '__len__'): loss = [loss]
+    return sum([_mean(v) for v in loss])
+
+
 class translation_model(nn.Module):
     def __init__(self, encoder_A, decoder_A, encoder_B, decoder_B,
                  disc_A, disc_B, mutual_information, loss_rec=mae,
@@ -24,10 +34,9 @@ class translation_model(nn.Module):
         self.decoder_A          = decoder_A
         self.encoder_B          = encoder_B
         self.decoder_B          = decoder_B
-        self.disc_A             = disc_A
-        self.disc_B             = disc_B
-        self.mutual_information = mutual_information
-        self.mi_estimator       = mine(mutual_information, rng=self.rng)
+        self.disc = {'A' :        disc_A,
+                     'B' :        disc_B,
+                     'mi':        mine(mutual_information, rng=self.rng)}
         self.loss_rec           = loss_rec
         self.z_size             = z_size
         self.lambda_disc        = lambda_disc
@@ -118,13 +127,19 @@ class translation_model(nn.Module):
         return x_BA
     
     def evaluate(self, x_A, x_B, mask=None, mask_indices=None,
-                 compute_grad=False, **kwargs):
+                 optimizer=None, **kwargs):
+        compute_grad = True if optimizer is not None else False
+        if compute_grad:
+            assert 'G' in optimizer
+            assert 'D' in optimizer
+            optimizer['G'].zero_grad()
+            optimizer['D'].zero_grad()
         with torch.set_grad_enabled(compute_grad):
             return self._evaluate(x_A, x_B, mask, mask_indices,
-                                  compute_grad=compute_grad, **kwargs)
+                                  optimizer=optimizer, **kwargs)
     
     def _evaluate(self, x_A, x_B, mask=None, mask_indices=None, rng=None,
-                  grad_penalty=None, disc_clip_norm=None, compute_grad=False):
+                  grad_penalty=None, disc_clip_norm=None, optimizer=None):
         assert len(x_A)==len(x_B)
         batch_size = len(x_A)
         
@@ -182,11 +197,66 @@ class translation_model(nn.Module):
             x_ABA = self.decode_A(**z_ABA, skip_info=skip_AB)
             x_BAB = self.decode_B(**z_BAB, skip_info=skip_BA)
         
+        # Mutual information loss for estimator.
+        loss_mi_est = defaultdict(int)
+        loss_mi_est['A']  = self.disc['mi'](a_A.detach(), b_A.detach())
+        if self.lambda_z_id or self.lambda_cyc:
+            loss_mi_est['BA'] = self.disc['mi'](a_BA.detach(), b_BA.detach())
+        if optimizer is not None:
+            loss_mi_est['A'].mean().backward()
+            if self.lambda_z_id or self.lambda_cyc:
+                loss_mi_est['BA'].mean().backward()
+        
+        # Discriminator losses.
+        loss_disc = defaultdict(int)
+        if self.lambda_disc:
+            if grad_penalty and optimizer is not None:
+                x_A.requires_grad = True
+                x_B.requires_grad = True
+            disc_A_real = self.disc['A'](x_A)
+            disc_A_fake = self.disc['A'](x_BA.detach())
+            disc_B_real = self.disc['B'](x_B)
+            disc_B_fake = self.disc['B'](x_AB.detach())
+            loss_disc_A_1 = bce(disc_A_real, 1)
+            loss_disc_A_0 = bce(disc_A_fake, 0)
+            loss_disc_B_1 = bce(disc_B_real, 1)
+            loss_disc_B_0 = bce(disc_B_fake, 0)
+            if grad_penalty and optimizer is not None:
+                def _compute_grad_norm(disc_in, disc_out, disc):
+                    ones = torch.ones_like(disc_out)
+                    if disc_in.is_cuda:
+                        ones = ones.cuda()
+                    grad = torch.autograd.grad(disc_out,
+                                               disc_in,
+                                               grad_outputs=ones,
+                                               retain_graph=True,
+                                               create_graph=True,
+                                               only_inputs=True)[0]
+                    grad_norm = (grad.view(grad.size()[0],-1)**2).sum(-1)
+                    return torch.mean(grad_norm)
+                grad_norm_A = _compute_grad_norm(x_A, disc_A_real,
+                                                 self.disc['A'])
+                grad_norm_B = _compute_grad_norm(x_B, disc_B_real,
+                                                 self.disc['B'])
+                loss_disc_A_1 += grad_penalty*grad_norm_A
+                loss_disc_B_1 += grad_penalty*grad_norm_B
+            loss_disc['A'] = self.lambda_disc*(loss_disc_A_0+loss_disc_A_1)/2.
+            loss_disc['B'] = self.lambda_disc*(loss_disc_B_0+loss_disc_B_1)/2.
+        loss_D = _reduce([loss_disc['A']+loss_disc['B']])
+        if self.lambda_disc and optimizer is not None:
+            loss_D.mean().backward()
+            if disc_clip_norm:
+                nn.utils.clip_grad_norm_(self.disc['A'].parameters(),
+                                         max_norm=disc_clip_norm)
+                nn.utils.clip_grad_norm_(self.disc['B'].parameters(),
+                                         max_norm=disc_clip_norm)
+            optimizer['D'].step()
+        
         # Generator loss.
         loss_gen = defaultdict(int)
         if self.lambda_disc:
-            loss_gen['AB'] = self.lambda_disc*bce(self.disc_B(x_AB), 1)
-            loss_gen['BA'] = self.lambda_disc*bce(self.disc_A(x_BA), 1)
+            loss_gen['AB'] = self.lambda_disc*bce(self.disc['B'](x_AB), 1)
+            loss_gen['BA'] = self.lambda_disc*bce(self.disc['A'](x_BA), 1)
         
         # Reconstruction loss.
         loss_rec = defaultdict(int)
@@ -224,19 +294,11 @@ class translation_model(nn.Module):
         loss_mi_gen = defaultdict(int)
         if self.lambda_mi:
             loss_mi_gen['A'] =  -( self.lambda_mi
-                                  *self.mi_estimator.evaluate(a_A, b_A))
+                                  *self.disc['mi'](a_A, b_A))
             loss_mi_gen['BA'] = -( self.lambda_mi
-                                  *self.mi_estimator.evaluate(a_BA, b_BA))
+                                  *self.disc['mi'](a_BA, b_BA))
         
         # All generator losses combined.
-        def _reduce(loss):
-            def _mean(x):
-                if not isinstance(x, torch.Tensor) or x.dim()<=1:
-                    return x
-                else:
-                    return x.view(x.size(0), -1).mean(1)
-            if not hasattr(loss, '__len__'): loss = [loss]
-            return sum([_mean(v) for v in loss])
         loss_G = ( _reduce(loss_gen.values())
                   +_reduce(loss_rec.values())
                   +_reduce(loss_cyc.values())
@@ -244,66 +306,15 @@ class translation_model(nn.Module):
                   +_reduce([loss_const_B]))
         
         # Compute generator gradients.
-        if compute_grad:
+        if optimizer is not None:
             loss_G.mean().backward()
-        self.mutual_information.zero_grad()
-        if compute_grad and self.lambda_disc:
-            self.disc_A.zero_grad()
-            self.disc_B.zero_grad()
-        
-        # Mutual information loss for estimator.
-        loss_mi_est = defaultdict(int)
-        loss_mi_est['A']  = self.mi_estimator.evaluate(a_A.detach(),
-                                                       b_A.detach())
-        if compute_grad: loss_mi_est['A'].mean().backward()
-        if self.lambda_z_id or self.lambda_cyc:
-            loss_mi_est['BA'] = self.mi_estimator.evaluate(a_BA.detach(),
-                                                           b_BA.detach())
-            if compute_grad: loss_mi_est['BA'].mean().backward()
-        
-        # Discriminator losses.
-        loss_disc = defaultdict(int)
-        if self.lambda_disc:
-            if grad_penalty and compute_grad:
-                x_A.requires_grad = True
-                x_B.requires_grad = True
-            disc_A_real = self.disc_A(x_A)
-            disc_A_fake = self.disc_A(x_BA.detach())
-            disc_B_real = self.disc_B(x_B)
-            disc_B_fake = self.disc_B(x_AB.detach())
-            loss_disc_A_1 = bce(disc_A_real, 1)
-            loss_disc_A_0 = bce(disc_A_fake, 0)
-            loss_disc_B_1 = bce(disc_B_real, 1)
-            loss_disc_B_0 = bce(disc_B_fake, 0)
-            if grad_penalty and compute_grad:
-                def _compute_grad_norm(disc_in, disc_out, disc):
-                    ones = torch.ones_like(disc_out)
-                    if disc_in.is_cuda:
-                        ones = ones.cuda()
-                    grad = torch.autograd.grad(disc_out,
-                                               disc_in,
-                                               grad_outputs=ones,
-                                               retain_graph=True,
-                                               create_graph=True,
-                                               only_inputs=True)[0]
-                    grad_norm = (grad.view(grad.size()[0],-1)**2).sum(-1)
-                    return torch.mean(grad_norm)
-                grad_norm_A = _compute_grad_norm(x_A, disc_A_real, self.disc_A)
-                grad_norm_B = _compute_grad_norm(x_B, disc_B_real, self.disc_B)
-                loss_disc_A_1 += grad_penalty*grad_norm_A
-                loss_disc_B_1 += grad_penalty*grad_norm_B
-            loss_disc['A'] = self.lambda_disc*(loss_disc_A_0+loss_disc_A_1)/2.
-            loss_disc['B'] = self.lambda_disc*(loss_disc_B_0+loss_disc_B_1)/2.
-        loss_D = _reduce([loss_disc['A']+loss_disc['B']])
-        if self.lambda_disc and compute_grad:
-            loss_D.mean().backward()
-            if disc_clip_norm:
-                nn.utils.clip_grad_norm_(self.disc_A.parameters(),
-                                         max_norm=disc_clip_norm)
-                nn.utils.clip_grad_norm_(self.disc_B.parameters(),
-                                         max_norm=disc_clip_norm)
+            optimizer['G'].step()
         
         # Compile outputs and return.
+        loss_DA = _reduce([loss_disc['A']])
+        loss_DB = _reduce([loss_disc['B']])
+        loss_D_mean = loss_disc['A'].mean()+loss_disc['B'].mean()
+        loss_D_ = _reduce([loss_disc['B']+loss_disc['B']])
         outputs = OrderedDict((
             ('l_G',         loss_G),
             ('l_D',         loss_D),

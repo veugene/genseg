@@ -35,7 +35,7 @@ class experiment(object):
     def __init__(self, name, parser):
         self.name = name
         
-        # Set up args, model, and optimizer.
+        # Set up args, model, and optimizers.
         args = parser.parse_args()
         self._epoch = [0]
         if args.resume_from is None:
@@ -44,11 +44,10 @@ class experiment(object):
                 save_path=args.save_path)
             self.experiment_path = experiment_path
             self.experiment_id = experiment_id
-            model, optimizer = self._init_state(
-                                            model_from=args.model_from,
-                                            optimizer_name=args.optimizer,
-                                            learning_rate=args.learning_rate,
-                                            weight_decay=args.weight_decay)
+            model, optimizer = self._init_state(model_from=args.model_from,
+                                     optimizer_name=args.optimizer,
+                                     learning_rate=args.learning_rate,
+                                     weight_decay=args.weight_decay)
         else:
             self.experiment_path = args.resume_from
             args = self._load_and_merge_args(parser)
@@ -58,21 +57,25 @@ class experiment(object):
             state_from = os.path.join(args.resume_from, state_file)
             print("Resuming from {}.".format(state_from))
             model, optimizer = self._load_state(load_from=state_from,
-                                                optimizer_name=args.optimizer)
-        if not args.cpu:
-            model.cuda()
+                                     optimizer_name=args.optimizer)
         self.args = args
         self.model = model
         self.optimizer = optimizer
-        print("Number of parameters: {}".format(count_params(model)))
+        if not args.cpu:
+            for model in self.model.values():
+                model.cuda()
+        print("Number of parameters\n"+
+              "\n".join([" {} : {}".format(key, count_params(self.model[key]))
+                         for key in self.model.keys()]))
         
         # For checkpoints.
-        self.model_dict = {'dict': {
-            'epoch'           : self._epoch,
-            'experiment_id'   : self.experiment_id,
-            'model_as_str'    : model._model_as_str,
-            'model_state'     : model.state_dict(),
-            'optimizer_state' : optimizer.state_dict()}}    
+        self.model_save_dict = {'epoch'        : self._epoch,
+                                'experiment_id': self.experiment_id,
+                                'model_as_str' : self.model_as_str}
+        for key in self.model.keys():
+            self.model_save_dict[key] = {
+                'model_state'    : self.model[key].state_dict(),
+                'optimizer_state': self.optimizer[key].state_dict()}
     
     def setup_engine(self, function,
                      append=False, prefix=None, epoch_length=None):
@@ -100,10 +103,11 @@ class experiment(object):
                                         require_empty=False)
             evaluator.add_event_handler(Events.EPOCH_COMPLETED,
                                         checkpoint_best_handler,
-                                        self.model_dict)
+                                        self.model_save_dict)
             checkpoint_best_handler._iteration = self._epoch[0]
         
-        # Checkpoint at every epoch and increment epoch in `self.model_dict`.
+        # Checkpoint at every epoch and increment epoch in
+        # `self.model_save_dict`.
         checkpoint_last_handler = ModelCheckpoint(
                                     dirname=self.experiment_path,
                                     filename_prefix='state',
@@ -112,12 +116,12 @@ class experiment(object):
                                     atomic=True,
                                     create_dir=True,
                                     require_empty=False)
-        def _on_epoch_completed(engine, model_dict):
-            checkpoint_last_handler(engine, model_dict)
+        def _on_epoch_completed(engine, model_save_dict):
+            checkpoint_last_handler(engine, model_save_dict)
             self._increment_epoch(engine)
         trainer.add_event_handler(Events.EPOCH_COMPLETED,
                                   _on_epoch_completed,
-                                  self.model_dict)
+                                  self.model_save_dict)
         checkpoint_last_handler._iteration = self._epoch[0]
         
         # Setup initial epoch in the training engine.
@@ -139,22 +143,26 @@ class experiment(object):
         '''
         saved_dict = torch.load(load_from)
         
-        # Load model.
+        # Build model according to saved code.
         module = imp.new_module('module')
         exec(saved_dict['model_as_str'], module.__dict__)
         model = getattr(module, 'build_model')()
-        model.load_state_dict(saved_dict['model_state'])
-        model._model_as_str = saved_dict['model_as_str']
+        if not isinstance(model, dict):
+            model = {'dict': model}
 
-        # Setup optimizer and load state.
-        optimizer = self._get_optimizer(
-                                     name=optimizer_name,
-                                     params=model.parameters(),
-                                     state_dict=saved_dict['optimizer_state'])
+        # Load model and optimizer state.
+        optimizer = {}
+        for key in model.keys():
+            model[key].load_state_dict(saved_dict[key]['model_state'])
+            optimizer[key] = self._get_optimizer(
+                               name=optimizer_name,
+                               params=model[key].parameters(),
+                               state_dict=saved_dict[key]['optimizer_state'])
         
         # Experiment metadata.
         self.experiment_id = saved_dict['experiment_id']
         self._epoch[0] = saved_dict['epoch'][0]+1
+        self.model_as_str = model_as_str
         
         return model, optimizer
     
@@ -171,20 +179,24 @@ class experiment(object):
         
         # Build the model.
         if model_from.endswith(".py"):
-            model_as_str = open(model_from).read()
+            self.model_as_str = open(model_from).read()
         else:
             saved_dict = torch.load(model_from)
-            model_as_str = saved_dict['model_as_str']
+            self.model_as_str = saved_dict['model_as_str']
         module = imp.new_module('module')
-        exec(model_as_str, module.__dict__)
+        exec(self.model_as_str, module.__dict__)
         model = getattr(module, 'build_model')()
-        model._model_as_str = model_as_str
+        if not isinstance(model, dict):
+            model = {'dict': model}
         
         # Setup the optimizer.
-        optimizer = self._get_optimizer(name=optimizer_name,
-                                        params=model.parameters(),
-                                        lr=learning_rate,
-                                        weight_decay=weight_decay)
+        optimizer = {}
+        for key in model.keys():
+            optimizer[key] = self._get_optimizer(
+                                            name=optimizer_name,
+                                            params=model[key].parameters(),
+                                            lr=learning_rate,
+                                            weight_decay=weight_decay)
         
         return model, optimizer
 

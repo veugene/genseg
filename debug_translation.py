@@ -80,8 +80,6 @@ if __name__ == '__main__':
     # Set up experiment.
     experiment_state = experiment(name="mnist", parser=get_parser())
     args = experiment_state.args
-    if not args.cpu:
-        experiment_state.model.cuda()
     torch.manual_seed(args.rseed)
     
     # Data augmentation settings.
@@ -173,25 +171,24 @@ if __name__ == '__main__':
     eval_kwargs = {'grad_penalty'  : args.grad_penalty,
                    'disc_clip_norm': args.disc_clip_norm}
     def training_function(engine, batch):
-        experiment_state.model.train()
-        experiment_state.optimizer.zero_grad()
+        for model in experiment_state.model.values():
+            model.train()
         A, B, M, indices = prepare_batch(batch)
-        outputs = experiment_state.model.evaluate(A, B, M, indices,
-                                                  **eval_kwargs,
-                                                  compute_grad=True)
-        experiment_state.optimizer.step()
+        outputs = experiment_state.model['G'].evaluate(A, B, M, indices,
+                                                       **eval_kwargs,
+                                         optimizer=experiment_state.optimizer)
         outputs = detach(outputs)
         return outputs
     
     # Validation loop.
     def validation_function(engine, batch):
-        experiment_state.model.eval()
+        for model in experiment_state.model.values():
+            model.eval()
         A, B, M, indices = prepare_batch(batch)
         outputs = OrderedDict(zip(['out_A', 'out_B', 'out_M'], [A, B, M]))
         with torch.no_grad():
-            _outputs = experiment_state.model.evaluate(A, B, M, indices,
-                                                       compute_grad=False,
-                                                       rng=engine.rng)
+            _outputs = experiment_state.model['G'].evaluate(A, B, M, indices,
+                                                            rng=engine.rng)
         _outputs = detach(_outputs)
         outputs.update(_outputs)
         return outputs
