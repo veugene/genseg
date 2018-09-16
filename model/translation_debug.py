@@ -294,7 +294,7 @@ class translation_model(nn.Module):
                 loss_disc_B_1 += grad_penalty*grad_norm_B
             loss_disc['A'] = self.lambda_disc*(loss_disc_A_0+loss_disc_A_1)/2.
             loss_disc['B'] = self.lambda_disc*(loss_disc_B_0+loss_disc_B_1)/2.
-        loss_D = _reduce(loss_disc['A']+loss_disc['B'])
+        loss_D = _reduce([loss_disc['A']+loss_disc['B']])
         if self.lambda_disc and compute_grad:
             loss_D.mean().backward()
             if disc_clip_norm:
