@@ -281,11 +281,6 @@ if __name__ == '__main__':
                                              for k, v in x.items()
                                              if k.startswith('l_')]))
     
-    # Log config to tensorboard.
-    tracker.summary_writer.add_text(
-        'experiment_config',
-        experiment_state.model._model_as_str)
-    
     # Set up image logging to tensorboard.
     def _p(val): return np.squeeze(val.cpu().numpy(), 1)
     save_image = image_logger(

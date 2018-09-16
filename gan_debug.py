@@ -203,11 +203,6 @@ if __name__ == '__main__':
                                              for k, v in x.items()
                                              if k.startswith('l_')]))
     
-    # Log config to tensorboard.
-    tracker.summary_writer.add_text(
-        'experiment_config',
-        experiment_state.model._model_as_str)
-    
     # Set up image logging to tensorboard.
     zc = experiment_state.model._z_sample(20*20)
     zr = experiment_state.model._z_sample(20*20)
