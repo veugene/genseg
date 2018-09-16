@@ -89,8 +89,6 @@ if __name__ == '__main__':
     # Set up experiment.
     experiment_state = experiment(name="mnist", parser=get_parser())
     args = experiment_state.args
-    if not args.cpu:
-        experiment_state.model.cuda()
     assert args.labeled_fraction > 0
     torch.manual_seed(args.rseed)
     
