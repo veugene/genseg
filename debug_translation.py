@@ -259,6 +259,7 @@ if __name__ == '__main__':
     def _p(val): return np.squeeze(val.cpu().numpy(), 1)
     save_image = image_logger(
         initial_epoch=experiment_state.get_epoch(),
+        directory=os.path.join(experiment_state.experiment_path, "images"),
         summary_tracker=tracker,
         num_vis=min(args.n_vis, args.n_valid),
         output_transform=lambda x: OrderedDict([(k.replace('out_',''), _p(v))

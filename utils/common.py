@@ -496,12 +496,15 @@ class image_logger(Metric):
     Expects `output` as a dictionary or list of image lists.
     """
     def __init__(self, num_vis, output_transform=lambda x:x, initial_epoch=0,
-                 summary_tracker=None, min_val=None, max_val=None):
+                 directory=None, summary_tracker=None, prefix=None,
+                 min_val=None, max_val=None):
         super(image_logger, self).__init__(output_transform)
         self.num_vis = num_vis
+        self.directory = directory
+        self.summary_tracker = summary_tracker
+        self.prefix = prefix
         self.min_val = min_val
         self.max_val = max_val
-        self.summary_tracker = summary_tracker
         self._epoch = initial_epoch
     
     def reset(self):
@@ -557,6 +560,15 @@ class image_logger(Metric):
                 final_image,
                 global_step=self._epoch)
             self.summary_tracker.summary_writer.file_writer.flush()
+        
+        # Log to file.
+        if self.directory is not None:
+            if not os.path.exists(self.directory):
+                os.makedirs(self.directory)
+            _prefix = "_{}".format(self.prefix) if self.prefix else ""
+            fn = str(self._epoch)+_prefix+".jpg"
+            final_image_pil = Image.fromarray(final_image, mode='L')
+            final_image_pil.save(os.path.join(self.directory, fn))
             
         # Update epoch count.
         self._epoch += 1
