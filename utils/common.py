@@ -536,19 +536,19 @@ class image_logger(Metric):
                 image_stack_digitized[i] = im_d
             images_digitized.append(image_stack_digitized)
         
-        # Make columns.
-        image_columns = []
-        for i, column in enumerate(images_digitized):
-            col = np.concatenate(column, axis=0)
+        # Make rows.
+        image_rows = []
+        for i, row in enumerate(images_digitized):
+            arr = np.concatenate(row, axis=1)
             if self._labels is not None:
-                col_pil = Image.fromarray(col, mode='L')
-                draw = ImageDraw.Draw(col_pil)
+                arr_pil = Image.fromarray(arr, mode='L')
+                draw = ImageDraw.Draw(arr_pil)
                 draw.text((0, 0), self._labels[i], fill=255)
-                col = np.array(col_pil)
-            image_columns.append(col)
+                arr = np.array(arr_pil)
+            image_rows.append(arr)
         
-        # Join columns.
-        final_image = np.concatenate(image_columns, axis=1)
+        # Join rows.
+        final_image = np.concatenate(image_rows, axis=0)
         
         # Log to tensorboard.
         if self.summary_tracker is not None:
