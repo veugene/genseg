@@ -237,6 +237,10 @@ class translation_model(nn.Module):
         self.mi_opt.step()
         
         # Discriminator losses.
+        def mse_(prediction, target):
+            if not isinstance(prediction, torch.Tensor):
+                return sum([mse_(elem, target) for elem in prediction])
+            return _reduce([mse(prediction, target)])
         loss_disc = defaultdict(int)
         if self.lambda_disc:
             if grad_penalty and optimizer is not None:
@@ -246,10 +250,10 @@ class translation_model(nn.Module):
             disc_A_fake = self.disc['A'](x_BA.detach())
             disc_B_real = self.disc['B'](x_B)
             disc_B_fake = self.disc['B'](x_AB.detach())
-            loss_disc_A_1 = bce(disc_A_real, 1)
-            loss_disc_A_0 = bce(disc_A_fake, 0)
-            loss_disc_B_1 = bce(disc_B_real, 1)
-            loss_disc_B_0 = bce(disc_B_fake, 0)
+            loss_disc_A_1 = mse_(disc_A_real, 1)
+            loss_disc_A_0 = mse_(disc_A_fake, 0)
+            loss_disc_B_1 = mse_(disc_B_real, 1)
+            loss_disc_B_0 = mse_(disc_B_fake, 0)
             if grad_penalty and optimizer is not None:
                 def _compute_grad_norm(disc_in, disc_out, disc):
                     ones = torch.ones_like(disc_out)
@@ -269,8 +273,8 @@ class translation_model(nn.Module):
                                                  self.disc['B'])
                 loss_disc_A_1 += grad_penalty*grad_norm_A
                 loss_disc_B_1 += grad_penalty*grad_norm_B
-            loss_disc['A'] = self.lambda_disc*(loss_disc_A_0+loss_disc_A_1)/2.
-            loss_disc['B'] = self.lambda_disc*(loss_disc_B_0+loss_disc_B_1)/2.
+            loss_disc['A'] = self.lambda_disc*(loss_disc_A_0+loss_disc_A_1)
+            loss_disc['B'] = self.lambda_disc*(loss_disc_B_0+loss_disc_B_1)
         loss_D = _reduce([loss_disc['A']+loss_disc['B']])
         if self.lambda_disc and optimizer is not None:
             loss_D.mean().backward()
@@ -284,8 +288,8 @@ class translation_model(nn.Module):
         # Generator loss.
         loss_gen = defaultdict(int)
         if self.lambda_disc:
-            loss_gen['AB'] = self.lambda_disc*bce(self.disc['B'](x_AB), 1)
-            loss_gen['BA'] = self.lambda_disc*bce(self.disc['A'](x_BA), 1)
+            loss_gen['AB'] = self.lambda_disc*mse_(self.disc['B'](x_AB), 1)
+            loss_gen['BA'] = self.lambda_disc*mse_(self.disc['A'](x_BA), 1)
         
         # Reconstruction loss.
         loss_rec = defaultdict(int)
@@ -297,15 +301,15 @@ class translation_model(nn.Module):
             loss_rec['zc_AB'] = self.lambda_z_id*dist(s_AB['common'],
                                                       z_AB['common'])
             loss_rec['zr_AB'] = self.lambda_z_id*dist(s_AB['residual'],
-                                                      z_AB['residual'])
+                                                      z_AB['residual'])/2.
             loss_rec['zu_AB'] = self.lambda_z_id*dist(s_AB['unique'],
-                                                      z_AB['unique'])
+                                                      z_AB['unique'])/2.
             loss_rec['zc_BA'] = self.lambda_z_id*dist(s_BA['common'],
                                                       z_BA['common'])
             loss_rec['zr_BA'] = self.lambda_z_id*dist(s_BA['residual'],
-                                                      z_BA['residual'])
+                                                      z_BA['residual'])/2.
             loss_rec['zu_BA'] = self.lambda_z_id*dist(s_BA['unique'],
-                                                      z_BA['unique'])
+                                                      z_BA['unique'])/2.
         
         # Constant 'unique' representation for B -- loss.
         loss_const_B = 0
