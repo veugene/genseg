@@ -35,8 +35,7 @@ class translation_model(nn.Module):
         self.encoder_B          = encoder_B
         self.decoder_B          = decoder_B
         self.disc = {'A' :        disc_A,
-                     'B' :        disc_B,
-                     'mi':        mine(mutual_information, rng=self.rng)}
+                     'B' :        disc_B}   # (separate params)
         self.loss_rec           = loss_rec
         self.z_size             = z_size
         self.lambda_disc        = lambda_disc
@@ -88,11 +87,29 @@ class translation_model(nn.Module):
     
     def cuda(self, *args, **kwargs):
         self.is_cuda = True
+        self.mi[0] = self.mi[0].cuda()
+        self.disc['A'] = self.disc['A'].cuda()
+        self.disc['B'] = self.disc['B'].cuda()
         super(translation_model, self).cuda(*args, **kwargs)
         
     def cpu(self, *args, **kwargs):
         self.is_cuda = False
+        self.mi[0] = self.mi[0].cpu()
+        self.disc['A'] = self.disc['A'].cpu()
+        self.disc['B'] = self.disc['B'].cpu()
         super(translation_model, self).cpu(*args, **kwargs)
+    
+    def train(self, mode=True):
+        self.mi[0].train(mode)
+        self.disc['A'].train(mode)
+        self.disc['B'].train(mode)
+        super(translation_model, self).train(mode)
+    
+    def eval(self):
+        self.mi[0].eval()
+        self.disc['A'].eval()
+        self.disc['B'].eval()
+        super(translation_model, self).eval()
         
     def encode_A(self, x):
         z_c, z_r, z_u, skip_info = self.encoder_A(x)
