@@ -48,6 +48,16 @@ class translation_model(nn.Module):
         self.debug_no_constant  = debug_no_constant
         self.is_cuda            = False
         
+        # Mutual information optimizer is set up here, not passed in.
+        self.mi = [mine(mutual_information, rng=self.rng)]  # (separate params)
+        if self.is_cuda:
+            self.mi[0] = self.mi[0].cuda()
+        self.mi_opt = torch.optim.Adam(params=self.mi[0].parameters(),
+                                       lr=0.0001,
+                                       eps=1e-7,
+                                       weight_decay=0.001,
+                                       amsgrad=True)
+        
     def _z_constant(self, batch_size):
         ret = Variable(torch.zeros((batch_size,)+self.z_size,
                                    dtype=torch.float32))
@@ -198,14 +208,16 @@ class translation_model(nn.Module):
             x_BAB = self.decode_B(**z_BAB, skip_info=skip_BA)
         
         # Mutual information loss for estimator.
+        self.mi_opt.zero_grad()
         loss_mi_est = defaultdict(int)
-        loss_mi_est['A']  = self.disc['mi'](a_A.detach(), b_A.detach())
+        loss_mi_est['A']  = self.mi[0](a_A.detach(), b_A.detach())
         if self.lambda_z_id or self.lambda_cyc:
-            loss_mi_est['BA'] = self.disc['mi'](a_BA.detach(), b_BA.detach())
+            loss_mi_est['BA'] = self.mi[0](a_BA.detach(), b_BA.detach())
         if optimizer is not None:
             loss_mi_est['A'].mean().backward()
             if self.lambda_z_id or self.lambda_cyc:
                 loss_mi_est['BA'].mean().backward()
+        self.mi_opt.step()
         
         # Discriminator losses.
         loss_disc = defaultdict(int)
@@ -293,10 +305,8 @@ class translation_model(nn.Module):
         # Mutual information loss for generator.
         loss_mi_gen = defaultdict(int)
         if self.lambda_mi:
-            loss_mi_gen['A'] =  -( self.lambda_mi
-                                  *self.disc['mi'](a_A, b_A))
-            loss_mi_gen['BA'] = -( self.lambda_mi
-                                  *self.disc['mi'](a_BA, b_BA))
+            loss_mi_gen['A']  = -self.lambda_mi*self.mi[0](a_A, b_A)
+            loss_mi_gen['BA'] = -self.lambda_mi*self.mi[0](a_BA, b_BA)
         
         # All generator losses combined.
         loss_G = ( _reduce(loss_gen.values())
