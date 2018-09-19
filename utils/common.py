@@ -202,7 +202,7 @@ class experiment(object):
 
     def _get_optimizer(self, name, params, lr=0., weight_decay=0.,
                       state_dict=None):
-        kwargs = {'params'       : params,
+        kwargs = {'params'       : [p for p in params if p.requires_grad],
                   'lr'           : lr,
                   'weight_decay' : weight_decay}
         optimizer = None
