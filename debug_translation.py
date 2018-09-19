@@ -75,7 +75,7 @@ def get_parser():
 
 if __name__ == '__main__':
     # Disable buggy profiler.
-    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.benchmark = True
     
     # Set up experiment.
     experiment_state = experiment(name="mnist", parser=get_parser())
