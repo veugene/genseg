@@ -6,7 +6,6 @@ import sys
 import os
 import shutil
 import argparse
-from datetime import datetime
 import warnings
 
 import numpy as np
@@ -46,9 +45,7 @@ def get_parser():
     parser.add_argument('--data_dir', type=str, default='./data/mnist')
     parser.add_argument('--save_path', type=str, default='./experiments')
     mutex_parser = parser.add_mutually_exclusive_group()
-    mutex_parser.add_argument('--model_from', type=str,
-                              default="./model/configs/"
-                                      "bidomain_segmentation_001.py")
+    mutex_parser.add_argument('--model_from', type=str, default=None)
     mutex_parser.add_argument('--resume_from', type=str, default=None)
     parser.add_argument('--weight_decay', type=float, default=1e-4)
     parser.add_argument('--labeled_fraction', type=float, default=0.1)
@@ -84,7 +81,7 @@ def get_parser():
 
 if __name__ == '__main__':
     # Disable buggy profiler.
-    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.benchmark = True
     
     # Set up experiment.
     experiment_state = experiment(name="mnist", parser=get_parser())
@@ -184,25 +181,24 @@ if __name__ == '__main__':
     eval_kwargs = {'grad_penalty'  : args.grad_penalty,
                    'disc_clip_norm': args.disc_clip_norm}
     def training_function(engine, batch):
-        experiment_state.model.train()
-        experiment_state.optimizer.zero_grad()
+        for model in experiment_state.model.values():
+            model.train()
         A, B, M, indices = prepare_batch(batch)
-        outputs = experiment_state.model.evaluate(A, B, M, indices,
-                                                  **eval_kwargs,
-                                                  compute_grad=True)
-        experiment_state.optimizer.step()
+        outputs = experiment_state.model['G'].evaluate(A, B, M, indices,
+                                                       **eval_kwargs,
+                                         optimizer=experiment_state.optimizer)
         outputs = detach(outputs)
         return outputs
     
     # Validation loop.
     def validation_function(engine, batch):
-        experiment_state.model.eval()
+        for model in experiment_state.model.values():
+            model.eval()
         A, B, M, indices = prepare_batch(batch)
         outputs = OrderedDict(zip(['out_A', 'out_B', 'out_M'], [A, B, M]))
         with torch.no_grad():
-            _outputs = experiment_state.model.evaluate(A, B, M, indices,
-                                                       compute_grad=False,
-                                                       rng=engine.rng)
+            _outputs = experiment_state.model['G'].evaluate(A, B, M, indices,
+                                                            rng=engine.rng)
         _outputs = detach(_outputs)
         outputs.update(_outputs)
         return outputs
@@ -283,6 +279,7 @@ if __name__ == '__main__':
     def _p(val): return np.squeeze(val.cpu().numpy(), 1)
     save_image = image_logger(
         initial_epoch=experiment_state.get_epoch(),
+        directory=os.path.join(experiment_state.experiment_path, "images"),
         summary_tracker=tracker,
         num_vis=min(args.n_vis, args.n_valid),
         output_transform=lambda x: OrderedDict([(k.replace('out_',''), _p(v))
