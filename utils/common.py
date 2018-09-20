@@ -69,11 +69,11 @@ class experiment(object):
                          for key in self.model.keys()]))
         
         # For checkpoints.
-        self.model_save_dict = {'epoch'        : self._epoch,
-                                'experiment_id': self.experiment_id,
-                                'model_as_str' : self.model_as_str}
+        self.model_save_dict = {'dict': {'epoch'        : self._epoch,
+                                         'experiment_id': self.experiment_id,
+                                         'model_as_str' : self.model_as_str}}
         for key in self.model.keys():
-            self.model_save_dict[key] = {
+            self.model_save_dict['dict'][key] = {
                 'model_state'    : self.model[key].state_dict(),
                 'optimizer_state': self.optimizer[key].state_dict()}
     
@@ -141,14 +141,14 @@ class experiment(object):
         '''
         Restore the model, its state, and the optimizer's state.
         '''
-        saved_dict = torch.load(load_from)
+        saved_dict = torch.load(load_from)['dict']
         
         # Build model according to saved code.
         module = imp.new_module('module')
         exec(saved_dict['model_as_str'], module.__dict__)
         model = getattr(module, 'build_model')()
         if not isinstance(model, dict):
-            model = {'dict': model}
+            model = {'model': model}
 
         # Load model and optimizer state.
         optimizer = {}
@@ -162,7 +162,7 @@ class experiment(object):
         # Experiment metadata.
         self.experiment_id = saved_dict['experiment_id']
         self._epoch[0] = saved_dict['epoch'][0]+1
-        self.model_as_str = model_as_str
+        self.model_as_str = saved_dict['model_as_str']
         
         return model, optimizer
     
@@ -187,7 +187,7 @@ class experiment(object):
         exec(self.model_as_str, module.__dict__)
         model = getattr(module, 'build_model')()
         if not isinstance(model, dict):
-            model = {'dict': model}
+            model = {'model': model}
         
         # Setup the optimizer.
         optimizer = {}
