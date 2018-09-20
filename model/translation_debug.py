@@ -259,9 +259,8 @@ class translation_model(nn.Module):
                     ones = torch.ones_like(disc_out)
                     if disc_in.is_cuda:
                         ones = ones.cuda()
-                    grad = torch.autograd.grad(disc_out,
+                    grad = torch.autograd.grad(disc_out.sum(),
                                                disc_in,
-                                               grad_outputs=ones,
                                                retain_graph=True,
                                                create_graph=True,
                                                only_inputs=True)[0]
