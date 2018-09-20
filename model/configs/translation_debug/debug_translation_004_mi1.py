@@ -25,7 +25,7 @@ def build_model():
         'lambda_z_id'       : 1,
         'lambda_const'      : 0,
         'lambda_cyc'        : 0,
-        'lambda_mi'         : 0}
+        'lambda_mi'         : 1}
     
     class LayerNorm(nn.Module):
         def __init__(self, num_features, eps=1e-5, affine=True):

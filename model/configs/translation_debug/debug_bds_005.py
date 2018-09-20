@@ -12,7 +12,7 @@ from fcn_maker.loss import dice_loss
 from model.common import (dist_ratio_mse_abs,
                           batch_normalization,
                           instance_normalization)
-from model.translation_debug import translation_model
+from model.bidomain_segmentation import segmentation_model
 
 
 def build_model():
@@ -23,6 +23,7 @@ def build_model():
         'lambda_disc'       : 1,
         'lambda_x_id'       : 10,
         'lambda_z_id'       : 1,
+        'lambda_seg'        : 0,
         'lambda_const'      : 0,
         'lambda_cyc'        : 0,
         'lambda_mi'         : 0}
@@ -398,13 +399,11 @@ def build_model():
     z_shape = sample_shape
     print("DEBUG: sample_shape={}".format(sample_shape))
     submodel = {
-        'encoder_A'           : encoder_A,
-        'decoder_A'           : decoder_join(**decoder_kwargs),
-        'encoder_B'           : encoder_B,
-        'decoder_B'           : decoder_join(**decoder_kwargs),
-        'disc_A'              : discriminator(**discriminator_kwargs),
-        'disc_B'              : discriminator(**discriminator_kwargs),
-        'mutual_information'  : mi_estimation_network(
+        'encoder'           : encoder_A,
+        'decoder'           : decoder_join(**decoder_kwargs),
+        'disc_A'            : discriminator(**discriminator_kwargs),
+        'disc_B'            : discriminator(**discriminator_kwargs),
+        'mutual_information': mi_estimation_network(
                                             x_size=np.product(x_shape),
                                             z_size=np.product(z_shape),
                                             n_hidden=1000)}
@@ -429,20 +428,17 @@ def build_model():
                 if hasattr(m, 'bias') and m.bias is not None:
                     torch.nn.init.constant_(m.bias.data, 0.0)
         return init_fun
-    submodel['encoder_A'].apply(weights_init('kaiming'))
-    submodel['encoder_B'].apply(weights_init('kaiming'))
-    submodel['decoder_A'].apply(weights_init('kaiming'))
-    submodel['decoder_B'].apply(weights_init('kaiming'))
+    submodel['encoder'].apply(weights_init('kaiming'))
+    submodel['encoder'].apply(weights_init('kaiming'))
     submodel['disc_A'].apply(weights_init('gaussian'))
     submodel['disc_B'].apply(weights_init('gaussian'))
     submodel['mutual_information'].apply(weights_init('gaussian'))
     
-    model = translation_model(**submodel,
-                              #loss_rec=dist_ratio_mse_abs,
-                              debug_no_constant=True,
-                              z_size=sample_shape,
-                              rng=np.random.RandomState(1234),
-                              **lambdas)
+    model = segmentation_model(**submodel,
+                               debug_no_constant=True,
+                               z_size=sample_shape,
+                               rng=np.random.RandomState(1234),
+                               **lambdas)
     
     return {'G' : model,
             'D' : nn.ModuleList(model.disc.values())}

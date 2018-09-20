@@ -1,6 +1,5 @@
 import torch
 from torch import nn
-from torch.functional import F
 import numpy as np
 from fcn_maker.blocks import (basic_block,
                               tiny_block,
@@ -25,7 +24,7 @@ def build_model():
         'lambda_z_id'       : 1,
         'lambda_const'      : 0,
         'lambda_cyc'        : 0,
-        'lambda_mi'         : 0}
+        'lambda_mi'         : 1}
     
     class LayerNorm(nn.Module):
         def __init__(self, num_features, eps=1e-5, affine=True):
@@ -147,9 +146,6 @@ def build_model():
     class LongSkipEncoder(nn.Module):
         def __init__(self, n_downsample, n_res, input_dim, dim, norm, activ, pad_type, kernel_size_end=7, kernel_size=4):
             super(LongSkipEncoder, self).__init__()
-            ####np.random.seed(1)
-            ####torch.manual_seed(1)
-            ####torch.cuda.manual_seed(1)
             self.layers = []
             self.layers += [Conv2dBlock(input_dim, dim, kernel_size_end, 1, (kernel_size_end-1)//2, norm=norm, activation=activ, pad_type=pad_type)]
             # downsampling blocks
@@ -166,10 +162,8 @@ def build_model():
         def forward(self, x):
             outputs = []
             out = x
-            ####print("enc - in hash", hash(out.detach().cpu().numpy().tobytes()))
             for l in self.layers:
                 out = l(out)
-                ####print("enc - out hash", hash(out.detach().cpu().numpy().tobytes()))
                 outputs.append(out)
             return outputs
 
@@ -177,9 +171,7 @@ def build_model():
         def __init__(self, n_upsample, n_res, dim, output_dim, res_norm='adain', activ='relu', pad_type='zero',
                     kernel_size_end=7, kernel_size=5, merge_mode='sum'):
             super(LongSkipDecoder, self).__init__()
-            ####np.random.seed(1)
-            ####torch.manual_seed(1)
-            ####torch.cuda.manual_seed(1)
+
             self.merge_mode = merge_mode
             self.layers = []
             self.cat_layers = []
@@ -210,7 +202,6 @@ def build_model():
 
         def forward(self, x, skips):
             out = x
-            ####print("dec - in hash", hash(out.detach().cpu().numpy().tobytes()))
             for i, l_set in enumerate(self.layers):
                 for l in l_set:
                     out = l(out)
@@ -226,7 +217,6 @@ def build_model():
                         pass
                     else:
                         raise ValueError()
-                ####print("dec - out hash", hash(out.detach().cpu().numpy().tobytes()))
             return out
     
     class decoder_join(nn.Module):
@@ -262,9 +252,6 @@ def build_model():
                      nonlinearity=lambda:nn.LeakyReLU(0.2, inplace=True),
                      padding_mode='reflect', init='kaiming_normal_'):
             super(discriminator, self).__init__()
-            ####np.random.seed(1)
-            ####torch.manual_seed(1)
-            ####torch.cuda.manual_seed(1)
             self.input_dim = input_dim
             self.num_channels_list = num_channels_list
             self.num_scales = num_scales
@@ -288,16 +275,12 @@ def build_model():
                                 out_channels=self.num_channels_list[0],
                                 kernel_size=self.kernel_size,
                                 stride=2,
-                                padding=(self.kernel_size-1)//2,
+                                padding=self.kernel_size//2,
                                 padding_mode=self.padding_mode,
                                 init=self.init)
             cnn.append(layer)
-            #####cnn.append(get_nonlinearity(self.nonlinearity))
-            pad = (self.kernel_size-1)//2
-            #####cnn += [Conv2dBlock(self.input_dim, self.num_channels_list[0], self.kernel_size, 2, pad, norm='none', activation='lrelu', pad_type='reflect')]
-            #####print("DEBUG l1", hash(cnn[0].conv.weight.detach().cpu().numpy().tobytes()), self.input_dim, self.num_channels_list[0], self.kernel_size, cnn[0].conv.weight.size())
-            for i, (ch0, ch1) in enumerate(zip(self.num_channels_list[:-1],
-                                               self.num_channels_list[1:])):
+            for ch0, ch1 in zip(self.num_channels_list[:-1],
+                                self.num_channels_list[1:]):
                 layer = norm_nlin_conv(in_channels=ch0,
                                        out_channels=ch1,
                                        kernel_size=self.kernel_size,
@@ -306,34 +289,24 @@ def build_model():
                                        padding_mode=self.padding_mode,
                                        init=self.init,
                                        nonlinearity=self.nonlinearity,
-                                       normalization=self.normalization if i>0 else None,
+                                       normalization=self.normalization,
                                        norm_kwargs=self.norm_kwargs)
                 cnn.append(layer)
-                #####cnn += [Conv2dBlock(ch0, ch1, self.kernel_size, 2, pad, norm='none', activation='lrelu', pad_type='reflect')]
-            layer = norm_nlin_conv(in_channels=self.num_channels_list[-1],
-                                   out_channels=1,
-                                   kernel_size=1,
-                                   nonlinearity=self.nonlinearity,
-                                   normalization=self.normalization,
-                                   norm_kwargs=self.norm_kwargs,
-                                   init=self.init)
+            layer = convolution(in_channels=self.num_channels_list[-1],
+                                out_channels=1,
+                                kernel_size=1)
             cnn.append(layer)
-            #####cnn += [nn.Conv2d(self.num_channels_list[-1], 1, 1, 1, 0)]
             cnn = nn.Sequential(*cnn)
             return cnn
 
         def forward(self, x):
             outputs = []
-            ####print("disc - in hash", hash(x.detach().cpu().numpy().tobytes()))
             for model in self.cnns:
-                #####outputs.append(torch.sigmoid(model(x)))
-                outputs.append(model(x))
-                #####print("disc - out hash", hash(outputs[-1].detach().cpu().numpy().tobytes()), hash(model[0].conv.weight.detach().cpu().numpy().tobytes()))
-                #####print("disc - out hash", hash(outputs[-1].detach().cpu().numpy().tobytes()))
+                outputs.append(torch.sigmoid(model(x)))
                 x = self.downsample(x)
-            #####out_flat = torch.cat([o.view(o.size(0), -1) for o in outputs],
-                                 #####dim=1)
-            return outputs
+            out_flat = torch.cat([o.view(o.size(0), -1) for o in outputs],
+                                 dim=1)
+            return out_flat
     
     class mi_estimation_network(nn.Module):
         def __init__(self, x_size, z_size, n_hidden):
@@ -382,14 +355,15 @@ def build_model():
     
     discriminator_kwargs = {
         'input_dim'           : image_size[0],
-        'num_channels_list'   : [N//16, N//8, N//4],
+        'num_channels_list'   : [N//32, N//16, N//8],
         'num_scales'          : 3,
         'normalization'       : None,
         'norm_kwargs'         : None,
-        'kernel_size'         : 4,
-        'init'                : None,
+        'kernel_size'         : 5,
+        'init'                : 'kaiming_normal_',
         'nonlinearity'        : lambda : nn.LeakyReLU(0.2, inplace=True),
-        'padding_mode'        : 'reflect'}
+        'padding_mode'        : 'reflect',
+        'init'                : 'kaiming_normal_'}
     
     o = 48 // 2**4
     enc_out_shape = (N, o, o)
@@ -409,41 +383,10 @@ def build_model():
                                             z_size=np.product(z_shape),
                                             n_hidden=1000)}
     
-    def weights_init(init_type='gaussian'):
-        def init_fun(m):
-            classname = m.__class__.__name__
-            if (classname.find('Conv') == 0 or classname.find('Linear') == 0) and hasattr(m, 'weight'):
-                # print m.__class__.__name__
-                if init_type == 'gaussian':
-                    torch.nn.init.normal_(m.weight.data, 0.0, 0.02)
-                elif init_type == 'xavier':
-                    torch.nn.init.xavier_normal_(m.weight.data, gain=math.sqrt(2))
-                elif init_type == 'kaiming':
-                    torch.nn.init.kaiming_normal_(m.weight.data, a=0, mode='fan_in')
-                elif init_type == 'orthogonal':
-                    torch.nn.init.orthogonal_(m.weight.data, gain=math.sqrt(2))
-                elif init_type == 'default':
-                    pass
-                else:
-                    assert 0, "Unsupported initialization: {}".format(init_type)
-                if hasattr(m, 'bias') and m.bias is not None:
-                    torch.nn.init.constant_(m.bias.data, 0.0)
-        return init_fun
-    submodel['encoder_A'].apply(weights_init('kaiming'))
-    submodel['encoder_B'].apply(weights_init('kaiming'))
-    submodel['decoder_A'].apply(weights_init('kaiming'))
-    submodel['decoder_B'].apply(weights_init('kaiming'))
-    submodel['disc_A'].apply(weights_init('gaussian'))
-    submodel['disc_B'].apply(weights_init('gaussian'))
-    submodel['mutual_information'].apply(weights_init('gaussian'))
-    
     model = translation_model(**submodel,
                               #loss_rec=dist_ratio_mse_abs,
                               debug_no_constant=True,
                               z_size=sample_shape,
-                              rng=np.random.RandomState(1234),
                               **lambdas)
     
-    return {'G' : model,
-            'D' : nn.ModuleList(model.disc.values())}
-            ####'D': nn.ModuleList([model.disc['A'], model.disc['B']])}
+    return model

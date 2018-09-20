@@ -238,6 +238,7 @@ def build_model():
     model = translation_model(**submodel,
                               #loss_rec=dist_ratio_mse_abs,
                               z_size=sample_shape,
+                              debug_no_constant=True,
                               **lambdas)
     
     return model

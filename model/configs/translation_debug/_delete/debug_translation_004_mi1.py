@@ -25,7 +25,7 @@ def build_model():
         'lambda_z_id'       : 1,
         'lambda_const'      : 0,
         'lambda_cyc'        : 0,
-        'lambda_mi'         : 0}
+        'lambda_mi'         : 1}
     
     class LayerNorm(nn.Module):
         def __init__(self, num_features, eps=1e-5, affine=True):
@@ -409,34 +409,6 @@ def build_model():
                                             z_size=np.product(z_shape),
                                             n_hidden=1000)}
     
-    def weights_init(init_type='gaussian'):
-        def init_fun(m):
-            classname = m.__class__.__name__
-            if (classname.find('Conv') == 0 or classname.find('Linear') == 0) and hasattr(m, 'weight'):
-                # print m.__class__.__name__
-                if init_type == 'gaussian':
-                    torch.nn.init.normal_(m.weight.data, 0.0, 0.02)
-                elif init_type == 'xavier':
-                    torch.nn.init.xavier_normal_(m.weight.data, gain=math.sqrt(2))
-                elif init_type == 'kaiming':
-                    torch.nn.init.kaiming_normal_(m.weight.data, a=0, mode='fan_in')
-                elif init_type == 'orthogonal':
-                    torch.nn.init.orthogonal_(m.weight.data, gain=math.sqrt(2))
-                elif init_type == 'default':
-                    pass
-                else:
-                    assert 0, "Unsupported initialization: {}".format(init_type)
-                if hasattr(m, 'bias') and m.bias is not None:
-                    torch.nn.init.constant_(m.bias.data, 0.0)
-        return init_fun
-    submodel['encoder_A'].apply(weights_init('kaiming'))
-    submodel['encoder_B'].apply(weights_init('kaiming'))
-    submodel['decoder_A'].apply(weights_init('kaiming'))
-    submodel['decoder_B'].apply(weights_init('kaiming'))
-    submodel['disc_A'].apply(weights_init('gaussian'))
-    submodel['disc_B'].apply(weights_init('gaussian'))
-    submodel['mutual_information'].apply(weights_init('gaussian'))
-    
     model = translation_model(**submodel,
                               #loss_rec=dist_ratio_mse_abs,
                               debug_no_constant=True,
@@ -444,6 +416,6 @@ def build_model():
                               rng=np.random.RandomState(1234),
                               **lambdas)
     
-    return {'G' : model,
-            'D' : nn.ModuleList(model.disc.values())}
+    return {'G': model,
+            'D': nn.ModuleList(model.disc.values())}
             ####'D': nn.ModuleList([model.disc['A'], model.disc['B']])}
