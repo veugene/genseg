@@ -533,7 +533,7 @@ class image_logger(Metric):
             for i, im in enumerate(image_stack):
                 a = im.min() if self.min_val is None else self.min_val
                 b = im.max() if self.max_val is None else self.max_val
-                step = (b-a)/255.
+                step = (b-a)/255. or 1./255
                 bins = np.arange(a, a+255*step, step)
                 im_d = np.digitize(im, bins).astype(np.uint8)
                 image_stack_digitized[i] = im_d
