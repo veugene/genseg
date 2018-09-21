@@ -24,9 +24,9 @@ def _reduce(loss):
 
 class segmentation_model(nn.Module):
     def __init__(self, encoder, decoder, disc_A, disc_B, mutual_information,
-                 loss_rec=mae, z_size=(50,), lambda_disc=1, lambda_x_id=10,
-                 lambda_z_id=1, lambda_const=1, lambda_cyc=0, lambda_mi=1,
-                 lambda_seg=1, rng=None, debug_no_constant=False):
+                 shape_common, shape_unique, loss_rec=mae, lambda_disc=1,
+                 lambda_x_id=10, lambda_z_id=1, lambda_const=1, lambda_cyc=0,
+                 lambda_mi=1, lambda_seg=1, rng=None, debug_no_constant=False):
         super(segmentation_model, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.encoder          = encoder
@@ -34,7 +34,8 @@ class segmentation_model(nn.Module):
         self.disc = {'A' :        disc_A,
                      'B' :        disc_B}   # (separate params)
         self.loss_rec           = loss_rec
-        self.z_size             = z_size
+        self.shape_common       = shape_common
+        self.shape_unique       = shape_unique
         self.lambda_disc        = lambda_disc
         self.lambda_x_id        = lambda_x_id
         self.lambda_z_id        = lambda_z_id
@@ -56,7 +57,7 @@ class segmentation_model(nn.Module):
                                        amsgrad=True)
         
     def _z_constant(self, batch_size):
-        ret = Variable(torch.zeros((batch_size,)+self.z_size,
+        ret = Variable(torch.zeros((batch_size,)+self.shape_unique,
                                    dtype=torch.float32))
         if self.is_cuda:
             ret = ret.cuda()
@@ -65,22 +66,11 @@ class segmentation_model(nn.Module):
     def _z_sample(self, batch_size, rng=None):
         if rng is None:
             rng = self.rng
-        sample = rng.randn(batch_size, *self.z_size).astype(np.float32)
+        sample = rng.randn(batch_size, *self.shape_unique).astype(np.float32)
         ret = Variable(torch.from_numpy(sample))
         if self.is_cuda:
             ret = ret.cuda()
         return ret
-    
-    def _scale(self, z_dict):
-        # Unique is constant; scale up the other variations.
-        if self.debug_no_constant:
-            return z_dict
-        lc, lr, lu = len(z_dict['common']), self.z_size[0], self.z_size[0]
-        scale = (lc+lr)/float(lc+lr+lu)
-        z_scaled = {'common'  : z_dict['common']*scale,
-                    'residual': z_dict['residual']*scale,
-                    'unique'  : z_dict['unique']}
-        return z_scaled
     
     def cuda(self, *args, **kwargs):
         self.is_cuda = True
@@ -109,32 +99,29 @@ class segmentation_model(nn.Module):
         super(segmentation_model, self).eval()
         
     def encode(self, x):
-        z_c, z_r, z_u, skip_info = self.encoder(x)
+        z_c, z_u, skip_info = self.encoder(x)
         z = {'common'  : z_c,
-             'residual': z_r,
              'unique'  : z_u}
-        return z, torch.cat([z_c, z_r], dim=1), z_u, skip_info
+        return z, z_c, z_u, skip_info
         
-    def decode(self, common, residual, unique, skip_info):
-        out = self.decoder(common, residual, unique, skip_info)
+    def decode(self, common, unique, skip_info):
+        out = self.decoder(common, unique, skip_info)
         return out
     
     def translate_AB(self, x_A, rng=None):
         batch_size = len(x_A)
         s_A, _, _, skip_A = self.encode(x_A)
         z_AB = {'common'  : s_A['common'],
-                'residual': self._z_sample(batch_size, rng=rng),
                 'unique'  : self._z_constant(batch_size)}
         if self.debug_no_constant:
             z_AB['unique'] = self._z_sample(batch_size, rng=rng)
-        x_AB = self.decode(**self._scale(z_AB), skip_info=skip_A)
+        x_AB = self.decode(**z_AB, skip_info=skip_A)
         return x_AB
     
     def translate_BA(self, x_B, rng=None):
         batch_size = len(x_B)
         s_B, _, _, skip_B = self.encode(x_B)
         z_BA = {'common'  : s_B['common'],
-                'residual': self._z_sample(batch_size, rng=rng),
                 'unique'  : self._z_sample(batch_size, rng=rng)}
         x_BA = self.decode(**z_BA, skip_info=skip_B)
         return x_BA
@@ -143,7 +130,6 @@ class segmentation_model(nn.Module):
         batch_size = len(x_A)
         s_A, _, _ = self.encode(x_A)
         z_AM = {'common'  : self._z_constant(batch_size),
-                'residual': self._z_constant(batch_size),
                 'unique'  : s_A['unique']}
         x_AM = self.decode(**z_AM)
         return x_AM
@@ -166,40 +152,36 @@ class segmentation_model(nn.Module):
         batch_size = len(x_A)
         
         # Encode inputs.
-        s_A, a_A, b_A, skip_A = self.encode(x_A)
+        s_A, c_A, u_A, skip_A = self.encode(x_A)
         if (   self.lambda_disc
             or self.lambda_x_id
             or self.lambda_z_id
             or self.lambda_const
             or self.lambda_cyc
             or self.lambda_mi):
-                s_B, a_B, b_B, skip_B = self.encode(x_B)
+                s_B, c_B, u_B, skip_B = self.encode(x_B)
         
         # Reconstruct inputs.
         if self.lambda_x_id:
             z_AA = {'common'  : s_A['common'],
-                    'residual': s_A['residual'],
                     'unique'  : s_A['unique']}
             z_BB = {'common'  : s_B['common'],
-                    'residual': s_B['residual'],
                     'unique'  : self._z_constant(batch_size)}
             if self.debug_no_constant:
                 z_BB['unique'] = s_B['unique']
             x_AA = self.decode(**z_AA, skip_info=skip_A)
-            x_BB = self.decode(**self._scale(z_BB), skip_info=skip_B)
+            x_BB = self.decode(**z_BB, skip_info=skip_B)
         
         # Translate.
         x_AB = x_BA = None
         if self.lambda_disc or self.lambda_z_id:
             z_AB = {'common'  : s_A['common'],
-                    'residual': self._z_sample(batch_size, rng=rng),
                     'unique'  : self._z_constant(batch_size)}
             if self.debug_no_constant:
                 z_AB['unique'] = self._z_sample(batch_size, rng=rng)
             z_BA = {'common'  : s_B['common'],
-                    'residual': self._z_sample(batch_size, rng=rng),
                     'unique'  : self._z_sample(batch_size, rng=rng)}
-            x_AB = self.decode(**self._scale(z_AB), skip_info=skip_A)
+            x_AB = self.decode(**z_AB, skip_info=skip_A)
             x_BA = self.decode(**z_BA, skip_info=skip_B)
         
         # Reconstruct latent codes.
@@ -211,10 +193,8 @@ class segmentation_model(nn.Module):
         x_ABA = x_BAB = None
         if self.lambda_cyc:
             z_ABA = {'common'  : s_AB['common'],
-                     'residual': s_A['residual'],
                      'unique'  : s_A['unique']}
             z_BAB = {'common'  : s_BA['common'],
-                     'residual': s_B['residual'],
                      'unique'  : s_B['unique']}
             x_ABA = self.decode(**z_ABA, skip_info=skip_AB)
             x_BAB = self.decode(**z_BAB, skip_info=skip_BA)
@@ -226,10 +206,7 @@ class segmentation_model(nn.Module):
                 mask_indices = list(range(len(mask)))
             num_masks = len(mask_indices)
             z_AM = {'common'  : self._z_constant(num_masks),
-                    'residual': self._z_constant(num_masks),
                     'unique'  : s_A['unique'][mask_indices]}
-            z_AM['unique'] *= self.z_size[0]/( 2*self.z_size[0]
-                                              +len(s_A['common']))  # scale
             x_AM = self.decode(**z_AM)
         
         # Mutual information loss for estimator.
@@ -307,16 +284,12 @@ class segmentation_model(nn.Module):
         if self.lambda_z_id:
             loss_rec['zc_AB'] = self.lambda_z_id*dist(s_AB['common'],
                                                       z_AB['common'])
-            loss_rec['zr_AB'] = self.lambda_z_id*dist(s_AB['residual'],
-                                                      z_AB['residual'])/2.
             loss_rec['zu_AB'] = self.lambda_z_id*dist(s_AB['unique'],
-                                                      z_AB['unique'])/2.
+                                                      z_AB['unique'])
             loss_rec['zc_BA'] = self.lambda_z_id*dist(s_BA['common'],
                                                       z_BA['common'])
-            loss_rec['zr_BA'] = self.lambda_z_id*dist(s_BA['residual'],
-                                                      z_BA['residual'])/2.
             loss_rec['zu_BA'] = self.lambda_z_id*dist(s_BA['unique'],
-                                                      z_BA['unique'])/2.
+                                                      z_BA['unique'])
         
         # Constant 'unique' representation for B -- loss.
         loss_const_B = 0
@@ -370,22 +343,16 @@ class segmentation_model(nn.Module):
             ('l_rec_BB',    _reduce([loss_rec['BB']])),
             ('l_rec',       _reduce([loss_rec['AA']+loss_rec['BB']])),
             ('l_rec_zc_AB', _reduce([loss_rec['zc_AB']])),
-            ('l_rec_zr_AB', _reduce([loss_rec['zr_AB']])),
             ('l_rec_zu_AB', _reduce([loss_rec['zu_AB']])),
             ('l_rec_z_AB',  _reduce(torch.cat([loss_rec['zc_AB'],
-                                               loss_rec['zr_AB'],
                                                loss_rec['zu_AB']], dim=1))),
             ('l_rec_zc_BA', _reduce([loss_rec['zc_BA']])),
-            ('l_rec_zr_BA', _reduce([loss_rec['zr_BA']])),
             ('l_rec_zu_BA', _reduce([loss_rec['zu_BA']])),
             ('l_rec_z_BA',  _reduce(torch.cat([loss_rec['zc_BA'],
-                                               loss_rec['zr_BA'],
                                                loss_rec['zu_BA']], dim=1))),
             ('l_rec_z',     _reduce([ torch.cat([loss_rec['zc_AB'],
-                                                 loss_rec['zr_AB'],
                                                  loss_rec['zu_AB']], dim=1)
                                      +torch.cat([loss_rec['zc_BA'],
-                                                 loss_rec['zr_BA'],
                                                  loss_rec['zu_BA']], dim=1)])),
             ('l_const_B',   _reduce([loss_const_B])),
             ('l_cyc_ABA',   _reduce([loss_cyc['ABA']])),
