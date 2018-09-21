@@ -46,16 +46,10 @@ class segmentation_model(nn.Module):
         self.debug_no_constant  = debug_no_constant
         self.is_cuda            = False
         
-        # Mutual information optimizer is set up here, not passed in.
-        self.mi = [mine(mutual_information, rng=self.rng)]  # (separate params)
-        if self.is_cuda:
-            self.mi[0] = self.mi[0].cuda()
-        self.mi_opt = torch.optim.Adam(params=self.mi[0].parameters(),
-                                       lr=0.0001,
-                                       eps=1e-7,
-                                       weight_decay=0.001,
-                                       amsgrad=True)
-        
+        # Set up mutual information estimator.
+        # (separate params)
+        self.estimator = {'mi':    mine(mutual_information, rng=self.rng)}
+    
     def _z_constant(self, batch_size):
         ret = Variable(torch.zeros((batch_size,)+self.shape_unique,
                                    dtype=torch.float32))
@@ -74,26 +68,26 @@ class segmentation_model(nn.Module):
     
     def cuda(self, *args, **kwargs):
         self.is_cuda = True
-        self.mi[0] = self.mi[0].cuda()
+        self.estimator['mi'] = self.estimator['mi'].cuda()
         self.disc['A'] = self.disc['A'].cuda()
         self.disc['B'] = self.disc['B'].cuda()
         super(segmentation_model, self).cuda(*args, **kwargs)
         
     def cpu(self, *args, **kwargs):
         self.is_cuda = False
-        self.mi[0] = self.mi[0].cpu()
+        self.estimator['mi'] = self.estimator['mi'].cpu()
         self.disc['A'] = self.disc['A'].cpu()
         self.disc['B'] = self.disc['B'].cpu()
         super(segmentation_model, self).cpu(*args, **kwargs)
     
     def train(self, mode=True):
-        self.mi[0].train(mode)
+        self.estimator['mi'].train(mode)
         self.disc['A'].train(mode)
         self.disc['B'].train(mode)
         super(segmentation_model, self).train(mode)
     
     def eval(self):
-        self.mi[0].eval()
+        self.estimator['mi'].eval()
         self.disc['A'].eval()
         self.disc['B'].eval()
         super(segmentation_model, self).eval()
@@ -140,8 +134,10 @@ class segmentation_model(nn.Module):
         if compute_grad:
             assert 'G' in optimizer
             assert 'D' in optimizer
+            assert 'E' in optimizer
             optimizer['G'].zero_grad()
             optimizer['D'].zero_grad()
+            optimizer['E'].zero_grad()
         with torch.set_grad_enabled(compute_grad):
             return self._evaluate(x_A, x_B, mask, mask_indices,
                                   optimizer=optimizer, **kwargs)
@@ -209,17 +205,16 @@ class segmentation_model(nn.Module):
                     'unique'  : s_A['unique'][mask_indices]}
             x_AM = self.decode(**z_AM)
         
-        # Mutual information loss for estimator.
-        self.mi_opt.zero_grad()
+        # Mutual information estimator loss.
         loss_mi_est = defaultdict(int)
-        loss_mi_est['A']  = self.mi[0](a_A.detach(), b_A.detach())
+        loss_mi_est['A']  = self.estimator['mi'](c_A.detach(), u_A.detach())
         if self.lambda_z_id or self.lambda_cyc:
-            loss_mi_est['BA'] = self.mi[0](a_BA.detach(), b_BA.detach())
+            loss_mi_est['BA'] = self.estimator['mi'](a_BA.detach(), b_BA.detach())
         if optimizer is not None:
             loss_mi_est['A'].mean().backward()
             if self.lambda_z_id or self.lambda_cyc:
-                loss_mi_est['BA'].mean().backward()
-        self.mi_opt.step()
+                loss_mi_est['BA'].mean().backward()        
+            optimizer['E'].step()
         
         # Discriminator losses.
         def mse_(prediction, target):
@@ -306,8 +301,8 @@ class segmentation_model(nn.Module):
         # Mutual information loss for generator.
         loss_mi_gen = defaultdict(int)
         if self.lambda_mi:
-            loss_mi_gen['A']  = -self.lambda_mi*self.mi[0](a_A, b_A)
-            loss_mi_gen['BA'] = -self.lambda_mi*self.mi[0](a_BA, b_BA)
+            loss_mi_gen['A']  = -self.lambda_mi*self.estimator['mi'](c_A,u_A)
+            loss_mi_gen['BA'] = -self.lambda_mi*self.estimator['mi'](a_BA,b_BA)
         
         # Segmentation loss.
         loss_seg = 0
