@@ -22,11 +22,46 @@ def _reduce(loss):
     return sum([_mean(v) for v in loss])
 
 
+class _gradient_reflow_function(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input_a, input_b, projection_ab):
+        ctx.projection_ab = projection_ab
+        return input_a
+    
+    @staticmethod
+    def backward(ctx, output_grad):
+        grad_a = output_grad
+        projection_ab = ctx.projection_ab
+        if grad_a.is_cuda:
+            projection_ab = projection_ab.cuda()
+        with torch.no_grad():
+            grad_b = -torch.einsum('bcxy,cn->bnxy', (grad_a, projection_ab))
+        return grad_a, grad_b, None
+
+
+class gradient_reflow(nn.Module):
+    def __init__(self, channels_a, channels_b, rng=None):
+        super(gradient_reflow, self).__init__()
+        self.channels_a = channels_a
+        self.channels_b = channels_b
+        self.rng = rng if rng else np.random.RandomState()
+        projection = self.rng.rand(channels_a,
+                                   channels_b).astype(np.float32)+0.1
+        self.projection = Variable(torch.from_numpy(projection),
+                                   requires_grad=False)
+        
+    def forward(self, input_a, input_b):
+        output = _gradient_reflow_function.apply(input_a, input_b,
+                                                 self.projection)
+        return output
+
+
 class segmentation_model(nn.Module):
     def __init__(self, encoder, decoder, disc_A, disc_B, mutual_information,
-                 shape_common, shape_unique, loss_rec=mae, lambda_disc=1,
-                 lambda_x_id=10, lambda_z_id=1, lambda_const=1, lambda_cyc=0,
-                 lambda_mi=1, lambda_seg=1, rng=None, debug_no_constant=False):
+                 classifier, shape_common, shape_unique, loss_rec=mae,
+                 lambda_disc=1, lambda_x_id=10, lambda_z_id=1, lambda_const=1,
+                 lambda_cyc=0, lambda_mi=1, lambda_seg=1, lambda_class=1,
+                 rng=None, debug_no_constant=False):
         super(segmentation_model, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.encoder          = encoder
@@ -43,12 +78,19 @@ class segmentation_model(nn.Module):
         self.lambda_cyc         = lambda_cyc
         self.lambda_mi          = lambda_mi
         self.lambda_seg         = lambda_seg
+        self.lambda_class       = lambda_class
         self.debug_no_constant  = debug_no_constant
         self.is_cuda            = False
         
-        # Set up mutual information estimator.
-        # (separate params)
-        self.estimator = {'mi':    mine(mutual_information, rng=self.rng)}
+        # Set up mutual information estimator and a classifier.
+        self.estimator = {'mi':    mine(mutual_information, rng=self.rng),
+                          'class': classifier}  # (separate params)
+        
+        # Random inverse gradient projection from common to sampled features,
+        # for use with classifier.
+        self.gradient_reflow = gradient_reflow(channels_a=self.shape_common[0],
+                                               channels_b=self.shape_unique[0],
+                                               rng=self.rng)
     
     def _z_constant(self, batch_size):
         ret = Variable(torch.zeros((batch_size,)+self.shape_unique,
@@ -69,6 +111,7 @@ class segmentation_model(nn.Module):
     def cuda(self, *args, **kwargs):
         self.is_cuda = True
         self.estimator['mi'] = self.estimator['mi'].cuda()
+        self.estimator['class'] = self.estimator['class'].cuda()
         self.disc['A'] = self.disc['A'].cuda()
         self.disc['B'] = self.disc['B'].cuda()
         super(segmentation_model, self).cuda(*args, **kwargs)
@@ -76,18 +119,21 @@ class segmentation_model(nn.Module):
     def cpu(self, *args, **kwargs):
         self.is_cuda = False
         self.estimator['mi'] = self.estimator['mi'].cpu()
+        self.estimator['class'] = self.estimator['class'].cpu()
         self.disc['A'] = self.disc['A'].cpu()
         self.disc['B'] = self.disc['B'].cpu()
         super(segmentation_model, self).cpu(*args, **kwargs)
     
     def train(self, mode=True):
         self.estimator['mi'].train(mode)
+        self.estimator['class'].train(mode)
         self.disc['A'].train(mode)
         self.disc['B'].train(mode)
         super(segmentation_model, self).train(mode)
     
     def eval(self):
         self.estimator['mi'].eval()
+        self.estimator['class'].eval()
         self.disc['A'].eval()
         self.disc['B'].eval()
         super(segmentation_model, self).eval()
@@ -205,7 +251,22 @@ class segmentation_model(nn.Module):
                     'unique'  : s_A['unique'][mask_indices]}
             x_AM = self.decode(**z_AM)
         
-        # Mutual information estimator loss.
+        # Estimator losses
+        #
+        # Classifier.
+        loss_class_est = 0
+        probabilities = defaultdict(int)
+        if self.lambda_class:
+            def classify(x):
+                logit = self.estimator['class'](x.view(batch_size, -1))
+                return torch.sigmoid(logit)
+            probabilities['A'] = classify(c_A.detach())
+            probabilities['B'] = classify(c_B.detach())
+            loss_class_est = ( bce(probabilities['A'], 1)
+                              +bce(probabilities['B'], 0))
+            if optimizer is not None:
+                loss_class_est.mean().backward()
+        # Mutual information.
         loss_mi_est = defaultdict(int)
         loss_mi_est['A']  = self.estimator['mi'](c_A.detach(), u_A.detach())
         if self.lambda_z_id or self.lambda_cyc:
@@ -286,6 +347,18 @@ class segmentation_model(nn.Module):
             loss_rec['zu_BA'] = self.lambda_z_id*dist(s_BA['unique'],
                                                       z_BA['unique'])
         
+        # Latent factor classifier loss for generator.
+        loss_class_gen = 0
+        if self.lambda_class:
+            def classify(x):
+                logit = self.estimator['class'](x.view(batch_size, -1))
+                return torch.sigmoid(logit)
+            c_A_reflow = self.gradient_reflow(c_A, u_A)
+            c_B_reflow = self.gradient_reflow(c_B, u_B)
+            loss_class_gen = ( bce(classify(c_A_reflow), 0.5)
+                              +bce(classify(c_B_reflow), 0.5))
+            loss_class_gen = self.lambda_class*loss_class_gen
+        
         # Constant 'unique' representation for B -- loss.
         loss_const_B = 0
         if self.lambda_const:
@@ -315,6 +388,7 @@ class segmentation_model(nn.Module):
                   +_reduce(loss_cyc.values())
                   +_reduce(loss_mi_gen.values())
                   +_reduce([loss_const_B])
+                  +_reduce([loss_class_gen])
                   +_reduce([loss_seg]))
         
         # Compute generator gradients.
@@ -349,6 +423,7 @@ class segmentation_model(nn.Module):
                                                  loss_rec['zu_AB']], dim=1)
                                      +torch.cat([loss_rec['zc_BA'],
                                                  loss_rec['zu_BA']], dim=1)])),
+            ('l_class',     _reduce([loss_class_gen])),
             ('l_const_B',   _reduce([loss_const_B])),
             ('l_cyc_ABA',   _reduce([loss_cyc['ABA']])),
             ('l_cyc_BAB',   _reduce([loss_cyc['BAB']])),
@@ -363,5 +438,7 @@ class segmentation_model(nn.Module):
             ('out_ABA',     x_ABA),
             ('out_BAB',     x_BAB),
             ('out_seg',     x_AM),
-            ('mask',        mask)))
+            ('mask',        mask),
+            ('prob_A',      _reduce([probabilities['A']])),
+            ('prob_B',      _reduce([1-probabilities['B']]))))
         return outputs
