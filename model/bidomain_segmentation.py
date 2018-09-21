@@ -58,7 +58,7 @@ class gradient_reflow(nn.Module):
 
 class segmentation_model(nn.Module):
     def __init__(self, encoder, decoder, disc_A, disc_B, mutual_information,
-                 classifier, shape_common, shape_unique, loss_rec=mae,
+                 shape_common, shape_unique, classifier=None, loss_rec=mae,
                  lambda_disc=1, lambda_x_id=10, lambda_z_id=1, lambda_const=1,
                  lambda_cyc=0, lambda_mi=1, lambda_seg=1, lambda_class=1,
                  rng=None, debug_no_constant=False):
@@ -256,7 +256,7 @@ class segmentation_model(nn.Module):
         # Classifier.
         loss_class_est = 0
         probabilities = defaultdict(int)
-        if self.lambda_class:
+        if self.lambda_class and self.classifier is not None:
             def classify(x):
                 logit = self.estimator['class'](x.view(batch_size, -1))
                 return torch.sigmoid(logit)
@@ -349,7 +349,7 @@ class segmentation_model(nn.Module):
         
         # Latent factor classifier loss for generator.
         loss_class_gen = 0
-        if self.lambda_class:
+        if self.lambda_class and self.classifier is not None:
             def classify(x):
                 logit = self.estimator['class'](x.view(batch_size, -1))
                 return torch.sigmoid(logit)
