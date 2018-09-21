@@ -12,7 +12,7 @@ from fcn_maker.loss import dice_loss
 from model.common import (dist_ratio_mse_abs,
                           batch_normalization,
                           instance_normalization)
-from model.translation_debug import translation_model
+from model.bidomain_segmentation import segmentation_model
 
 
 def build_model():
@@ -23,9 +23,10 @@ def build_model():
         'lambda_disc'       : 1,
         'lambda_x_id'       : 10,
         'lambda_z_id'       : 1,
-        'lambda_const'      : 0,
+        'lambda_seg'        : 0,
+        'lambda_const'      : 1,
         'lambda_cyc'        : 0,
-        'lambda_mi'         : 0.1}
+        'lambda_mi'         : 1}
     
     class LayerNorm(nn.Module):
         def __init__(self, num_features, eps=1e-5, affine=True):
@@ -398,24 +399,47 @@ def build_model():
     z_shape = sample_shape
     print("DEBUG: sample_shape={}".format(sample_shape))
     submodel = {
-        'encoder_A'           : encoder_A,
-        'decoder_A'           : decoder_join(**decoder_kwargs),
-        'encoder_B'           : encoder_B,
-        'decoder_B'           : decoder_join(**decoder_kwargs),
-        'disc_A'              : discriminator(**discriminator_kwargs),
-        'disc_B'              : discriminator(**discriminator_kwargs),
-        'mutual_information'  : mi_estimation_network(
+        'encoder'           : encoder_A,
+        'decoder'           : decoder_join(**decoder_kwargs),
+        'disc_A'            : discriminator(**discriminator_kwargs),
+        'disc_B'            : discriminator(**discriminator_kwargs),
+        'mutual_information': mi_estimation_network(
                                             x_size=np.product(x_shape),
                                             z_size=np.product(z_shape),
                                             n_hidden=1000)}
     
-    model = translation_model(**submodel,
-                              #loss_rec=dist_ratio_mse_abs,
-                              debug_no_constant=True,
-                              z_size=sample_shape,
-                              rng=np.random.RandomState(1234),
-                              **lambdas)
+    def weights_init(init_type='gaussian'):
+        def init_fun(m):
+            classname = m.__class__.__name__
+            if (classname.find('Conv') == 0 or classname.find('Linear') == 0) and hasattr(m, 'weight'):
+                # print m.__class__.__name__
+                if init_type == 'gaussian':
+                    torch.nn.init.normal_(m.weight.data, 0.0, 0.02)
+                elif init_type == 'xavier':
+                    torch.nn.init.xavier_normal_(m.weight.data, gain=math.sqrt(2))
+                elif init_type == 'kaiming':
+                    torch.nn.init.kaiming_normal_(m.weight.data, a=0, mode='fan_in')
+                elif init_type == 'orthogonal':
+                    torch.nn.init.orthogonal_(m.weight.data, gain=math.sqrt(2))
+                elif init_type == 'default':
+                    pass
+                else:
+                    assert 0, "Unsupported initialization: {}".format(init_type)
+                if hasattr(m, 'bias') and m.bias is not None:
+                    torch.nn.init.constant_(m.bias.data, 0.0)
+        return init_fun
+    submodel['encoder'].apply(weights_init('kaiming'))
+    submodel['encoder'].apply(weights_init('kaiming'))
+    submodel['disc_A'].apply(weights_init('gaussian'))
+    submodel['disc_B'].apply(weights_init('gaussian'))
+    submodel['mutual_information'].apply(weights_init('gaussian'))
     
-    return {'G': model,
-            'D': nn.ModuleList(model.disc.values())}
+    model = segmentation_model(**submodel,
+                               debug_no_constant=True,
+                               z_size=sample_shape,
+                               rng=np.random.RandomState(1234),
+                               **lambdas)
+    
+    return {'G' : model,
+            'D' : nn.ModuleList(model.disc.values())}
             ####'D': nn.ModuleList([model.disc['A'], model.disc['B']])}

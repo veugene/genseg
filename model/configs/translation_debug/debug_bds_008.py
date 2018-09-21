@@ -22,7 +22,7 @@ def build_model():
     image_size = (1, 48, 48)
     lambdas = {
         'lambda_disc'       : 1,
-        'lambda_x_id'       : 10,
+        'lambda_x_id'       : 100,
         'lambda_z_id'       : 1,
         'lambda_seg'        : 0,
         'lambda_const'      : 0,

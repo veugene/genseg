@@ -11,21 +11,25 @@ from fcn_maker.blocks import (basic_block,
 from fcn_maker.loss import dice_loss
 from model.common import (dist_ratio_mse_abs,
                           batch_normalization,
-                          instance_normalization)
-from model.translation_debug import translation_model
+                          instance_normalization,
+                          mlp)
+from model.bidomain_segmentation import segmentation_model
 
 
 def build_model():
     N = 512 # Number of features at the bottleneck.
     n = 4   # Number of features (subset of N) for samples.
-    image_size = (1, 50, 50)
+    image_size = (1, 48, 48)
     lambdas = {
         'lambda_disc'       : 1,
-        'lambda_x_id'       : 10,
-        'lambda_z_id'       : 1,
+        'lambda_x_id'       : 5,
+        'lambda_z_id'       : 5,
+        'lambda_prec'       : 0,
+        'lambda_seg'        : 0,
+        'lambda_class'      : 10,
         'lambda_const'      : 0,
         'lambda_cyc'        : 0,
-        'lambda_mi'         : 0.01}
+        'lambda_mi'         : 1}
     
     class LayerNorm(nn.Module):
         def __init__(self, num_features, eps=1e-5, affine=True):
@@ -57,11 +61,11 @@ def build_model():
             return x
 
     class ResBlock(nn.Module):
-        def __init__(self, dim, norm='in', activation='relu', pad_type='zero'):
+        def __init__(self, dim, norm='in', activation='relu', pad_type='zero', dropout=None):
             super(ResBlock, self).__init__()
 
             model = []
-            model += [Conv2dBlock(dim ,dim, 3, 1, 1, norm=norm, activation=activation, pad_type=pad_type)]
+            model += [Conv2dBlock(dim ,dim, 3, 1, 1, norm=norm, activation=activation, pad_type=pad_type, dropout=dropout)]
             model += [Conv2dBlock(dim ,dim, 3, 1, 1, norm=norm, activation='none', pad_type=pad_type)]
             self.model = nn.Sequential(*model)
 
@@ -72,11 +76,11 @@ def build_model():
             return out
     
     class ResBlocks(nn.Module):
-        def __init__(self, num_blocks, dim, norm='in', activation='relu', pad_type='zero'):
+        def __init__(self, num_blocks, dim, norm='in', activation='relu', pad_type='zero', dropout=None):
             super(ResBlocks, self).__init__()
             self.model = []
             for i in range(num_blocks):
-                self.model += [ResBlock(dim, norm=norm, activation=activation, pad_type=pad_type)]
+                self.model += [ResBlock(dim, norm=norm, activation=activation, pad_type=pad_type, dropout=dropout)]
             self.model = nn.Sequential(*self.model)
 
         def forward(self, x):
@@ -84,7 +88,7 @@ def build_model():
     
     class Conv2dBlock(nn.Module):
         def __init__(self, input_dim ,output_dim, kernel_size, stride,
-                    padding=0, norm='none', activation='relu', pad_type='zero', transpose=False):
+                    padding=0, norm='none', activation='relu', pad_type='zero', transpose=False, dropout=0):
             super(Conv2dBlock, self).__init__()
             self.use_bias = True
             # initialize padding
@@ -135,9 +139,17 @@ def build_model():
             else:
                 conv_op = nn.Conv2d
             self.conv = conv_op(input_dim, output_dim, kernel_size, stride, bias=self.use_bias)
+            
+            # dropout
+            if dropout:
+                self.noise = nn.Dropout(dropout)
+            else:
+                self.noise = None
 
         def forward(self, x):
             x = self.conv(self.pad(x))
+            if self.noise:
+                x = self.noise(x)
             if self.norm:
                 x = self.norm(x)
             if self.activation:
@@ -184,7 +196,7 @@ def build_model():
             self.layers = []
             self.cat_layers = []
             # AdaIN residual blocks
-            self.layers += [(ResBlocks(n_res, dim, res_norm, activ, pad_type=pad_type),)]
+            self.layers += [(ResBlocks(n_res, dim, res_norm, activ, pad_type=pad_type, dropout=0.2),)]
             # upsampling blocks
             def _prev_dim(dim):
                 p = dim
@@ -357,7 +369,7 @@ def build_model():
     
     encoder_kwargs = {
         'input_dim'           : 1,
-        'dim'                 : 32,
+        'dim'                 : N//16,
         'n_downsample'        : 4,
         'n_res'               : 4,
         'norm'                : 'in',
@@ -373,7 +385,7 @@ def build_model():
         'dim'                 : encoder_A.output_dim,
         'n_upsample'          : 4,
         'n_res'               : 4,
-        'res_norm'            : 'bn',
+        'res_norm'            : 'ln',
         'activ'               : 'relu',
         'pad_type'            : 'reflect',
         'kernel_size'         : 5,
@@ -398,24 +410,54 @@ def build_model():
     z_shape = sample_shape
     print("DEBUG: sample_shape={}".format(sample_shape))
     submodel = {
-        'encoder_A'           : encoder_A,
-        'decoder_A'           : decoder_join(**decoder_kwargs),
-        'encoder_B'           : encoder_B,
-        'decoder_B'           : decoder_join(**decoder_kwargs),
-        'disc_A'              : discriminator(**discriminator_kwargs),
-        'disc_B'              : discriminator(**discriminator_kwargs),
-        'mutual_information'  : mi_estimation_network(
+        'encoder'           : encoder_A,
+        'decoder'           : decoder_join(**decoder_kwargs),
+        'disc_A'            : discriminator(**discriminator_kwargs),
+        'disc_B'            : discriminator(**discriminator_kwargs),
+        'mutual_information': mi_estimation_network(
                                             x_size=np.product(x_shape),
                                             z_size=np.product(z_shape),
-                                            n_hidden=1000)}
+                                            n_hidden=1000),
+        'classifier'        : mlp(n_layers=3,
+                                  n_input=np.product(x_shape),
+                                  n_output=1,
+                                  n_hidden=200,
+                                  init='normal_',
+                                  output_transform=torch.sigmoid)}
     
-    model = translation_model(**submodel,
-                              #loss_rec=dist_ratio_mse_abs,
-                              debug_no_constant=True,
-                              z_size=sample_shape,
-                              rng=np.random.RandomState(1234),
-                              **lambdas)
+    def weights_init(init_type='gaussian'):
+        def init_fun(m):
+            classname = m.__class__.__name__
+            if (classname.find('Conv') == 0 or classname.find('Linear') == 0) and hasattr(m, 'weight'):
+                # print m.__class__.__name__
+                if init_type == 'gaussian':
+                    torch.nn.init.normal_(m.weight.data, 0.0, 0.02)
+                elif init_type == 'xavier':
+                    torch.nn.init.xavier_normal_(m.weight.data, gain=math.sqrt(2))
+                elif init_type == 'kaiming':
+                    torch.nn.init.kaiming_normal_(m.weight.data, a=0, mode='fan_in')
+                elif init_type == 'orthogonal':
+                    torch.nn.init.orthogonal_(m.weight.data, gain=math.sqrt(2))
+                elif init_type == 'default':
+                    pass
+                else:
+                    assert 0, "Unsupported initialization: {}".format(init_type)
+                if hasattr(m, 'bias') and m.bias is not None:
+                    torch.nn.init.constant_(m.bias.data, 0.0)
+        return init_fun
+    submodel['encoder'].apply(weights_init('kaiming'))
+    submodel['encoder'].apply(weights_init('kaiming'))
+    submodel['disc_A'].apply(weights_init('gaussian'))
+    submodel['disc_B'].apply(weights_init('gaussian'))
+    submodel['mutual_information'].apply(weights_init('gaussian'))
     
-    return {'G': model,
-            'D': nn.ModuleList(model.disc.values())}
-            ####'D': nn.ModuleList([model.disc['A'], model.disc['B']])}
+    model = segmentation_model(**submodel,
+                               debug_no_constant=True,
+                               z_size=enc_out_shape,
+                               s_size=sample_shape,
+                               rng=np.random.RandomState(1234),
+                               **lambdas)
+    
+    return {'G' : model,
+            'D' : nn.ModuleList(model.disc.values()),
+            'E' : nn.ModuleList(model.estimator.values())}
