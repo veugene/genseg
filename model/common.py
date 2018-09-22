@@ -275,20 +275,15 @@ class encoder(nn.Module):
         self.blocks = nn.ModuleList()
         shape = self.input_shape
         last_channels = self.in_channels
-        block = self.block_type(in_channels=last_channels,
-                                num_filters=self.num_channels_list[0],
-                                subsample=False,
-                                skip=False,
-                                dropout=self.dropout,
-                                normalization=None,
-                                conv_padding=self.conv_padding,
-                                padding_mode=self.padding_mode,
-                                kernel_size=self.kernel_size,
-                                init=self.init,
-                                nonlinearity=None,
-                                ndim=self.ndim)
-        self.blocks.append(block)
-        shape = get_output_shape(block, shape)
+        conv = convolution(in_channels=last_channels,
+                           out_channels=self.num_channels_list[0],
+                           kernel_size=7,
+                           stride=1,
+                           padding=3,
+                           padding_mode=self.padding_mode,
+                           init=self.init)
+        self.blocks.append(conv)
+        shape = get_output_shape(conv, shape)
         last_channels = self.num_channels_list[0]
         for i in range(1, self.num_conv_blocks):
             block = self.block_type(in_channels=last_channels,
