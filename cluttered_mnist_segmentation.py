@@ -273,7 +273,8 @@ if __name__ == '__main__':
             prefix=key,
             output_transform=lambda x: dict([(k, _tuple(v))
                                              for k, v in x.items()
-                                             if k.startswith('l_')]))
+                                             if k.startswith('l_')
+                                             or k.startswith('prob')]))
     
     # Set up image logging to tensorboard.
     def _p(val): return np.squeeze(val.cpu().numpy(), 1)
