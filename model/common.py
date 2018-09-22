@@ -14,16 +14,22 @@ from fcn_maker.blocks import (get_nonlinearity,
 
  
 def get_output_shape(layer, input_shape):
-    '''
+    """
     Works for `convolution`, `nn.Linear`, `identity_block`, `basic_block`,
     `tiny_block`, `dense_block`, `repeat_block`.
     
     `input_shape` is without batch dimension.
-    '''
+    """
+    def _padding_array(padding):
+        if not hasattr(padding, '__len__'):
+            return np.array(2*padding)
+        arr = [padding[i]+padding[i+1] for i in range(0, len(padding), 2)]
+        return np.array(arr)
+        
     def compute_conv_out_shape(input_shape, out_channels, padding,
                                kernel_size, stride=1):
         out_shape = 1 + ( np.array(input_shape)[1:]
-                         +2*np.array(padding)
+                         +_padding_array(padding)
                          -np.array(kernel_size)) // np.array(stride)
         out_shape = (out_channels,)+tuple(out_shape)
         return out_shape
@@ -31,7 +37,7 @@ def get_output_shape(layer, input_shape):
     def compute_tconv_out_shape(input_shape, out_channels, padding,
                                 kernel_size, stride=1):
         out_shape = ( (np.array(input_shape[1:])-1)*np.array(stride)
-                     -2*np.array(padding)
+                     -_padding_array(padding)
                      +np.array(kernel_size))
         out_shape = (out_channels,)+tuple(out_shape)
         return out_shape
@@ -39,7 +45,7 @@ def get_output_shape(layer, input_shape):
     def compute_pool_out_shape(input_shape, padding,
                                stride=2, ceil_mode=False):
         input_spatial_shape_padded = ( np.array(input_shape)[1:]
-                                      +2*np.array(padding))
+                                      +_padding_array(padding))
         out_shape = input_spatial_shape_padded//stride
         if ceil_mode:
             out_shape += input_spatial_shape_padded%stride
@@ -51,7 +57,7 @@ def get_output_shape(layer, input_shape):
             out_shape = compute_tconv_out_shape(
                                            input_shape=input_shape,
                                            out_channels=layer.out_channels,
-                                           padding=int(layer.conv_padding),
+                                           padding=0,
                                            kernel_size=kernel_size,
                                            stride=stride)
         elif layer.upsample_mode=='repeat':
@@ -64,7 +70,7 @@ def get_output_shape(layer, input_shape):
     if isinstance(layer, convolution):
         out_shape = compute_conv_out_shape(input_shape=input_shape,
                                            out_channels=layer.out_channels,
-                                           padding=layer.op.padding,
+                                           padding=layer.padding,
                                            kernel_size=layer.op.kernel_size,
                                            stride=layer.op.stride)
         return out_shape
@@ -73,17 +79,21 @@ def get_output_shape(layer, input_shape):
     elif isinstance(layer, identity_block):
         return input_shape
     elif isinstance(layer, basic_block):
+        padding = 0
+        if layer.conv_padding:
+            padding = [(layer.kernel_size-1)//2,
+                       (layer.kernel_size-int(layer.subsample))//2]*layer.ndim
         out_shape = compute_conv_out_shape(input_shape=input_shape,
                                            out_channels=layer.out_channels,
-                                           padding=int(layer.conv_padding),
-                                           kernel_size=3,
+                                           padding=padding,
+                                           kernel_size=layer.kernel_size,
                                            stride=2 if layer.subsample else 1)
         if layer.upsample:
             out_shape = compute_block_upsample(layer, out_shape)
         out_shape = compute_conv_out_shape(input_shape=out_shape,
                                            out_channels=layer.out_channels,
-                                           padding=int(layer.conv_padding),
-                                           kernel_size=3,
+                                           padding=padding,
+                                           kernel_size=layer.kernel_size,
                                            stride=1)
         return out_shape
     elif isinstance(layer, tiny_block):
@@ -92,10 +102,14 @@ def get_output_shape(layer, input_shape):
             out_shape = compute_pool_out_shape(input_shape=input_shape,
                                                padding=0,
                                                stride=2)
+        padding = 0
+        if layer.conv_padding:
+            padding = [(layer.kernel_size-1)//2,
+                       (layer.kernel_size-int(layer.subsample))//2]*layer.ndim
         out_shape = compute_conv_out_shape(input_shape=out_shape,
                                            out_channels=layer.out_channels,
-                                           padding=int(layer.conv_padding),
-                                           kernel_size=3,
+                                           padding=padding,
+                                           kernel_size=layer.kernel_size,
                                            stride=1)
         if layer.upsample:
             out_shape = compute_block_upsample(layer, out_shape)
