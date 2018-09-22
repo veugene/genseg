@@ -289,7 +289,7 @@ class encoder(nn.Module):
             block = self.block_type(in_channels=last_channels,
                                     num_filters=self.num_channels_list[i],
                                     subsample=True,
-                                    skip=self.skip,
+                                    skip=skip,
                                     dropout=self.dropout,
                                     normalization=self.normalization,
                                     norm_kwargs=self.norm_kwargs,
@@ -306,6 +306,8 @@ class encoder(nn.Module):
             block = normalization(ndim=self.ndim,
                                   num_features=last_channels,
                                   **self.norm_kwargs)
+            self.blocks.append(block)
+        self.blocks.append(get_nonlinearity(self.nonlinearity))
         self.output_shape = shape
             
     def forward(self, input):
@@ -377,26 +379,29 @@ class decoder(nn.Module):
         '''
         Set up blocks.
         '''
-        self.blocks = nn.ModuleList()
-        self.squish = nn.ModuleList()
         self.cats   = nn.ModuleList()
+        self.squish = nn.ModuleList()
+        self.blocks = nn.ModuleList()
         shape = self.input_shape
         last_channels = shape[0]
         for i in range(self.num_conv_blocks, 0, -1):
             upsample = bool(i>1)    # Not on last layer.
+            normalization = self.normalization if i>0 else None
+            nonlinearity = self.nonlinearity if i>0 else None
+            skip = self.skip if i>0 else None
             block = self.block_type(in_channels=last_channels,
                                     num_filters=self.num_channels_list[-i],
                                     upsample=upsample,
                                     upsample_mode=self.upsample_mode,
-                                    skip=self.skip,
+                                    skip=skip,
                                     dropout=self.dropout,
-                                    normalization=self.normalization,
+                                    normalization=normalization,
                                     norm_kwargs=self.norm_kwargs,
                                     conv_padding=self.conv_padding,
                                     padding_mode=self.padding_mode,
                                     kernel_size=self.kernel_size,
                                     init=self.init,
-                                    nonlinearity=self.nonlinearity,
+                                    nonlinearity=nonlinearity,
                                     ndim=self.ndim)
             self.blocks.append(block)
             shape = get_output_shape(block, shape)
@@ -427,12 +432,18 @@ class decoder(nn.Module):
         '''
         Final output - change number of channels.
         '''
-        self.output = convolution(in_channels=last_channels,
-                                  out_channels=self.output_shape[0],
-                                  kernel_size=7,
-                                  padding=3,
-                                  padding_mode=self.padding_mode,
-                                  ndim=self.ndim)
+        block = self.block_type(in_channels=last_channels,
+                                num_filters=self.output_shape[0],
+                                skip=False,
+                                normalization=self.normalization,
+                                norm_kwargs=self.norm_kwargs,
+                                conv_padding=self.conv_padding,
+                                padding_mode=self.padding_mode,
+                                kernel_size=7,
+                                init=self.init,
+                                nonlinearity=self.nonlinearity,
+                                ndim=self.ndim)
+        self.output = block
         self.output_shape = shape
         
     def forward(self, x, skip_info=None):
