@@ -3,6 +3,7 @@ from torch import nn
 import numpy as np
 from fcn_maker.blocks import (get_nonlinearity,
                               get_initializer,
+                              do_upsample,
                               convolution,
                               block_abstract,
                               identity_block,
@@ -114,6 +115,19 @@ def get_output_shape(layer, input_shape):
         if layer.upsample:
             out_shape = compute_block_upsample(layer, out_shape)
         return out_shape
+    elif isinstance(layer, conv_block):
+        padding = 0
+        if layer.conv_padding:
+            padding = [(layer.kernel_size-1)//2,
+                       (layer.kernel_size-int(layer.subsample))//2]*layer.ndim
+        out_shape = compute_conv_out_shape(input_shape=input_shape,
+                                           out_channels=layer.out_channels,
+                                           padding=padding,
+                                           kernel_size=layer.kernel_size,
+                                           stride=2 if layer.subsample else 1)
+        if layer.upsample:
+            out_shape = compute_block_upsample(layer, out_shape)
+        return out_shape
     elif isinstance(layer, dense_block):
         raise NotImplementedError("TODO: implement shape inference for "
                                   "`dense_block`.")
@@ -153,6 +167,9 @@ def instance_normalization(ndim=2, *args, **kwargs):
 Helper to build a norm -> ReLU -> fully-connected.
 """
 class norm_nlin_fc(torch.nn.Module):
+    """
+    Helper to build a norm -> ReLU -> fully-connected.
+    """
     def __init__(self, in_features, out_features, nonlinearity='ReLU',
                  normalization=instance_normalization, norm_kwargs=None,
                  init='kaiming_normal_'):
@@ -452,6 +469,91 @@ class mlp(nn.Module):
                 layer.weight.data = get_initializer(init)(layer.weight.data)
     def forward(self, x):
         return self.model(x)
+
+
+class conv_block(block_abstract):
+    """
+    A single basic 3x3 convolution.
+    Unlike in tiny_block, stride instead of maxpool and upsample before conv.
+    """
+    def __init__(self, in_channels, num_filters, subsample=False,
+                 upsample=False, upsample_mode='repeat', skip=True, dropout=0.,
+                 normalization=batch_normalization, norm_kwargs=None,
+                 conv_padding=True, padding_mode='constant', kernel_size=3,
+                 init='kaiming_normal_', nonlinearity='ReLU', ndim=2):
+        super(conv_block, self).__init__(in_channels, num_filters,
+                                         subsample, upsample)
+        if norm_kwargs is None:
+            norm_kwargs = {}
+        self.out_channels = num_filters
+        self.upsample_mode = upsample_mode
+        self.skip = skip
+        self.dropout = dropout
+        self.normalization = normalization
+        self.norm_kwargs = norm_kwargs
+        self.conv_padding = conv_padding
+        self.padding_mode = padding_mode
+        self.kernel_size = kernel_size
+        self.init = init
+        self.nonlinearity = nonlinearity
+        self.ndim = ndim
+        self.op = []
+        if normalization is not None:
+            self.op += [normalization(ndim=ndim,
+                                      num_features=in_channels,
+                                      **norm_kwargs)]
+        self.op += [get_nonlinearity(nonlinearity)]
+        if upsample:
+            self.op += [do_upsample(mode=upsample_mode,
+                                    ndim=ndim,
+                                    in_channels=in_channels,
+                                    out_channels=in_channels,
+                                    kernel_size=2,
+                                    init=init)]
+        stride = 1
+        if subsample:
+            stride = 2
+        if conv_padding:
+            # For odd kernel sizes, equivalent to kernel_size//2.
+            # For even kernel sizes, two cases:
+            #    (1) [kernel_size//2-1, kernel_size//2] @ stride 1
+            #    (2) kernel_size//2 @ stride 2
+            # This way, even kernel sizes yield the same output size as
+            # odd kernel sizes. When subsampling, even kernel sizes allow
+            # possible downscaling without aliasing.
+            padding = [(kernel_size-1)//2,
+                       (kernel_size-int(subsample))//2]*ndim
+        else:
+            padding = 0
+        self.op += [convolution(in_channels=in_channels,
+                                out_channels=num_filters,
+                                kernel_size=kernel_size,
+                                ndim=ndim,
+                                stride=stride,
+                                init=init,
+                                padding=padding,
+                                padding_mode=padding_mode)]
+        if dropout > 0:
+            self.op += [get_dropout(dropout, nonlin=nonlinearity)]
+        self._register_modules(self.op)
+        self.op_shortcut = None
+        if skip:
+            self.op_shortcut = shortcut(in_channels=in_channels,
+                                        out_channels=num_filters,
+                                        subsample=subsample,
+                                        upsample=upsample,
+                                        upsample_mode=upsample_mode,
+                                        init=init,
+                                        ndim=ndim)
+            self._register_modules({'shortcut': self.op_shortcut})
+
+    def forward(self, input):
+        out = input
+        for op in self.op:
+            out = op(out)
+        if self.skip:
+            out = self.op_shortcut(input, out)
+        return out
     
     
 def dist_ratio_mse_abs(x, y, eps=1e-7):
