@@ -472,14 +472,15 @@ class decoder(nn.Module):
     
     
 class mlp(nn.Module):
-    def __init__(self, n_input, n_output, n_layers, n_hidden=None,
-                 init='kaiming_normal_'):
+    def __init__(self, n_layers, n_input, n_output, n_hidden=None,
+                 init='kaiming_normal_', output_transform=None):
         super(mlp, self).__init__()
         assert(n_layers > 0)
+        self.n_layers = n_layers
         self.n_input  = n_input
         self.n_output = n_output
-        self.n_layers = n_layers
         self.n_hidden = n_hidden
+        self.output_transform = output_transform
         # TODO: support `init` argument.
         if n_hidden is None:
             self.n_hidden = n_output
@@ -496,7 +497,10 @@ class mlp(nn.Module):
             if isinstance(layer, nn.Linear) and init is not None:
                 layer.weight.data = get_initializer(init)(layer.weight.data)
     def forward(self, x):
-        return self.model(x)
+        out = self.model(x)
+        if self.output_transform is not None:
+            out = self.output_transform(out)
+        return out
 
 
 class conv_block(block_abstract):
@@ -660,4 +664,3 @@ if __name__=='__main__':
           "".format(sum([np.prod(p.size()) for p in model.parameters()])))
     print("decoder: input_shape={}, output_shape={}"
           "".format((batch_size,)+output_shape, tuple(output.size())))
-    
