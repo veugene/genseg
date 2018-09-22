@@ -141,7 +141,7 @@ class experiment(object):
         '''
         Restore the model, its state, and the optimizer's state.
         '''
-        saved_dict = torch.load(load_from)['dict']
+        saved_dict = torch.load(load_from)
         
         # Build model according to saved code.
         module = imp.new_module('module')
