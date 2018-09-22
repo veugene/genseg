@@ -163,9 +163,42 @@ def instance_normalization(ndim=2, *args, **kwargs):
         raise ValueError("ndim must be 1, 2, or 3")
 
 
-"""
-Helper to build a norm -> ReLU -> fully-connected.
-"""
+def group_normalization(num_features, ndim=None, *args, **kwargs):
+    return torch.nn.GroupNorm(*args, num_channels=num_features, **kwargs)
+
+
+class layer_normalization(nn.Module):
+    """
+    Ming-Yu's layer normalization implementation, to avoid the ridiculous need
+    to specify output shape with pytorch's default LayerNorm implementation.
+    """
+    def __init__(self, num_features, eps=1e-5, affine=True, ndim=None):
+        super(layer_normalization, self).__init__()
+        self.num_features = num_features
+        self.affine = affine
+        self.eps = eps
+        if self.affine:
+            self.gamma = nn.Parameter(torch.Tensor(num_features).uniform_())
+            self.beta = nn.Parameter(torch.zeros(num_features))
+
+    def forward(self, x):
+        shape = [-1] + [1] * (x.dim() - 1)
+        if x.size(0) == 1:
+            # These two lines run much faster in pytorch 0.4 than the two 
+            # lines listed below.
+            mean = x.view(-1).mean().view(*shape)
+            std = x.view(-1).std().view(*shape)
+        else:
+            mean = x.view(x.size(0), -1).mean(1).view(*shape)
+            std = x.view(x.size(0), -1).std(1).view(*shape)
+        x = (x - mean) / (std + self.eps)
+
+        if self.affine:
+            shape = [1, -1] + [1] * (x.dim() - 2)
+            x = x * self.gamma.view(*shape) + self.beta.view(*shape)
+        return x
+
+
 class norm_nlin_fc(torch.nn.Module):
     """
     Helper to build a norm -> ReLU -> fully-connected.
