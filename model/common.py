@@ -328,7 +328,7 @@ class encoder(nn.Module):
 class decoder(nn.Module):
     def __init__(self, input_shape, output_shape, num_conv_blocks, block_type,
                  num_channels_list, output_transform=None, skip=True,
-                 dropout=0., normalization=instance_normalization,
+                 dropout=0., normalization=layer_normalization,
                  norm_kwargs=None, conv_padding=True, padding_mode='constant',
                  kernel_size=3, upsample_mode='conv', init='kaiming_normal_',
                  nonlinearity='ReLU', long_skip_merge_mode=None, ndim=2):
@@ -380,49 +380,40 @@ class decoder(nn.Module):
         Set up blocks.
         '''
         self.cats   = nn.ModuleList()
-        self.squish = nn.ModuleList()
         self.blocks = nn.ModuleList()
         shape = self.input_shape
         last_channels = shape[0]
-        for i in range(self.num_conv_blocks, 0, -1):
-            upsample = bool(i>1)    # Not on last layer.
-            normalization = self.normalization if i>0 else None
-            nonlinearity = self.nonlinearity if i>0 else None
-            skip = self.skip if i>0 else None
+        for n in range(self.num_conv_blocks):
+            upsample = bool(n<self.num_conv_blocks-1)    # Not on last layer.
+            def _select(a, b=None):
+                return a if n>0 else b
             block = self.block_type(in_channels=last_channels,
-                                    num_filters=self.num_channels_list[-i],
+                                    num_filters=self.num_channels_list[n],
                                     upsample=upsample,
                                     upsample_mode=self.upsample_mode,
-                                    skip=skip,
+                                    skip=_select(self.skip, False),
                                     dropout=self.dropout,
-                                    normalization=normalization,
-                                    norm_kwargs=self.norm_kwargs,
+                                    normalization=_select(self.normalization),
                                     conv_padding=self.conv_padding,
                                     padding_mode=self.padding_mode,
                                     kernel_size=self.kernel_size,
                                     init=self.init,
-                                    nonlinearity=nonlinearity,
+                                    nonlinearity=_select(self.nonlinearity),
                                     ndim=self.ndim)
             self.blocks.append(block)
             shape = get_output_shape(block, shape)
-            last_channels = self.num_channels_list[-i]
-            if upsample and self.long_skip_merge_mode is not None:
-                squish = convolution(in_channels=last_channels,
-                                     out_channels=self.num_channels_list[-i+1],
-                                     kernel_size=1,
-                                     stride=1,
-                                     padding=0)
-                self.squish.append(squish)
-                shape = get_output_shape(squish, shape)
-                last_channels = self.num_channels_list[-i+1]
-            if upsample and self.long_skip_merge_mode=='skinny_cat':
-                cat = convolution(in_channels=self.num_channels_list[-i+1],
-                                  out_channels=1,
-                                  kernel_size=1,
-                                  init=self.init)
-                self.cats.append(cat)
+            last_channels = self.num_channels_list[n]
             if upsample:
                 if   self.long_skip_merge_mode=='skinny_cat':
+                    cat = conv_block(in_channels=self.num_channels_list[n+1],
+                                 num_filters=1,
+                                 skip=False,
+                                 normalization=instance_normalization,
+                                 nonlinearity=None,
+                                 kernel_size=1,
+                                 init=self.init,
+                                 ndim=self.ndim)
+                    self.cats.append(cat)
                     last_channels += 1
                 elif self.long_skip_merge_mode=='cat':
                     last_channels *= 2
@@ -448,24 +439,26 @@ class decoder(nn.Module):
         
     def forward(self, x, skip_info=None):
         out = x
-        for n, (shape_in, shape_out) in enumerate(zip(self._shapes[:-1],
-                                                      self._shapes[1:])):
+        skip_info = skip_info[::-1]
+        for n, block in enumerate(self.blocks):
+            shape_in  = self._shapes[n]
+            shape_out = self._shapes[n+1]
             spatial_shape_in = tuple(max(out.size(i+1),
                                          shape_out[i]-shape_in[i])
                                      for i in range(1, self.ndim+1))
             if np.any(np.less_equal(spatial_shape_in, 0)):
                 spatial_shape_in = shape_in[1:]
             out = adjust_to_size(out, spatial_shape_in)
+            
             if not out.is_contiguous():
                 out = out.contiguous()
-            out = self.blocks[n](out)
+            out = block(out)
             out = adjust_to_size(out, shape_out[1:])
             if not out.is_contiguous():
                 out = out.contiguous()
             if (self.long_skip_merge_mode is not None and skip_info is not None
                                                       and n<len(skip_info)):
-                out = self.squish[n](out)
-                skip = skip_info[-n-1]
+                skip = skip_info[n]
                 if   self.long_skip_merge_mode=='skinny_cat':
                     cat = self.cats[n]
                     out = torch.cat([out, cat(skip)], dim=1)
