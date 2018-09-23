@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 from torch import nn
+from torch.nn.utils import spectral_norm
 from torch.autograd import Variable
 
 
@@ -31,8 +32,13 @@ def _run_mine():
     from matplotlib import pyplot as plt
     import time
     
+    # opt
+    use_spectral_norm = False
+    weight_decay = 0.01
+    
+    # net
     n_hidden = 400
-    n_iter = 4000
+    n_iter = 10000
     
     # Data parameters.
     N = 10000
@@ -60,17 +66,19 @@ def _run_mine():
     mi_real = 0.5*np.log(sx*sz/s)
     
     # Mutual information estimator.
+    def _n(layer):
+        if use_spectral_norm:
+            return spectral_norm(layer)
+        return layer
     class mi_estimation_network(nn.Module):
         def __init__(self, n_hidden):
             super(mi_estimation_network, self).__init__()
             self.n_hidden = n_hidden
             modules = []
-            modules.append(nn.Linear(size*2, self.n_hidden))
-            #modules.append(nn.SpectralNorm())
+            modules.append(_n(nn.Linear(size*2, self.n_hidden)))
             modules.append(nn.ReLU())
             for i in range(0):
-                modules.append(nn.Linear(self.n_hidden, self.n_hidden))
-                #modules.append(nn.SpectralNorm())
+                modules.append(_n(nn.Linear(self.n_hidden, self.n_hidden)))
                 modules.append(nn.ReLU())
             modules.append(nn.Linear(self.n_hidden, 1))
             self.model = nn.Sequential(*tuple(modules))
@@ -86,7 +94,7 @@ def _run_mine():
     optimizer = torch.optim.Adam(params=model.parameters(),
                                  lr=0.001,
                                  eps=1e-7,
-                                 weight_decay=0.01,
+                                 weight_decay=weight_decay,
                                  amsgrad=True)
     model.cuda()
     model.train()
