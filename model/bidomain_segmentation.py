@@ -256,7 +256,7 @@ class segmentation_model(nn.Module):
         # Classifier.
         loss_class_est = 0
         probabilities = defaultdict(int)
-        if self.lambda_class and self.classifier is not None:
+        if self.estimator['class'] is not None:
             def classify(x):
                 logit = self.estimator['class'](x.view(batch_size, -1))
                 return torch.sigmoid(logit)
@@ -347,9 +347,15 @@ class segmentation_model(nn.Module):
             loss_rec['zu_BA'] = self.lambda_z_id*dist(s_BA['unique'],
                                                       z_BA['unique'])
         
+        ##### Partial reconstruction loss.
+        ####loss_prec = defaultdict(int)
+        ####if self.lambda_prec:
+            #####loss_prec['crA'] = self.lambda_prec*dist(x_crA, x_A)
+            ####loss_prec['uA']  = self.lambda_prec*dist(x_uA, x_A)
+        
         # Latent factor classifier loss for generator.
         loss_class_gen = 0
-        if self.lambda_class and self.classifier is not None:
+        if self.lambda_class and self.estimator['class'] is not None:
             def classify(x):
                 logit = self.estimator['class'](x.view(batch_size, -1))
                 return torch.sigmoid(logit)
