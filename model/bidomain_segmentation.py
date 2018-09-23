@@ -59,9 +59,9 @@ class gradient_reflow(nn.Module):
 class segmentation_model(nn.Module):
     def __init__(self, encoder, decoder, disc_A, disc_B, mutual_information,
                  shape_common, shape_unique, classifier=None, loss_rec=mae,
-                 lambda_disc=1, lambda_x_id=10, lambda_z_id=1, lambda_const=1,
-                 lambda_cyc=0, lambda_mi=1, lambda_seg=1, lambda_class=1,
-                 rng=None, debug_no_constant=False):
+                 loss_seg=None, lambda_disc=1, lambda_x_id=10, lambda_z_id=1,
+                 lambda_const=1, lambda_cyc=0, lambda_mi=1, lambda_seg=1,
+                 lambda_class=1, rng=None, debug_no_constant=False):
         super(segmentation_model, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.encoder          = encoder
@@ -69,6 +69,7 @@ class segmentation_model(nn.Module):
         self.disc = {'A' :        disc_A,
                      'B' :        disc_B}   # (separate params)
         self.loss_rec           = loss_rec
+        self.loss_seg           = loss_seg if loss_seg else dice_loss()
         self.shape_common       = shape_common
         self.shape_unique       = shape_unique
         self.lambda_disc        = lambda_disc
@@ -81,6 +82,8 @@ class segmentation_model(nn.Module):
         self.lambda_class       = lambda_class
         self.debug_no_constant  = debug_no_constant
         self.is_cuda            = False
+        self._shape = {'common': shape_common,
+                       'unique': shape_unique}
         
         # Set up mutual information estimator and a classifier.
         self.estimator = {'mi':    mine(mutual_information, rng=self.rng),
@@ -92,17 +95,17 @@ class segmentation_model(nn.Module):
                                                channels_b=self.shape_unique[0],
                                                rng=self.rng)
     
-    def _z_constant(self, batch_size):
-        ret = Variable(torch.zeros((batch_size,)+self.shape_unique,
+    def _z_constant(self, batch_size, name='unique'):
+        ret = Variable(torch.zeros((batch_size,)+self._shape[name],
                                    dtype=torch.float32))
         if self.is_cuda:
             ret = ret.cuda()
         return ret
     
-    def _z_sample(self, batch_size, rng=None):
+    def _z_sample(self, batch_size, name='unique', rng=None):
         if rng is None:
             rng = self.rng
-        sample = rng.randn(batch_size, *self.shape_unique).astype(np.float32)
+        sample = rng.randn(batch_size, *self._shape[name]).astype(np.float32)
         ret = Variable(torch.from_numpy(sample))
         if self.is_cuda:
             ret = ret.cuda()
@@ -144,8 +147,8 @@ class segmentation_model(nn.Module):
              'unique'  : z_u}
         return z, z_c, z_u, skip_info
         
-    def decode(self, common, unique, skip_info):
-        out = self.decoder(common, unique, skip_info)
+    def decode(self, common, unique, skip_info, out_idx=0):
+        out = self.decoder(common, unique, skip_info, transform_index=out_idx)
         return out
     
     def translate_AB(self, x_A, rng=None):
@@ -168,10 +171,10 @@ class segmentation_model(nn.Module):
     
     def segment(self, x_A):
         batch_size = len(x_A)
-        s_A, _, _ = self.encode(x_A)
-        z_AM = {'common'  : self._z_constant(batch_size),
+        s_A, _, skip_A = self.encode(x_A)
+        z_AM = {'common'  : self._z_constant(batch_size, 'common'),
                 'unique'  : s_A['unique']}
-        x_AM = self.decode(**z_AM)
+        x_AM = self.decode(**z_AM, skip_info=skip_A, out_idx=1)
         return x_AM
     
     def evaluate(self, x_A, x_B, mask=None, mask_indices=None,
@@ -247,9 +250,10 @@ class segmentation_model(nn.Module):
             if mask_indices is None:
                 mask_indices = list(range(len(mask)))
             num_masks = len(mask_indices)
-            z_AM = {'common'  : self._z_constant(num_masks),
+            z_AM = {'common'  : self._z_constant(num_masks, 'common'),
                     'unique'  : s_A['unique'][mask_indices]}
-            x_AM = self.decode(**z_AM)
+            skip_A_filtered = [s[mask_indices] for s in skip_A]
+            x_AM = self.decode(**z_AM, skip_info=skip_A_filtered, out_idx=1)
         
         # Estimator losses
         #
@@ -434,6 +438,7 @@ class segmentation_model(nn.Module):
             ('l_cyc_ABA',   _reduce([loss_cyc['ABA']])),
             ('l_cyc_BAB',   _reduce([loss_cyc['BAB']])),
             ('l_cyc',       _reduce([loss_cyc['ABA']+loss_cyc['BAB']])),
+            ('l_seg',       _reduce([loss_seg])),
             ('l_mi_A',      loss_mi_est['A']),
             ('l_mi_BA',     loss_mi_est['BA']),
             ('l_mi',        loss_mi_est['A']+loss_mi_est['BA']),
