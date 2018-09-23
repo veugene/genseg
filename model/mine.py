@@ -23,8 +23,11 @@ class mine(nn.Module):
             z_marginal = z[permutation]
         joint = self.estimation_network(x, z)
         marginal = self.estimation_network(x, z_marginal)
-        lower_bound = (  torch.mean(joint)
-                       - torch.log(torch.mean(torch.exp(marginal))))
+        assert np.product(joint.size())==len(joint)
+        assert np.product(marginal.size())==len(marginal)
+        lower_bound = ( torch.mean(joint)
+                       -torch.log(torch.sum(torch.exp(marginal)))
+                       +np.log(marginal.size(0)))
         return -lower_bound
 
 
