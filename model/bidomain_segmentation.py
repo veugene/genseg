@@ -58,10 +58,11 @@ class gradient_reflow(nn.Module):
 
 class segmentation_model(nn.Module):
     def __init__(self, encoder, decoder, disc_A, disc_B, mutual_information,
-                 shape_common, shape_unique, classifier=None, loss_rec=mae,
-                 loss_seg=None, lambda_disc=1, lambda_x_id=10, lambda_z_id=1,
-                 lambda_const=1, lambda_cyc=0, lambda_mi=1, lambda_seg=1,
-                 lambda_class=1, rng=None, debug_no_constant=False):
+                 shape_common, shape_unique, classifier=None,
+                 class_grad_reflow=False, loss_rec=mae, loss_seg=None,
+                 lambda_disc=1, lambda_x_id=10, lambda_z_id=1, lambda_const=1,
+                 lambda_cyc=0, lambda_mi=1, lambda_seg=1, lambda_class=1,
+                 rng=None, debug_no_constant=False):
         super(segmentation_model, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.encoder          = encoder
@@ -72,6 +73,7 @@ class segmentation_model(nn.Module):
         self.loss_seg           = loss_seg if loss_seg else dice_loss()
         self.shape_common       = shape_common
         self.shape_unique       = shape_unique
+        self.class_grad_reflow  = class_grad_reflow
         self.lambda_disc        = lambda_disc
         self.lambda_x_id        = lambda_x_id
         self.lambda_z_id        = lambda_z_id
@@ -351,22 +353,21 @@ class segmentation_model(nn.Module):
             loss_rec['zu_BA'] = self.lambda_z_id*dist(s_BA['unique'],
                                                       z_BA['unique'])
         
-        ##### Partial reconstruction loss.
-        ####loss_prec = defaultdict(int)
-        ####if self.lambda_prec:
-            #####loss_prec['crA'] = self.lambda_prec*dist(x_crA, x_A)
-            ####loss_prec['uA']  = self.lambda_prec*dist(x_uA, x_A)
-        
         # Latent factor classifier loss for generator.
         loss_class_gen = 0
         if self.lambda_class and self.estimator['class'] is not None:
             def classify(x):
                 logit = self.estimator['class'](x.view(batch_size, -1))
                 return torch.sigmoid(logit)
-            c_A_reflow = self.gradient_reflow(c_A, u_A)
-            c_B_reflow = self.gradient_reflow(c_B, u_B)
-            loss_class_gen = ( bce(classify(c_A_reflow), 0.5)
-                              +bce(classify(c_B_reflow), 0.5))
+            if self.class_grad_reflow:
+                # Features removed in 'c' pushed into 'u'.
+                c_A_ = self.gradient_reflow(c_A, u_A)
+                c_B_ = self.gradient_reflow(c_B, u_B)
+            else:
+                c_A_ = c_A
+                c_B_ = c_A
+            loss_class_gen = ( bce(classify(c_A_), 0.5)
+                              +bce(classify(c_B_), 0.5))
             loss_class_gen = self.lambda_class*loss_class_gen
         
         # Constant 'unique' representation for B -- loss.
