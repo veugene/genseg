@@ -64,12 +64,13 @@ class gradient_reflow(nn.Module):
 
 
 class segmentation_model(nn.Module):
-    def __init__(self, encoder, decoder, disc_A, disc_B, mutual_information,
-                 shape_common, shape_unique, classifier=None,
+    def __init__(self, encoder, decoder, disc_A, disc_B, shape_common,
+                 shape_unique, mutual_information=None, classifier=None,
                  class_grad_reflow=False, loss_rec=mae, loss_seg=None,
                  lambda_disc=1, lambda_x_id=10, lambda_z_id=1, lambda_const=1,
                  lambda_cyc=0, lambda_mi=1, lambda_seg=1, lambda_class=1,
-                 rng=None, debug_no_constant=False, debug_scaling=False):
+                 rng=None, debug_no_constant=False, debug_scaling=False,
+                 debug_vis_udecode=False):
         super(segmentation_model, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.encoder          = encoder
@@ -91,6 +92,7 @@ class segmentation_model(nn.Module):
         self.lambda_class       = lambda_class
         self.debug_no_constant  = debug_no_constant
         self.debug_scaling      = debug_scaling
+        self.debug_vis_udecode  = debug_vis_udecode
         self.is_cuda            = False
         self._shape = {'common': shape_common,
                        'unique': shape_unique}
@@ -286,6 +288,15 @@ class segmentation_model(nn.Module):
             skip_A_filtered = [s[mask_indices] for s in skip_A]
             x_AM = self.decode(**z_AM, skip_info=skip_A_filtered, out_idx=1)
         
+        # Debug decode of u alone (non-seg output).
+        x_AU = None
+        if self.debug_vis_udecode:
+            z_AU = {'common'  : self._z_constant(batch_size, 'common'),
+                    'unique'  : s_A['unique'],
+                    'scale'   : 'unique'}
+            with torch.no_grad():
+                x_AU = self.decode(**z_AU, skip_info=skip_A)
+        
         # Estimator losses
         #
         # Classifier.
@@ -476,6 +487,7 @@ class segmentation_model(nn.Module):
             ('out_ABA',     x_ABA),
             ('out_BAB',     x_BAB),
             ('out_seg',     x_AM),
+            ('out_u_dec',   x_AU),
             ('mask',        mask),
             ('prob_A',      _reduce([probabilities['A']])),
             ('prob_B',      _reduce([1-probabilities['B']]))))
