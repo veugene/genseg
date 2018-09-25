@@ -69,8 +69,7 @@ class segmentation_model(nn.Module):
                  class_grad_reflow=False, loss_rec=mae, loss_seg=None,
                  lambda_disc=1, lambda_x_id=10, lambda_z_id=1, lambda_const=1,
                  lambda_cyc=0, lambda_mi=1, lambda_seg=1, lambda_class=1,
-                 rng=None, debug_no_constant=False, debug_scaling=False,
-                 debug_vis_udecode=False):
+                 rng=None, debug_no_constant=False, debug_scaling=False):
         super(segmentation_model, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.encoder          = encoder
@@ -92,7 +91,6 @@ class segmentation_model(nn.Module):
         self.lambda_class       = lambda_class
         self.debug_no_constant  = debug_no_constant
         self.debug_scaling      = debug_scaling
-        self.debug_vis_udecode  = debug_vis_udecode
         self.is_cuda            = False
         self._shape = {'common': shape_common,
                        'unique': shape_unique}
@@ -255,11 +253,6 @@ class segmentation_model(nn.Module):
             x_AB = self.decode(**z_AB, skip_info=skip_A)
             x_BA = self.decode(**z_BA, skip_info=skip_B)
         
-        # Reconstruct latent codes.
-        if self.lambda_z_id or self.lambda_cyc:
-            s_AB, a_AB, b_AB, skip_AB = self.encode(x_AB)
-            s_BA, a_BA, b_BA, skip_BA = self.encode(x_BA)
-        
         # Cycle.
         x_ABA = x_BAB = None
         if self.lambda_cyc:
@@ -286,12 +279,17 @@ class segmentation_model(nn.Module):
         
         # Debug decode of u alone (non-seg output).
         x_AU = None
-        if self.debug_vis_udecode:
+        if self.lambda_disc or self.lambda_z_id:
             z_AU = {'common'  : self._z_constant(batch_size, 'common'),
                     'unique'  : s_A['unique'],
                     'scale'   : 'unique'}
-            with torch.no_grad():
-                x_AU = self.decode(**z_AU, skip_info=skip_A)
+            x_AU = self.decode(**z_AU, skip_info=skip_A)
+        
+        # Reconstruct latent codes.
+        if self.lambda_z_id or self.lambda_cyc:
+            s_AB, a_AB, b_AB, skip_AB = self.encode(x_AB)
+            s_BA, a_BA, b_BA, skip_BA = self.encode(x_BA)
+            s_AU, a_AU, b_AU, skip_AU = self.encode(x_AU)
         
         # Estimator losses
         #
@@ -391,6 +389,10 @@ class segmentation_model(nn.Module):
                                                       z_BA['common'])
             loss_rec['zu_BA'] = self.lambda_z_id*dist(s_BA['unique'],
                                                       z_BA['unique'])
+            loss_rec['zc_AU'] = self.lambda_z_id*dist(s_AU['common'],
+                                                      z_AU['common'])
+            loss_rec['zu_AU'] = self.lambda_z_id*dist(s_AU['unique'],
+                                                      z_AU['unique'])
         
         # Latent factor classifier loss for generator.
         loss_class_gen = 0
@@ -466,10 +468,16 @@ class segmentation_model(nn.Module):
             ('l_rec_zu_BA', _reduce([loss_rec['zu_BA']])),
             ('l_rec_z_BA',  _reduce(_cat([loss_rec['zc_BA'],
                                           loss_rec['zu_BA']], dim=1))),
+            ('l_rec_zc_AU', _reduce([loss_rec['zc_AU']])),
+            ('l_rec_zu_AU', _reduce([loss_rec['zu_AU']])),
+            ('l_rec_z_AU',  _reduce(_cat([loss_rec['zc_AU'],
+                                          loss_rec['zu_AU']], dim=1))),
             ('l_rec_z',     _reduce([ _cat([loss_rec['zc_AB'],
                                             loss_rec['zu_AB']], dim=1)
                                      +_cat([loss_rec['zc_BA'],
-                                            loss_rec['zu_BA']], dim=1)])),
+                                            loss_rec['zu_BA']], dim=1)
+                                     +_cat([loss_rec['zc_AU'],
+                                            loss_rec['zu_AU']], dim=1)])),
             ('l_class',     _reduce([loss_class_gen])),
             ('l_const_B',   _reduce([loss_const_B])),
             ('l_cyc_ABA',   _reduce([loss_cyc['ABA']])),
