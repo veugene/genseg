@@ -425,12 +425,14 @@ class decoder(nn.Module):
         '''
         Final output - change number of channels.
         '''
+        self.out_nlin = nn.ModuleList()
         self.out_norm = nn.ModuleList()
         self.out_conv = nn.ModuleList()
         for _ in self.output_transform:
             if normalization is not None:
                 out_norm = normalization(num_features=last_channels,
                                          **self.norm_kwargs)
+            out_nlin = get_nonlinearity(self.nonlinearity)
             out_conv = convolution(in_channels=last_channels,
                                    out_channels=self.output_shape[0],
                                    kernel_size=7,
@@ -439,6 +441,7 @@ class decoder(nn.Module):
                                    padding_mode=self.padding_mode,
                                    init=self.init)
             self.out_norm.append(out_norm)
+            self.out_nlin.append(out_nlin)
             self.out_conv.append(out_conv)
         
     def forward(self, x, skip_info=None, transform_index=0):
@@ -473,6 +476,7 @@ class decoder(nn.Module):
                 else:
                     raise ValueError("Skip merge mode unrecognized \'{}\'."
                                      "".format(self.long_skip_merge_mode))
+        
         out = self.out_norm[transform_index](out)
         out = self.out_conv[transform_index](out)
         out_func = self.output_transform[transform_index]
