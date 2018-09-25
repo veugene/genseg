@@ -69,7 +69,7 @@ class segmentation_model(nn.Module):
                  class_grad_reflow=False, loss_rec=mae, loss_seg=None,
                  lambda_disc=1, lambda_x_id=10, lambda_z_id=1, lambda_const=1,
                  lambda_cyc=0, lambda_mi=1, lambda_seg=1, lambda_class=1,
-                 rng=None, debug_no_constant=False):
+                 rng=None, debug_no_constant=False, debug_scaling=False):
         super(segmentation_model, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.encoder          = encoder
@@ -90,6 +90,7 @@ class segmentation_model(nn.Module):
         self.lambda_seg         = lambda_seg
         self.lambda_class       = lambda_class
         self.debug_no_constant  = debug_no_constant
+        self.debug_scaling      = debug_scaling
         self.is_cuda            = False
         self._shape = {'common': shape_common,
                        'unique': shape_unique}
@@ -156,7 +157,15 @@ class segmentation_model(nn.Module):
              'unique'  : z_u}
         return z, z_c, z_u, skip_info
         
-    def decode(self, common, unique, skip_info, out_idx=0):
+    def decode(self, common, unique, skip_info, scale=None, out_idx=0):
+        if self.debug_no_constant or not self.debug_scaling:
+            scale = None
+        if scale=='common':
+            s = (common.size(1)+unique.size(1))/float(max(common.size(1), 1.))
+            common = common*s
+        if scale=='unique':
+            s = (common.size(1)+unique.size(1))/float(max(unique.size(1), 1.))
+            unique = unique*s
         out = self.decoder(common, unique, skip_info, transform_index=out_idx)
         return out
     
@@ -164,7 +173,8 @@ class segmentation_model(nn.Module):
         batch_size = len(x_A)
         s_A, _, _, skip_A = self.encode(x_A)
         z_AB = {'common'  : s_A['common'],
-                'unique'  : self._z_constant(batch_size)}
+                'unique'  : self._z_constant(batch_size),
+                'scale'   : 'common'}
         if self.debug_no_constant:
             z_AB['unique'] = self._z_sample(batch_size, rng=rng)
         x_AB = self.decode(**z_AB, skip_info=skip_A)
@@ -174,7 +184,8 @@ class segmentation_model(nn.Module):
         batch_size = len(x_B)
         s_B, _, _, skip_B = self.encode(x_B)
         z_BA = {'common'  : s_B['common'],
-                'unique'  : self._z_sample(batch_size, rng=rng)}
+                'unique'  : self._z_sample(batch_size, rng=rng),
+                'scale'   : None}
         x_BA = self.decode(**z_BA, skip_info=skip_B)
         return x_BA
     
@@ -182,7 +193,8 @@ class segmentation_model(nn.Module):
         batch_size = len(x_A)
         s_A, _, skip_A = self.encode(x_A)
         z_AM = {'common'  : self._z_constant(batch_size, 'common'),
-                'unique'  : s_A['unique']}
+                'unique'  : s_A['unique'],
+                'scale'   : 'unique'}
         x_AM = self.decode(**z_AM, skip_info=skip_A, out_idx=1)
         return x_AM
     
@@ -221,9 +233,11 @@ class segmentation_model(nn.Module):
         x_AA = x_BB = None
         if self.lambda_x_id:
             z_AA = {'common'  : s_A['common'],
-                    'unique'  : s_A['unique']}
+                    'unique'  : s_A['unique'],
+                    'scale'   : None}
             z_BB = {'common'  : s_B['common'],
-                    'unique'  : self._z_constant(batch_size)}
+                    'unique'  : self._z_constant(batch_size),
+                    'scale'   : 'common'}
             if self.debug_no_constant:
                 z_BB['unique'] = s_B['unique']
             x_AA = self.decode(**z_AA, skip_info=skip_A)
@@ -233,11 +247,13 @@ class segmentation_model(nn.Module):
         x_AB = x_BA = None
         if self.lambda_disc or self.lambda_z_id:
             z_AB = {'common'  : s_A['common'],
-                    'unique'  : self._z_constant(batch_size)}
+                    'unique'  : self._z_constant(batch_size),
+                    'scale'   : 'common'}
             if self.debug_no_constant:
                 z_AB['unique'] = self._z_sample(batch_size, rng=rng)
             z_BA = {'common'  : s_B['common'],
-                    'unique'  : self._z_sample(batch_size, rng=rng)}
+                    'unique'  : self._z_sample(batch_size, rng=rng),
+                    'scale'   : None}
             x_AB = self.decode(**z_AB, skip_info=skip_A)
             x_BA = self.decode(**z_BA, skip_info=skip_B)
         
@@ -250,9 +266,11 @@ class segmentation_model(nn.Module):
         x_ABA = x_BAB = None
         if self.lambda_cyc:
             z_ABA = {'common'  : s_AB['common'],
-                     'unique'  : s_A['unique']}
+                     'unique'  : s_A['unique'],
+                     'scale'   : None}
             z_BAB = {'common'  : s_BA['common'],
-                     'unique'  : s_B['unique']}
+                     'unique'  : s_B['unique'],
+                     'scale'   : None}
             x_ABA = self.decode(**z_ABA, skip_info=skip_AB)
             x_BAB = self.decode(**z_BAB, skip_info=skip_BA)
         
@@ -263,7 +281,8 @@ class segmentation_model(nn.Module):
                 mask_indices = list(range(len(mask)))
             num_masks = len(mask_indices)
             z_AM = {'common'  : self._z_constant(num_masks, 'common'),
-                    'unique'  : s_A['unique'][mask_indices]}
+                    'unique'  : s_A['unique'][mask_indices],
+                    'scale'   : 'unique'}
             skip_A_filtered = [s[mask_indices] for s in skip_A]
             x_AM = self.decode(**z_AM, skip_info=skip_A_filtered, out_idx=1)
         
