@@ -22,6 +22,13 @@ def _reduce(loss):
     return sum([_mean(v) for v in loss])
 
 
+def _cat(x, dim):
+    _x = [t for t in x if isinstance(t, torch.Tensor)]
+    if len(_x):
+        return torch.cat(_x, dim=dim)
+    return 0
+
+
 class _gradient_reflow_function(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input_a, input_b, projection_ab):
@@ -200,6 +207,7 @@ class segmentation_model(nn.Module):
         
         # Encode inputs.
         s_A, c_A, u_A, skip_A = self.encode(x_A)
+        only_seg = True
         if (   self.lambda_disc
             or self.lambda_x_id
             or self.lambda_z_id
@@ -207,8 +215,10 @@ class segmentation_model(nn.Module):
             or self.lambda_cyc
             or self.lambda_mi):
                 s_B, c_B, u_B, skip_B = self.encode(x_B)
+                only_seg = False
         
         # Reconstruct inputs.
+        x_AA = x_BB = None
         if self.lambda_x_id:
             z_AA = {'common'  : s_A['common'],
                     'unique'  : s_A['unique']}
@@ -262,7 +272,7 @@ class segmentation_model(nn.Module):
         # Classifier.
         loss_class_est = 0
         probabilities = defaultdict(int)
-        if self.estimator['class'] is not None:
+        if self.estimator['class'] is not None and not only_seg:
             def classify(x):
                 logit = self.estimator['class'](x.view(batch_size, -1))
                 return torch.sigmoid(logit)
@@ -355,7 +365,8 @@ class segmentation_model(nn.Module):
         
         # Latent factor classifier loss for generator.
         loss_class_gen = 0
-        if self.lambda_class and self.estimator['class'] is not None:
+        if self.lambda_class and self.estimator['class'] is not None \
+                             and not only_seg:
             def classify(x):
                 logit = self.estimator['class'](x.view(batch_size, -1))
                 return torch.sigmoid(logit)
@@ -403,15 +414,11 @@ class segmentation_model(nn.Module):
                   +_reduce([loss_seg]))
         
         # Compute generator gradients.
-        if optimizer is not None:
+        if optimizer is not None and isinstance(loss_G, torch.Tensor):
             loss_G.mean().backward()
             optimizer['G'].step()
         
         # Compile outputs and return.
-        loss_DA = _reduce([loss_disc['A']])
-        loss_DB = _reduce([loss_disc['B']])
-        loss_D_mean = loss_disc['A'].mean()+loss_disc['B'].mean()
-        loss_D_ = _reduce([loss_disc['B']+loss_disc['B']])
         outputs = OrderedDict((
             ('l_G',         loss_G),
             ('l_D',         loss_D),
@@ -424,16 +431,16 @@ class segmentation_model(nn.Module):
             ('l_rec',       _reduce([loss_rec['AA']+loss_rec['BB']])),
             ('l_rec_zc_AB', _reduce([loss_rec['zc_AB']])),
             ('l_rec_zu_AB', _reduce([loss_rec['zu_AB']])),
-            ('l_rec_z_AB',  _reduce(torch.cat([loss_rec['zc_AB'],
-                                               loss_rec['zu_AB']], dim=1))),
+            ('l_rec_z_AB',  _reduce(_cat([loss_rec['zc_AB'],
+                                          loss_rec['zu_AB']], dim=1))),
             ('l_rec_zc_BA', _reduce([loss_rec['zc_BA']])),
             ('l_rec_zu_BA', _reduce([loss_rec['zu_BA']])),
-            ('l_rec_z_BA',  _reduce(torch.cat([loss_rec['zc_BA'],
-                                               loss_rec['zu_BA']], dim=1))),
-            ('l_rec_z',     _reduce([ torch.cat([loss_rec['zc_AB'],
-                                                 loss_rec['zu_AB']], dim=1)
-                                     +torch.cat([loss_rec['zc_BA'],
-                                                 loss_rec['zu_BA']], dim=1)])),
+            ('l_rec_z_BA',  _reduce(_cat([loss_rec['zc_BA'],
+                                          loss_rec['zu_BA']], dim=1))),
+            ('l_rec_z',     _reduce([ _cat([loss_rec['zc_AB'],
+                                            loss_rec['zu_AB']], dim=1)
+                                     +_cat([loss_rec['zc_BA'],
+                                            loss_rec['zu_BA']], dim=1)])),
             ('l_class',     _reduce([loss_class_gen])),
             ('l_const_B',   _reduce([loss_const_B])),
             ('l_cyc_ABA',   _reduce([loss_cyc['ABA']])),
