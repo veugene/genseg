@@ -98,7 +98,10 @@ class segmentation_model(nn.Module):
                        'unique': shape_unique}
         
         # Set up mutual information estimator and a classifier.
-        self.estimator = {'mi':    mine(mutual_information, rng=self.rng),
+        mi_estimator = None
+        if mutual_information is not None:
+            mi_estimator = mine(mutual_information, rng=self.rng)
+        self.estimator = {'mi':    mi_estimator,
                           'class': classifier}  # (separate params)
         
         # Random inverse gradient projection from common to sampled features,
@@ -108,8 +111,11 @@ class segmentation_model(nn.Module):
                                                rng=self.rng)
     
     def _z_constant(self, batch_size, name='unique'):
-        ret = Variable(torch.zeros((batch_size,)+self._shape[name],
-                                   dtype=torch.float32))
+        if 0 in self._shape[name]:
+            ret = Variable(torch.Tensor([]))
+        else:
+            ret = Variable(torch.zeros((batch_size,)+self._shape[name],
+                                        dtype=torch.float32))
         if self.is_cuda:
             ret = ret.cuda()
         return ret
@@ -123,35 +129,29 @@ class segmentation_model(nn.Module):
             ret = ret.cuda()
         return ret
     
+    def _call_on_all_models(self, fname, *args, **kwargs):
+        for key in self.estimator:
+            if self.estimator[key] is None: continue
+            self.estimator[key] = getattr(self.estimator[key],
+                                          fname)(*args, **kwargs)
+        for key in self.disc:
+            if self.disc[key] is None: continue
+            self.disc[key] = getattr(self.disc[key], fname)(*args, **kwargs)
+        getattr(super(segmentation_model, self), fname)(*args, **kwargs)
+    
     def cuda(self, *args, **kwargs):
         self.is_cuda = True
-        self.estimator['mi'] = self.estimator['mi'].cuda()
-        self.estimator['class'] = self.estimator['class'].cuda()
-        self.disc['A'] = self.disc['A'].cuda()
-        self.disc['B'] = self.disc['B'].cuda()
-        super(segmentation_model, self).cuda(*args, **kwargs)
+        self._call_on_all_models('cuda', *args, **kwargs)
         
     def cpu(self, *args, **kwargs):
         self.is_cuda = False
-        self.estimator['mi'] = self.estimator['mi'].cpu()
-        self.estimator['class'] = self.estimator['class'].cpu()
-        self.disc['A'] = self.disc['A'].cpu()
-        self.disc['B'] = self.disc['B'].cpu()
-        super(segmentation_model, self).cpu(*args, **kwargs)
+        self._call_on_all_models('cpu', *args, **kwargs)
     
     def train(self, mode=True):
-        self.estimator['mi'].train(mode)
-        self.estimator['class'].train(mode)
-        self.disc['A'].train(mode)
-        self.disc['B'].train(mode)
-        super(segmentation_model, self).train(mode)
+        self._call_on_all_models('train', mode=mode)
     
     def eval(self):
-        self.estimator['mi'].eval()
-        self.estimator['class'].eval()
-        self.disc['A'].eval()
-        self.disc['B'].eval()
-        super(segmentation_model, self).eval()
+        self._call_on_all_models('eval')
         
     def encode(self, x):
         z_c, z_u, skip_info = self.encoder(x)
@@ -204,12 +204,8 @@ class segmentation_model(nn.Module):
                  optimizer=None, **kwargs):
         compute_grad = True if optimizer is not None else False
         if compute_grad:
-            assert 'G' in optimizer
-            assert 'D' in optimizer
-            assert 'E' in optimizer
-            optimizer['G'].zero_grad()
-            optimizer['D'].zero_grad()
-            optimizer['E'].zero_grad()
+            for key in optimizer:
+                optimizer[key].zero_grad()
         with torch.set_grad_enabled(compute_grad):
             return self._evaluate(x_A, x_B, mask, mask_indices,
                                   optimizer=optimizer, **kwargs)
@@ -314,14 +310,17 @@ class segmentation_model(nn.Module):
                 loss_class_est.mean().backward()
         # Mutual information.
         loss_mi_est = defaultdict(int)
-        loss_mi_est['A']  = self.estimator['mi'](c_A.detach(), u_A.detach())
-        if self.lambda_z_id or self.lambda_cyc:
-            loss_mi_est['BA'] = self.estimator['mi'](a_BA.detach(), b_BA.detach())
-        if optimizer is not None:
-            loss_mi_est['A'].mean().backward()
+        if self.estimator['mi'] is not None:
+            loss_mi_est['A']  = self.estimator['mi'](c_A.detach(),
+                                                     u_A.detach())
             if self.lambda_z_id or self.lambda_cyc:
-                loss_mi_est['BA'].mean().backward()        
-            optimizer['E'].step()
+                loss_mi_est['BA'] = self.estimator['mi'](a_BA.detach(),
+                                                         b_BA.detach())
+            if optimizer is not None:
+                loss_mi_est['A'].mean().backward()
+                if self.lambda_z_id or self.lambda_cyc:
+                    loss_mi_est['BA'].mean().backward()        
+                optimizer['E'].step()
         
         # Discriminator losses.
         def mse_(prediction, target):
@@ -425,7 +424,7 @@ class segmentation_model(nn.Module):
         
         # Mutual information loss for generator.
         loss_mi_gen = defaultdict(int)
-        if self.lambda_mi:
+        if self.lambda_mi and self.estimator['mi'] is not None:
             loss_mi_gen['A']  = -self.lambda_mi*self.estimator['mi'](c_A,u_A)
             loss_mi_gen['BA'] = -self.lambda_mi*self.estimator['mi'](a_BA,b_BA)
         
