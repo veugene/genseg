@@ -69,7 +69,6 @@ def get_parser():
     parser.add_argument('--size_clutter', type=int, default=10)
     parser.add_argument('--size_output', type=int, default=100)
     parser.add_argument('--background_noise', type=float, default=0.01)
-    parser.add_argument('--pregenerate_training_set', action='store_true')
     parser.add_argument('--n_valid', type=int, default=500)
     parser.add_argument('--n_vis', type=int, default=20)
     parser.add_argument('--cpu', default=False, action='store_true')
