@@ -191,7 +191,7 @@ class segmentation_model(nn.Module):
     
     def segment(self, x_A):
         batch_size = len(x_A)
-        s_A, _, skip_A = self.encode(x_A)
+        s_A, _, _, skip_A = self.encode(x_A)
         z_AM = {'common'  : self._z_constant(batch_size, 'common'),
                 'unique'  : s_A['unique'],
                 'scale'   : 'unique'}
