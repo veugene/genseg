@@ -31,7 +31,8 @@ def _cat(x, dim):
 class segmentation_model(nn.Module):
     def __init__(self, encoder, decoder, disc_A, disc_B, shape_sample,
                  loss_rec=mae, loss_seg=None, lambda_disc=1, lambda_x_id=10,
-                 lambda_z_id=1, lambda_seg=1, lambda_cross=0, rng=None):
+                 lambda_z_id=1, lambda_seg=1, lambda_cross=0, lambda_cyc=0,
+                 rng=None):
         super(segmentation_model, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.encoder          = encoder
@@ -46,6 +47,7 @@ class segmentation_model(nn.Module):
         self.lambda_z_id        = lambda_z_id
         self.lambda_seg         = lambda_seg
         self.lambda_cross       = lambda_cross
+        self.lambda_cyc         = lambda_cyc
         self.is_cuda            = False
     
     def _z_constant(self, batch_size):
@@ -161,6 +163,13 @@ class segmentation_model(nn.Module):
             if self.lambda_cross:
                 s_cross, skip_cross = self.encoder(x_cross)
         
+        # Cycle.
+        x_cross_A = None
+        if self.lambda_cyc:
+            s_AB, skip_AB = self.encoder(x_AB)
+            x_cross_A_residual = self.decoder(s_cross, skip_info=skip_AB)
+            x_cross_A = x_AB + x_cross_A_residual   # plus
+        
         # Discriminator losses.
         def mse_(prediction, target):
             if not isinstance(prediction, torch.Tensor):
@@ -233,6 +242,11 @@ class segmentation_model(nn.Module):
             if self.lambda_cross:
                 loss_rec['z_cross'] = self.lambda_z_id*dist(s_cross, s_A)
         
+        # Cross cycle consistency loss.
+        loss_cyc = 0
+        if self.lambda_cyc:
+            loss_cyc = self.lambda_cyc*dist(x_cross_A, x_A)
+        
         # Segmentation loss.
         loss_seg = 0
         if self.lambda_seg and mask is not None and len(mask)>0:
@@ -250,26 +264,29 @@ class segmentation_model(nn.Module):
         
         # Compile outputs and return.
         outputs = OrderedDict((
-            ('l_G',           loss_G),
-            ('l_D',           loss_D),
-            ('l_DA',          _reduce([loss_disc['A']])),
-            ('l_DB',          _reduce([loss_disc['B']])),
-            ('l_gen_AB',      _reduce([loss_gen['AB']])),
-            ('l_gen_BA',      _reduce([loss_gen['BA']])),
-            ('l_gen_cross',   _reduce([loss_gen['cross']])),
-            ('l_rec',         _reduce([loss_rec['BB']])),
-            ('l_rec_z',       _reduce([_cat([loss_rec['z_BA'],
-                                             loss_rec['z_cross']], dim=1)])),
-            ('l_rec_z_BA',    _reduce([loss_rec['z_BA']])),
-            ('l_rec_z_cross', _reduce([loss_rec['z_cross']])),
-            ('l_seg',         _reduce([loss_seg])),
-            ('out_seg',       x_AM),
-            ('out_BB',        x_BB),
-            ('out_AB',        x_AB),
-            ('out_AB_res',    x_AB_residual),
-            ('out_BA',        x_BA),
-            ('out_BA_res',    x_BA_residual),
-            ('out_cross',     x_cross),
-            ('out_cross_res', x_cross_residual),
+            ('l_G',             loss_G),
+            ('l_D',             loss_D),
+            ('l_DA',            _reduce([loss_disc['A']])),
+            ('l_DB',            _reduce([loss_disc['B']])),
+            ('l_gen_AB',        _reduce([loss_gen['AB']])),
+            ('l_gen_BA',        _reduce([loss_gen['BA']])),
+            ('l_gen_cross',     _reduce([loss_gen['cross']])),
+            ('l_rec',           _reduce([loss_rec['BB']])),
+            ('l_rec_z',         _reduce([_cat([loss_rec['z_BA'],
+                                               loss_rec['z_cross']], dim=1)])),
+            ('l_rec_z_BA',      _reduce([loss_rec['z_BA']])),
+            ('l_rec_z_cross',   _reduce([loss_rec['z_cross']])),
+            ('l_cyc',           _reduce([loss_cyc])),
+            ('l_seg',           _reduce([loss_seg])),
+            ('out_seg',         x_AM),
+            ('out_BB',          x_BB),
+            ('out_AB',          x_AB),
+            ('out_AB_res',      x_AB_residual),
+            ('out_BA',          x_BA),
+            ('out_BA_res',      x_BA_residual),
+            ('out_cross',       x_cross),
+            ('out_cross_res',   x_cross_residual),
+            ('out_cross_A',     x_cross_A),
+            ('out_cross_A_res', x_cross_A_residual),
             ('mask',          mask)))
         return outputs
