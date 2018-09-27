@@ -102,9 +102,8 @@ if __name__ == '__main__':
     def preprocessor(warp=False):
         def f(batch):
             s, h, m, _ = zip(*batch[0])
-            i_range = 1.98
-            s = i_range*np.expand_dims(s, 1)-i_range/2.
-            h = i_range*np.expand_dims(h, 1)-i_range/2.
+            s = np.expand_dims(s, 1)
+            h = np.expand_dims(h, 1)
             m = [np.expand_dims(x, 0) if x is not None else None for x in m]
             if warp:
                 for i, (s_, h_, m_) in enumerate(zip(s, h, m)):
