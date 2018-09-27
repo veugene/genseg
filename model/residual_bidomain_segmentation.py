@@ -21,10 +21,17 @@ def _reduce(loss):
     return sum([_mean(v) for v in loss])
 
 
+def _cat(x, dim):
+    _x = [t for t in x if isinstance(t, torch.Tensor)]
+    if len(_x):
+        return torch.cat(_x, dim=dim)
+    return 0
+
+
 class segmentation_model(nn.Module):
     def __init__(self, encoder, decoder, disc_A, disc_B, shape_sample,
                  loss_rec=mae, loss_seg=None, lambda_disc=1, lambda_x_id=10,
-                 lambda_z_id=1, lambda_seg=1, lambda_class=1, rng=None):
+                 lambda_z_id=1, lambda_seg=1, lambda_cross=0, rng=None):
         super(segmentation_model, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.encoder          = encoder
@@ -38,6 +45,7 @@ class segmentation_model(nn.Module):
         self.lambda_x_id        = lambda_x_id
         self.lambda_z_id        = lambda_z_id
         self.lambda_seg         = lambda_seg
+        self.lambda_cross       = lambda_cross
         self.is_cuda            = False
     
     def _z_constant(self, batch_size):
@@ -129,8 +137,12 @@ class segmentation_model(nn.Module):
             z_BA = self._z_sample(batch_size, rng=rng)
             x_BA_residual = self.decoder(z_BA, skip_info=skip_B)
             x_AB_residual = self.decoder(s_A,  skip_info=skip_A)
-            x_BA = x_B + x_BA_residual    # plus
-            x_AB = x_A - x_AB_residual    # minus
+            x_BA = x_B + x_BA_residual      # plus
+            x_AB = x_A - x_AB_residual      # minus
+        x_cross = x_cross_residual = None
+        if self.lambda_disc and self.lambda_cross:
+            x_cross_residual = self.decoder(s_A, skip_info=skip_B)
+            x_cross = x_B + x_cross_residual  # plus
         
         # Segment.
         x_AM = None
@@ -146,6 +158,8 @@ class segmentation_model(nn.Module):
         # Reconstruct latent code.
         if self.lambda_z_id:
             s_BA, skip_BA = self.encoder(x_BA)
+            if self.lambda_cross:
+                s_cross, skip_cross = self.encoder(x_cross)
         
         # Discriminator losses.
         def mse_(prediction, target):
@@ -165,6 +179,10 @@ class segmentation_model(nn.Module):
             loss_disc_A_0 = mse_(disc_A_fake, 0)
             loss_disc_B_1 = mse_(disc_B_real, 1)
             loss_disc_B_0 = mse_(disc_B_fake, 0)
+            if self.lambda_cross:
+                loss_disc_cross = mse_(self.disc['A'](x_cross.detach()), 0)
+                loss_disc_A_0 = ( loss_disc_A_0
+                                 +loss_disc_cross*self.lambda_cross)
             if grad_penalty and optimizer is not None:
                 def _compute_grad_norm(disc_in, disc_out, disc):
                     ones = torch.ones_like(disc_out)
@@ -200,6 +218,10 @@ class segmentation_model(nn.Module):
         if self.lambda_disc:
             loss_gen['AB'] = self.lambda_disc*mse_(self.disc['B'](x_AB), 1)
             loss_gen['BA'] = self.lambda_disc*mse_(self.disc['A'](x_BA), 1)
+        if self.lambda_disc and self.lambda_cross:
+            loss_gen['cross'] = ( self.lambda_disc
+                                 *self.lambda_cross
+                                 *mse_(self.disc['A'](x_cross), 1))
         
         # Reconstruction loss.
         loss_rec = defaultdict(int)
@@ -207,7 +229,9 @@ class segmentation_model(nn.Module):
         if self.lambda_x_id:
             loss_rec['BB'] = self.lambda_x_id*dist(x_BB, x_B)
         if self.lambda_z_id:
-            loss_rec['z_BA'] = self.lambda_z_id*dist(s_BA, z_BA)
+            loss_rec['z_BA']    = self.lambda_z_id*dist(s_BA, z_BA)
+            if self.lambda_cross:
+                loss_rec['z_cross'] = self.lambda_z_id*dist(s_cross, s_A)
         
         # Segmentation loss.
         loss_seg = 0
@@ -226,20 +250,26 @@ class segmentation_model(nn.Module):
         
         # Compile outputs and return.
         outputs = OrderedDict((
-            ('l_G',         loss_G),
-            ('l_D',         loss_D),
-            ('l_DA',        _reduce([loss_disc['A']])),
-            ('l_DB',        _reduce([loss_disc['B']])),
-            ('l_gen_AB',    _reduce([loss_gen['AB']])),
-            ('l_gen_BA',    _reduce([loss_gen['BA']])),
-            ('l_rec',       _reduce([loss_rec['BB']])),
-            ('l_rec_z',     _reduce([loss_rec['z_BA']])),
-            ('l_seg',       _reduce([loss_seg])),
-            ('out_seg',     x_AM),
-            ('out_BB',      x_BB),
-            ('out_AB',      x_AB),
-            ('out_BA',      x_BA),
-            ('out_AB_res',  x_AB_residual),
-            ('out_BA_res',  x_BA_residual),
-            ('mask',        mask)))
+            ('l_G',           loss_G),
+            ('l_D',           loss_D),
+            ('l_DA',          _reduce([loss_disc['A']])),
+            ('l_DB',          _reduce([loss_disc['B']])),
+            ('l_gen_AB',      _reduce([loss_gen['AB']])),
+            ('l_gen_BA',      _reduce([loss_gen['BA']])),
+            ('l_gen_cross',   _reduce([loss_gen['cross']])),
+            ('l_rec',         _reduce([loss_rec['BB']])),
+            ('l_rec_z',       _reduce([_cat([loss_rec['z_BA'],
+                                             loss_rec['z_cross']], dim=1)])),
+            ('l_rec_z_BA',    _reduce([loss_rec['z_BA']])),
+            ('l_rec_z_cross', _reduce([loss_rec['z_cross']])),
+            ('l_seg',         _reduce([loss_seg])),
+            ('out_seg',       x_AM),
+            ('out_BB',        x_BB),
+            ('out_AB',        x_AB),
+            ('out_AB_res',    x_AB_residual),
+            ('out_BA',        x_BA),
+            ('out_BA_res',    x_BA_residual),
+            ('out_cross',     x_cross),
+            ('out_cross_res', x_cross_residual),
+            ('mask',          mask)))
         return outputs
