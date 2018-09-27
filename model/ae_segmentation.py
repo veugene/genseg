@@ -32,21 +32,27 @@ class segmentation_model(nn.Module):
         super(segmentation_model, self).cpu(*args, **kwargs)
     
     def segment(self, x):
-        return self.segmentation(self.encoder(x))
+        return self.segmentation(*self.encoder(x))
     
     def evaluate(self, x_A, x_B=None, mask=None, mask_indices=None,
-                 compute_grad=False):
+                 optimizer=None):
+        compute_grad = True if optimizer is not None else False
+        if compute_grad:
+            if isinstance(optimizer, dict):
+                assert len(optimizer)==1
+                optimizer = list(optimizer.values())[0]
+            optimizer.zero_grad()
         x = x_A
         if x_B is not None:
             x = torch.cat([x_A, x_B], dim=0)
         with torch.set_grad_enabled(compute_grad):
-            return self._evaluate(x, mask, mask_indices, compute_grad)
+            return self._evaluate(x, mask, mask_indices, optimizer=optimizer)
     
-    def _evaluate(self, x, mask=None, mask_indices=None, compute_grad=False):
+    def _evaluate(self, x, mask=None, mask_indices=None, optimizer=None):
         loss_rec = 0
         loss_seg = 0
         
-        code  = self.encoder(x)
+        code, skip = self.encoder(x)
         x_rec = None
         y     = None
         
@@ -65,14 +71,15 @@ class segmentation_model(nn.Module):
         if mask is not None and self.lambda_seg:
             if mask_indices is None:
                 mask_indices = list(range(len(mask)))
-            y = self.decoder_seg(code)
+            y = self.decoder_seg(code, skip)
             loss_seg = _mean(self.loss_seg(y[mask_indices], mask))
         
         # Loss. Compute gradients, if requested.
         loss = ( self.lambda_rec*loss_rec
                 +self.lambda_seg*loss_seg)
-        if compute_grad:
+        if optimizer is not None:
             loss.mean().backward()
+            optimizer.step()
         
         # Compile outputs and return.
         outputs = OrderedDict((
