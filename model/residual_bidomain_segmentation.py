@@ -164,7 +164,7 @@ class segmentation_model(nn.Module):
                 s_cross, skip_cross = self.encoder(x_cross)
         
         # Cycle.
-        x_cross_A = None
+        x_cross_A = x_cross_A_residual = None
         if self.lambda_cyc:
             s_AB, skip_AB = self.encoder(x_AB)
             x_cross_A_residual = self.decoder(s_cross, skip_info=skip_AB)
