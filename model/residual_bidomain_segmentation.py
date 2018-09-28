@@ -32,7 +32,7 @@ class segmentation_model(nn.Module):
     def __init__(self, encoder, decoder, disc_A, disc_B, shape_sample,
                  loss_rec=mae, loss_seg=None, lambda_disc=1, lambda_x_id=10,
                  lambda_z_id=1, lambda_seg=1, lambda_cross=0, lambda_cyc=0,
-                 rng=None):
+                 sample_image_space=False, rng=None):
         super(segmentation_model, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.encoder          = encoder
@@ -48,6 +48,7 @@ class segmentation_model(nn.Module):
         self.lambda_seg         = lambda_seg
         self.lambda_cross       = lambda_cross
         self.lambda_cyc         = lambda_cyc
+        self.sample_image_space = sample_image_space
         self.is_cuda            = False
     
     def _z_constant(self, batch_size):
@@ -137,6 +138,9 @@ class segmentation_model(nn.Module):
         x_AB = x_BA = x_AB_residual = x_BA_residual = None
         if self.lambda_disc or self.lambda_z_id:
             z_BA = self._z_sample(batch_size, rng=rng)
+            if self.sample_image_space:
+                with torch.no_grad():
+                    z_BA, _ = self.encoder(z_BA)
             x_BA_residual = self.decoder(z_BA, skip_info=skip_B)
             x_AB_residual = self.decoder(s_A,  skip_info=skip_A)
             x_BA = x_B + x_BA_residual      # plus
