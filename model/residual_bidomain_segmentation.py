@@ -6,6 +6,7 @@ from torch import nn
 from torch.autograd import Variable
 from fcn_maker.loss import dice_loss
 from .common import (dist_ratio_mse_abs,
+                     grad_norm,
                      bce,
                      mae,
                      mse)
@@ -282,6 +283,9 @@ class segmentation_model(nn.Module):
             ('l_rec_z_cross',   _reduce([loss_rec['z_cross']])),
             ('l_cyc',           _reduce([loss_cyc])),
             ('l_seg',           _reduce([loss_seg])),
+            ('l_gradnorm_G',    grad_norm(self)),
+            ('l_gradnorm_D',    sum([grad_norm(self.disc[k])
+                                     for k in self.disc.keys()])),
             ('out_seg',         x_AM),
             ('out_BB',          x_BB),
             ('out_AB',          x_AB),

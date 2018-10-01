@@ -627,6 +627,17 @@ def mae(prediction, target, reduce=False):
     if reduce:
         loss = torch.mean(loss)
     return loss
+
+
+def grad_norm(module, trainable_only=True):
+    """
+    Count the number of parameters in a module.
+    """
+    parameters = module.parameters()
+    if trainable_only:
+        parameters = filter(lambda p: p.requires_grad, parameters)
+    norm = sum([torch.norm(p.grad) for p in parameters])
+    return norm
     
     
 if __name__=='__main__':
