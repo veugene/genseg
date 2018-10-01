@@ -47,6 +47,7 @@ class experiment(object):
             model, optimizer = self._init_state(model_from=args.model_from,
                                      optimizer_name=args.optimizer,
                                      learning_rate=args.learning_rate,
+                                     opt_kwargs=args.opt_kwargs,
                                      weight_decay=args.weight_decay)
         else:
             self.experiment_path = args.resume_from
@@ -167,7 +168,7 @@ class experiment(object):
         return model, optimizer
     
     def _init_state(self, model_from, optimizer_name,
-                    learning_rate=0., weight_decay=0.):
+                    learning_rate=0., opt_kwargs=None, weight_decay=0.):
         '''
         Initialize the model, its state, and the optimizer's state.
 
@@ -192,27 +193,34 @@ class experiment(object):
         # Setup the optimizer.
         optimizer = {}
         for key in model.keys():
+            lr = learning_rate
+            if isinstance(lr, dict):
+                lr = lr[key]
             optimizer[key] = self._get_optimizer(
                                             name=optimizer_name,
                                             params=model[key].parameters(),
-                                            lr=learning_rate,
+                                            lr=lr,
                                             weight_decay=weight_decay)
         
         return model, optimizer
 
-    def _get_optimizer(self, name, params, lr=0., weight_decay=0.,
-                      state_dict=None):
+    def _get_optimizer(self, name, params, lr=0., opt_kwargs=None, 
+                       weight_decay=0., state_dict=None):
         kwargs = {'params'       : [p for p in params if p.requires_grad],
                   'lr'           : lr,
                   'weight_decay' : weight_decay}
         optimizer = None
-        if name=='adam':
-            optimizer = torch.optim.Adam(betas=(0.5,0.999), **kwargs)
-        elif name=='amsgrad':
-            optimizer = torch.optim.Adam(betas=(0.5,0.999), amsgrad=True,
+        if name=='adam' or name=='amsgrad':
+            if opt_kwargs is None:
+                opt_kwargs = {'betas': (0.5, 0.999)}
+            kwargs.update(opt_kwargs)
+            optimizer = torch.optim.Adam(amsgrad=bool(name=='amsgrad'),
                                          **kwargs)
         elif name=='rmsprop':
-            optimizer = torch.optim.RMSprop(alpha=0.5, **kwargs)
+            if opt_kwargs is None:
+                opt_kwargs = {'alpha': 0.5}
+            kwargs.update(opt_kwargs)
+            optimizer = torch.optim.RMSprop(**kwargs)
         elif name=='sgd':
             optimizer = torch.optim.SGD(**kwargs)
         else:

@@ -9,6 +9,7 @@ import argparse
 import warnings
 
 import numpy as np
+import json
 import torch
 from torch.autograd import Variable
 import ignite
@@ -60,7 +61,8 @@ def get_parser():
                              "Otherwise, `epoch_length` batches are "
                              "generated online per epoch.")
     parser.add_argument('--epochs', type=int, default=200)
-    parser.add_argument('--learning_rate', type=float, default=0.001)
+    parser.add_argument('--learning_rate', type=json.loads, default=0.001)
+    parser.add_argument('--opt_kwargs', type=json.loads, default=None)
     parser.add_argument('--optimizer', type=str, default='amsgrad',
                         choices=['adam', 'amsgrad', 'rmsprop', 'sgd'])
     parser.add_argument('--grad_penalty', type=float, default=None)
