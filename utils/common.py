@@ -39,18 +39,17 @@ class experiment(object):
         args = parser.parse_args()
         self._epoch = [0]
         if args.resume_from is None:
-            experiment_path, experiment_id = self._setup_experiment_directory(
-                name="{}__{}".format(name, args.name),
-                save_path=args.save_path)
-            self.experiment_path = experiment_path
-            self.experiment_id = experiment_id
             model, optimizer = self._init_state(model_from=args.model_from,
                                      optimizer_name=args.optimizer,
                                      learning_rate=args.learning_rate,
                                      opt_kwargs=args.opt_kwargs,
                                      weight_decay=args.weight_decay)
+            experiment_path, experiment_id = self._setup_experiment_directory(
+                name="{}__{}".format(name, args.name),
+                save_path=args.save_path)
+            self.experiment_path = experiment_path
+            self.experiment_id = experiment_id
         else:
-            self.experiment_path = args.resume_from
             args = self._load_and_merge_args(parser)
             state_file = natsorted([fn for fn in os.listdir(args.resume_from)
                                     if fn.startswith('state_dict_')
@@ -59,6 +58,7 @@ class experiment(object):
             print("Resuming from {}.".format(state_from))
             model, optimizer = self._load_state(load_from=state_from,
                                      optimizer_name=args.optimizer)
+            self.experiment_path = args.resume_from
         self.args = args
         self.model = model
         self.optimizer = optimizer
@@ -262,6 +262,8 @@ class experiment(object):
             os.makedirs(path)
         with open(os.path.join(path, "args.txt"), 'w') as f:
             f.write('\n'.join(sys.argv))
+        with open(os.path.join(path, "config.py"), 'w') as f:
+            f.write(self.model_as_str)
         return path, experiment_id
 
 
