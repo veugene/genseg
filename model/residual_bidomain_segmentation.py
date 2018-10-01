@@ -31,15 +31,19 @@ def _cat(x, dim):
 
 class segmentation_model(nn.Module):
     def __init__(self, encoder, decoder, disc_A, disc_B, shape_sample,
-                 loss_rec=mae, loss_seg=None, lambda_disc=1, lambda_x_id=10,
-                 lambda_z_id=1, lambda_seg=1, lambda_cross=0, lambda_cyc=0,
-                 sample_image_space=False, rng=None):
+                 disc_cross=None, loss_rec=mae, loss_seg=None, lambda_disc=1,
+                 lambda_x_id=10, lambda_z_id=1, lambda_seg=1, lambda_cross=0,
+                 lambda_cyc=0, lambda_sample=1, sample_image_space=False,
+                 sample_decoder=None,  hinge_loss=False, rng=None):
         super(segmentation_model, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.encoder          = encoder
         self.decoder          = decoder
+        if disc_cross is None:
+            disc_cross = disc_A
         self.disc = {'A'    :     disc_A,
-                     'B'    :     disc_B}   # separate params
+                     'B'    :     disc_B,
+                     'C'    :     disc_cross}   # separate params
         self.loss_rec           = loss_rec
         self.loss_seg           = loss_seg if loss_seg else dice_loss()
         self.shape_sample       = shape_sample
@@ -49,7 +53,10 @@ class segmentation_model(nn.Module):
         self.lambda_seg         = lambda_seg
         self.lambda_cross       = lambda_cross
         self.lambda_cyc         = lambda_cyc
+        self.lambda_sample      = lambda_sample
         self.sample_image_space = sample_image_space
+        self.sample_decoder     = sample_decoder
+        self.hinge_loss         = hinge_loss
         self.is_cuda            = False
     
     def _z_constant(self, batch_size):
@@ -69,8 +76,8 @@ class segmentation_model(nn.Module):
         return ret
     
     def _call_on_all_models(self, fname, *args, **kwargs):
-        self.disc['A'] = getattr(self.disc['A'], fname)(*args, **kwargs)
-        self.disc['B'] = getattr(self.disc['B'], fname)(*args, **kwargs)
+        for key in self.disc:
+            self.disc[key] = getattr(self.disc[key], fname)(*args, **kwargs)
         getattr(super(segmentation_model, self), fname)(*args, **kwargs)
     
     def cuda(self, *args, **kwargs):
@@ -130,18 +137,15 @@ class segmentation_model(nn.Module):
                 s_B, skip_B = self.encoder(x_B)
                 only_seg = False
         
-        # Reconstruct input.
-        x_BB = None
-        if self.lambda_x_id:
-            x_BB = x_B - self.decoder(s_B, skip_info=skip_B)    # minus
-        
         # Translate.
         x_AB = x_BA = x_AB_residual = x_BA_residual = None
         if self.lambda_disc or self.lambda_z_id:
-            z_BA = self._z_sample(batch_size, rng=rng)
+            z_BA_im = self._z_sample(batch_size, rng=rng)
             if self.sample_image_space:
-                with torch.no_grad():
-                    z_BA, _ = self.encoder(z_BA)
+                z_BA_im = self._z_sample(batch_size, rng=rng)
+                z_BA, _ = self.encoder(z_BA_im)
+            else:
+                z_BA    = z_BA_im
             x_BA_residual = self.decoder(z_BA, skip_info=skip_B)
             x_AB_residual = self.decoder(s_A,  skip_info=skip_A)
             x_BA = x_B + x_BA_residual      # plus
@@ -150,6 +154,13 @@ class segmentation_model(nn.Module):
         if self.lambda_disc and self.lambda_cross:
             x_cross_residual = self.decoder(s_A, skip_info=skip_B)
             x_cross = x_B + x_cross_residual  # plus
+                
+        # Reconstruct input.
+        x_BB = z_BA_im_rec = None
+        if self.lambda_x_id:
+            x_BB = x_B - self.decoder(s_B, skip_info=skip_B)    # minus
+        if self.sample_image_space and self.sample_decoder is not None:
+            z_BA_im_rec = self.sample_decoder(z_BA)
         
         # Segment.
         x_AM = None
@@ -176,10 +187,22 @@ class segmentation_model(nn.Module):
             x_cross_A = x_AB + x_cross_A_residual   # plus
         
         # Discriminator losses.
-        def mse_(prediction, target):
-            if not isinstance(prediction, torch.Tensor):
-                return sum([mse_(elem, target) for elem in prediction])
-            return _reduce([mse(prediction, target)])
+        def foreach(func, x):
+            if not isinstance(x, torch.Tensor):
+                return sum([foreach(func, elem) for elem in x])
+            return _reduce([func(x)])
+        def diff(a, b):
+            if isinstance(a, torch.Tensor):
+                return a-b
+            assert not isinstance(b, torch.Tensor)
+            assert len(a)==len(b)
+            return [_a-_b for _a, _b in zip(a, b)]
+        if self.hinge_loss:
+            def real(x): return nn.ReLU()(1.-x)
+            def fake(x): return nn.ReLU()(1.+x)
+        else:
+            def real(x): return mse(x, 1)
+            def fake(x): return mse(x, 0)
         loss_disc = defaultdict(int)
         if self.lambda_disc:
             if grad_penalty and optimizer is not None:
@@ -189,14 +212,15 @@ class segmentation_model(nn.Module):
             disc_A_fake = self.disc['A'](x_BA.detach())
             disc_B_real = self.disc['B'](x_B)
             disc_B_fake = self.disc['B'](x_AB.detach())
-            loss_disc_A_1 = mse_(disc_A_real, 1)
-            loss_disc_A_0 = mse_(disc_A_fake, 0)
-            loss_disc_B_1 = mse_(disc_B_real, 1)
-            loss_disc_B_0 = mse_(disc_B_fake, 0)
+            loss_disc_A_1 = foreach(real, diff(disc_A_real, disc_A_fake))
+            loss_disc_A_0 = foreach(fake, diff(disc_A_fake, disc_A_real))
+            loss_disc_B_1 = foreach(real, diff(disc_B_real, disc_B_fake))
+            loss_disc_B_0 = foreach(fake, diff(disc_B_fake, disc_B_real))
             if self.lambda_cross:
-                loss_disc_cross = mse_(self.disc['A'](x_cross.detach()), 0)
-                loss_disc_A_0 = ( loss_disc_A_0
-                                 +loss_disc_cross*self.lambda_cross)
+                disc_C_real = self.disc['C'](x_A)
+                disc_C_fake = self.disc['C'](x_cross.detach())
+                loss_disc_C_1 = foreach(real, diff(disc_C_real, disc_C_fake))
+                loss_disc_C_0 = foreach(fake, diff(disc_C_fake, disc_C_real))
             if grad_penalty and optimizer is not None:
                 def _compute_grad_norm(disc_in, disc_out, disc):
                     ones = torch.ones_like(disc_out)
@@ -215,9 +239,15 @@ class segmentation_model(nn.Module):
                                                  self.disc['B'])
                 loss_disc_A_1 += grad_penalty*grad_norm_A
                 loss_disc_B_1 += grad_penalty*grad_norm_B
+                if self.lambda_cross:
+                    grad_norm_C = _compute_grad_norm(x_A, disc_C_real,
+                                                     self.disc['C'])
+                    loss_disc_C_1 += grad_penalty*grad_norm_C
             loss_disc['A'] = self.lambda_disc*(loss_disc_A_0+loss_disc_A_1)
             loss_disc['B'] = self.lambda_disc*(loss_disc_B_0+loss_disc_B_1)
-        loss_D = _reduce([loss_disc['A']+loss_disc['B']])
+            loss_disc['C'] = self.lambda_disc*(loss_disc_C_0+loss_disc_C_1)\
+                            *self.lambda_cross
+        loss_D = _reduce([loss_disc['A']+loss_disc['B']+loss_disc['C']])
         if self.lambda_disc and optimizer is not None:
             loss_D.mean().backward()
             if disc_clip_norm:
@@ -225,17 +255,28 @@ class segmentation_model(nn.Module):
                                          max_norm=disc_clip_norm)
                 nn.utils.clip_grad_norm_(self.disc['B'].parameters(),
                                          max_norm=disc_clip_norm)
+                nn.utils.clip_grad_norm_(self.disc['C'].parameters(),
+                                         max_norm=disc_clip_norm)
             optimizer['D'].step()
         
         # Generator loss.
         loss_gen = defaultdict(int)
+        def detach(x):
+            if isinstance(x, torch.Tensor):
+                out = x.detach()
+            else:
+                out = [elem.detach() for elem in x]
+            return out
+        if self.hinge_loss:
+            def real(x): return -x
         if self.lambda_disc:
-            loss_gen['AB'] = self.lambda_disc*mse_(self.disc['B'](x_AB), 1)
-            loss_gen['BA'] = self.lambda_disc*mse_(self.disc['A'](x_BA), 1)
+            loss_gen['AB'] = self.lambda_disc*foreach(real,
+                            diff(self.disc['B'](x_AB), detach(disc_B_real)))
+            loss_gen['BA'] = self.lambda_disc*foreach(real,
+                            diff(self.disc['A'](x_BA), detach(disc_A_real)))
         if self.lambda_disc and self.lambda_cross:
-            loss_gen['cross'] = ( self.lambda_disc
-                                 *self.lambda_cross
-                                 *mse_(self.disc['A'](x_cross), 1))
+            loss_gen['C'] = (self.lambda_cross*foreach(real,
+                        diff(self.disc['C'](x_cross), detach(disc_C_real))))
         
         # Reconstruction loss.
         loss_rec = defaultdict(int)
@@ -246,6 +287,8 @@ class segmentation_model(nn.Module):
             loss_rec['z_BA']    = self.lambda_z_id*dist(s_BA, z_BA)
             if self.lambda_cross:
                 loss_rec['z_cross'] = self.lambda_z_id*dist(s_cross, s_A)
+        if self.lambda_sample:
+            loss_rec['sample'] = self.lambda_sample*dist(z_BA_im, z_BA_im_rec)
         
         # Cross cycle consistency loss.
         loss_cyc = 0
@@ -276,6 +319,7 @@ class segmentation_model(nn.Module):
             ('l_gen_AB',        _reduce([loss_gen['AB']])),
             ('l_gen_BA',        _reduce([loss_gen['BA']])),
             ('l_gen_cross',     _reduce([loss_gen['cross']])),
+            ('l_rec_sample',    _reduce([loss_rec['sample']])),
             ('l_rec',           _reduce([loss_rec['BB']])),
             ('l_rec_z',         _reduce([_cat([loss_rec['z_BA'],
                                                loss_rec['z_cross']], dim=1)])),
