@@ -6,6 +6,7 @@ from torch import nn
 from torch.autograd import Variable
 from fcn_maker.loss import dice_loss
 from .common import (dist_ratio_mse_abs,
+                     gan_objective,
                      grad_norm,
                      bce,
                      mae,
@@ -31,10 +32,12 @@ def _cat(x, dim):
 
 class segmentation_model(nn.Module):
     def __init__(self, encoder, decoder, disc_A, disc_B, shape_sample,
-                 disc_cross=None, loss_rec=mae, loss_seg=None, lambda_disc=1,
-                 lambda_x_id=10, lambda_z_id=1, lambda_seg=1, lambda_cross=0,
-                 lambda_cyc=0, lambda_sample=1, sample_image_space=False,
-                 sample_decoder=None,  hinge_loss=False, rng=None):
+                 disc_cross=None, loss_rec=mae, loss_seg=None,
+                 loss_gan='hinge', relativistic=False, grad_penalty=None,
+                 disc_clip_norm=None, lambda_disc=1, lambda_x_id=10,
+                 lambda_z_id=1, lambda_seg=1, lambda_cross=0, lambda_cyc=0,
+                 lambda_sample=1, sample_image_space=False,
+                 sample_decoder=None, rng=None):
         super(segmentation_model, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.encoder          = encoder
@@ -44,9 +47,13 @@ class segmentation_model(nn.Module):
         self.disc = {'A'    :     disc_A,
                      'B'    :     disc_B,
                      'C'    :     disc_cross}   # separate params
+        self.shape_sample       = shape_sample
         self.loss_rec           = loss_rec
         self.loss_seg           = loss_seg if loss_seg else dice_loss()
-        self.shape_sample       = shape_sample
+        self.loss_gan           = loss_gan
+        self.relativistic       = relativistic
+        self.grad_penalty       = grad_penalty
+        self.disc_clip_norm     = disc_clip_norm
         self.lambda_disc        = lambda_disc
         self.lambda_x_id        = lambda_x_id
         self.lambda_z_id        = lambda_z_id
@@ -56,8 +63,12 @@ class segmentation_model(nn.Module):
         self.lambda_sample      = lambda_sample
         self.sample_image_space = sample_image_space
         self.sample_decoder     = sample_decoder
-        self.hinge_loss         = hinge_loss
         self.is_cuda            = False
+        self._gan               = gan_objective(loss_gan,
+                                                relativistic=relativistic,
+                                                grad_penalty_real=grad_penalty,
+                                                grad_penalty_fake=None,
+                                                grad_penalty_mean=0)
     
     def _z_constant(self, batch_size):
         ret = Variable(torch.zeros((batch_size,)+self.shape_sample,
@@ -123,7 +134,7 @@ class segmentation_model(nn.Module):
                                   optimizer=optimizer, **kwargs)
     
     def _evaluate(self, x_A, x_B, mask=None, mask_indices=None, rng=None,
-                  grad_penalty=None, disc_clip_norm=None, optimizer=None):
+                  optimizer=None):
         assert len(x_A)==len(x_B)
         batch_size = len(x_A)
         
@@ -187,96 +198,46 @@ class segmentation_model(nn.Module):
             x_cross_A = x_AB + x_cross_A_residual   # plus
         
         # Discriminator losses.
-        def foreach(func, x):
-            if not isinstance(x, torch.Tensor):
-                return sum([foreach(func, elem) for elem in x])
-            return _reduce([func(x)])
-        def diff(a, b):
-            if isinstance(a, torch.Tensor):
-                return a-b
-            assert not isinstance(b, torch.Tensor)
-            assert len(a)==len(b)
-            return [_a-_b for _a, _b in zip(a, b)]
-        if self.hinge_loss:
-            def real(x): return nn.ReLU()(1.-x)
-            def fake(x): return nn.ReLU()(1.+x)
-        else:
-            def real(x): return mse(x, 1)
-            def fake(x): return mse(x, 0)
         loss_disc = defaultdict(int)
+        gradnorm_D = 0
         if self.lambda_disc:
-            if grad_penalty and optimizer is not None:
-                x_A.requires_grad = True
-                x_B.requires_grad = True
-            disc_A_real = self.disc['A'](x_A)
-            disc_A_fake = self.disc['A'](x_BA.detach())
-            disc_B_real = self.disc['B'](x_B)
-            disc_B_fake = self.disc['B'](x_AB.detach())
-            loss_disc_A_1 = foreach(real, diff(disc_A_real, disc_A_fake))
-            loss_disc_A_0 = foreach(fake, diff(disc_A_fake, disc_A_real))
-            loss_disc_B_1 = foreach(real, diff(disc_B_real, disc_B_fake))
-            loss_disc_B_0 = foreach(fake, diff(disc_B_fake, disc_B_real))
+            loss_disc_A = self._gan.D(self.disc['A'],
+                                      fake=x_BA.detach(), real=x_A)
+            loss_disc_B = self._gan.D(self.disc['B'],
+                                      fake=x_AB.detach(), real=x_B)
+            loss_disc['A'] = self.lambda_disc*loss_disc_A
+            loss_disc['B'] = self.lambda_disc*loss_disc_B
             if self.lambda_cross:
-                disc_C_real = self.disc['C'](x_A)
-                disc_C_fake = self.disc['C'](x_cross.detach())
-                loss_disc_C_1 = foreach(real, diff(disc_C_real, disc_C_fake))
-                loss_disc_C_0 = foreach(fake, diff(disc_C_fake, disc_C_real))
-            if grad_penalty and optimizer is not None:
-                def _compute_grad_norm(disc_in, disc_out, disc):
-                    ones = torch.ones_like(disc_out)
-                    if disc_in.is_cuda:
-                        ones = ones.cuda()
-                    grad = torch.autograd.grad(disc_out.sum(),
-                                               disc_in,
-                                               retain_graph=True,
-                                               create_graph=True,
-                                               only_inputs=True)[0]
-                    grad_norm = (grad.view(grad.size()[0],-1)**2).sum(-1)
-                    return torch.mean(grad_norm)
-                grad_norm_A = _compute_grad_norm(x_A, disc_A_real,
-                                                 self.disc['A'])
-                grad_norm_B = _compute_grad_norm(x_B, disc_B_real,
-                                                 self.disc['B'])
-                loss_disc_A_1 += grad_penalty*grad_norm_A
-                loss_disc_B_1 += grad_penalty*grad_norm_B
-                if self.lambda_cross:
-                    grad_norm_C = _compute_grad_norm(x_A, disc_C_real,
-                                                     self.disc['C'])
-                    loss_disc_C_1 += grad_penalty*grad_norm_C
-            loss_disc['A'] = self.lambda_disc*(loss_disc_A_0+loss_disc_A_1)
-            loss_disc['B'] = self.lambda_disc*(loss_disc_B_0+loss_disc_B_1)
-            loss_disc['C'] = self.lambda_disc*(loss_disc_C_0+loss_disc_C_1)\
-                            *self.lambda_cross
+                loss_disc_C = self._gan.D(self.disc['C'],
+                                          fake=x_cross.detach(), real=x_A)
+                loss_disc['C'] = ( self.lambda_disc*self.lambda_cross
+                                  *loss_disc_C)
         loss_D = _reduce([loss_disc['A']+loss_disc['B']+loss_disc['C']])
         if self.lambda_disc and optimizer is not None:
             loss_D.mean().backward()
-            if disc_clip_norm:
+            if self.disc_clip_norm:
                 nn.utils.clip_grad_norm_(self.disc['A'].parameters(),
-                                         max_norm=disc_clip_norm)
+                                         max_norm=self.disc_clip_norm)
                 nn.utils.clip_grad_norm_(self.disc['B'].parameters(),
-                                         max_norm=disc_clip_norm)
+                                         max_norm=self.disc_clip_norm)
                 nn.utils.clip_grad_norm_(self.disc['C'].parameters(),
-                                         max_norm=disc_clip_norm)
+                                         max_norm=self.disc_clip_norm)
             optimizer['D'].step()
+            gradnorm_D = sum([grad_norm(self.disc[k])
+                              for k in self.disc.keys()
+                              if self.disc[k] is not None])
         
         # Generator loss.
         loss_gen = defaultdict(int)
-        def detach(x):
-            if isinstance(x, torch.Tensor):
-                out = x.detach()
-            else:
-                out = [elem.detach() for elem in x]
-            return out
-        if self.hinge_loss:
-            def real(x): return -x
         if self.lambda_disc:
-            loss_gen['AB'] = self.lambda_disc*foreach(real,
-                            diff(self.disc['B'](x_AB), detach(disc_B_real)))
-            loss_gen['BA'] = self.lambda_disc*foreach(real,
-                            diff(self.disc['A'](x_BA), detach(disc_A_real)))
+            loss_gen['AB'] = self.lambda_disc*self._gan.G(self.disc['B'],
+                                                          fake=x_AB, real=x_B)
+            loss_gen['BA'] = self.lambda_disc*self._gan.G(self.disc['A'],
+                                                          fake=x_BA, real=x_A)
         if self.lambda_disc and self.lambda_cross:
-            loss_gen['C'] = (self.lambda_cross*foreach(real,
-                        diff(self.disc['C'](x_cross), detach(disc_C_real))))
+            loss_gen['C'] = ( self.lambda_disc*self.lambda_cross
+                             *self._gan.G(self.disc['C'],
+                                          fake=x_cross, real=x_A))
         
         # Reconstruction loss.
         loss_rec = defaultdict(int)
@@ -284,7 +245,7 @@ class segmentation_model(nn.Module):
         if self.lambda_x_id:
             loss_rec['BB'] = self.lambda_x_id*dist(x_BB, x_B)
         if self.lambda_z_id:
-            loss_rec['z_BA']    = self.lambda_z_id*dist(s_BA, z_BA)
+            loss_rec['z_BA'] = self.lambda_z_id*dist(s_BA, z_BA)
             if self.lambda_cross:
                 loss_rec['z_cross'] = self.lambda_z_id*dist(s_cross, s_A)
         if self.lambda_sample:
@@ -306,9 +267,11 @@ class segmentation_model(nn.Module):
                   +_reduce([loss_seg]))
         
         # Compute generator gradients.
+        gradnorm_G = 0
         if optimizer is not None and isinstance(loss_G, torch.Tensor):
             loss_G.mean().backward()
             optimizer['G'].step()
+            gradnorm_G = grad_norm(self)
         
         # Compile outputs and return.
         outputs = OrderedDict((
@@ -327,9 +290,8 @@ class segmentation_model(nn.Module):
             ('l_rec_z_cross',   _reduce([loss_rec['z_cross']])),
             ('l_cyc',           _reduce([loss_cyc])),
             ('l_seg',           _reduce([loss_seg])),
-            ('l_gradnorm_G',    grad_norm(self)),
-            ('l_gradnorm_D',    sum([grad_norm(self.disc[k])
-                                     for k in self.disc.keys()])),
+            ('l_gradnorm_G',    gradnorm_G),
+            ('l_gradnorm_D',    gradnorm_D),
             ('out_seg',         x_AM),
             ('out_BB',          x_BB),
             ('out_AB',          x_AB),

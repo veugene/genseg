@@ -65,8 +65,6 @@ def get_parser():
     parser.add_argument('--opt_kwargs', type=json.loads, default=None)
     parser.add_argument('--optimizer', type=str, default='amsgrad',
                         choices=['adam', 'amsgrad', 'rmsprop', 'sgd'])
-    parser.add_argument('--grad_penalty', type=float, default=None)
-    parser.add_argument('--disc_clip_norm', type=float, default=None)
     parser.add_argument('--n_clutter', type=int, default=8)
     parser.add_argument('--size_clutter', type=int, default=10)
     parser.add_argument('--size_output', type=int, default=100)
@@ -179,14 +177,11 @@ if __name__ == '__main__':
         return detached
     
     # Training loop.
-    eval_kwargs = {'grad_penalty'  : args.grad_penalty,
-                   'disc_clip_norm': args.disc_clip_norm}
     def training_function(engine, batch):
         for model in experiment_state.model.values():
             model.train()
         A, B, M, indices = prepare_batch(batch)
         outputs = experiment_state.model['G'].evaluate(A, B, M, indices,
-                                                       **eval_kwargs,
                                          optimizer=experiment_state.optimizer)
         outputs = detach(outputs)
         return outputs
