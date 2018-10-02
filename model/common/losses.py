@@ -70,25 +70,27 @@ class gan_objective(object):
         return loss_real+loss_fake
     
     def _D(self, x, disc, objective, grad_penalty_weight):
-        if grad_penalty_weight is None:
-            return self._foreach(objective, disc(x))
-        # Gradient penalty for each item in disc output.
-        x.requires_grad = True
-        def objective_gp(disc_out):
-            grad = torch.autograd.grad(disc_out.sum(),
+        if grad_penalty_weight is not None:
+            x.requires_grad = True
+        disc_out = disc(x)
+        loss = self._foreach(objective, disc_out)
+        if grad_penalty_weight is not None:
+            Gradient penalty for each item in disc output.
+            if isinstance(disc_out, torch.Tensor):
+                disc_out = [disc_out]
+            disc_out = sum([o.sum() for o in disc_out])
+            grad = torch.autograd.grad(disc_out,
                                        x,
                                        retain_graph=True,
                                        create_graph=True,
                                        only_inputs=True)[0]
             norm2 = (grad.view(grad.size()[0],-1)**2).sum(-1)
-            norm2 = torch.mean(norm2)
             if self.grad_penalty_mean:
                 penalty = (torch.sqrt(norm2)-self.grad_penalty_mean)**2
             else:
                 penalty = norm2
-            loss = objective(x)+grad_penalty_weight*penalty
-            return loss
-        return self._foreach(objective_gp, disc(x))
+            loss = loss+grad_penalty_weight*torch.mean(penalty)
+        return loss
     
     def _foreach(self, func, x):
         # If x is a list, process every element (and reduce to batch dim).
