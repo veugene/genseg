@@ -5,12 +5,12 @@ import torch
 from torch import nn
 from torch.autograd import Variable
 from fcn_maker.loss import dice_loss
-from .common import (dist_ratio_mse_abs,
-                     gan_objective,
-                     grad_norm,
-                     bce,
-                     mae,
-                     mse)
+from .common import grad_norm
+from .loss import (bce,
+                   dist_ratio_mse_abs,
+                   gan_objective,
+                   mae,
+                   mse)
 
 
 def _reduce(loss):
