@@ -584,4 +584,12 @@ class image_logger(Metric):
         self._epoch += 1
         
         return final_image
-    
+
+
+def grad_norm(module):
+    """
+    Count the number of parameters in a module.
+    """
+    parameters = filter(lambda p: p.grad is not None, module.parameters())
+    norm = sum([torch.norm(p.grad) for p in parameters])
+    return norm

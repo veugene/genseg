@@ -5,7 +5,7 @@ import torch
 from torch import nn
 from torch.autograd import Variable
 from fcn_maker.loss import dice_loss
-from .common.common import grad_norm
+from ..utils.common import grad_norm
 from .common.loss import (bce,
                           dist_ratio_mse_abs,
                           gan_objective,
