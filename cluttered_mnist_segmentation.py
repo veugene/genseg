@@ -20,16 +20,16 @@ from ignite.handlers import ModelCheckpoint
 from data_tools.io import data_flow
 from data_tools.data_augmentation import image_random_transform
 
-from utils.common import (experiment,
-                          image_logger,
-                          scoring_function,
-                          summary_tracker)
+from utils.experiment import experiment
+from utils.trackers import(image_logger,
+                           scoring_function,
+                           summary_tracker)
 from utils.metrics import (batchwise_loss_accumulator,
                            dice_loss)
-from utils.data import (setup_mnist_data,
-                        mnist_data_train,
-                        mnist_data_valid,
-                        mnist_data_test)
+from utils.data.cluttered_mnist import (setup_mnist_data,
+                                        mnist_data_train,
+                                        mnist_data_valid,
+                                        mnist_data_test)
 from model import configs
 from model.bidomain_segmentation import segmentation_model as model_gan
 from model.ae_segmentation import segmentation_model as model_ae

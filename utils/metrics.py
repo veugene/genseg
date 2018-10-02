@@ -1,5 +1,3 @@
-from __future__ import (print_function,
-                        division)
 import torch
 from ignite.engine import Events
 from ignite.metrics import Metric
