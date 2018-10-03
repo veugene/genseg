@@ -55,7 +55,9 @@ class gan_objective(object):
             self._D0 = lambda x : nn.ReLU()(1.+x)
             self._G  = lambda x : -x
         elif objective=='wasserstein':
-            raise NotImplementedError("objective=wasserstein")
+            self._D1 = lambda x : -x
+            self._D0 = lambda x : x
+            self._G  = lambda x : -x
         else:
             raise ValueError("Unknown objective: {}".format(objective))
     
