@@ -581,7 +581,7 @@ class conv_block(block_abstract):
                                 padding_mode=padding_mode)]
         if dropout > 0:
             self.op += [get_dropout(dropout, nonlin=nonlinearity)]
-        self._register_modules(self.op)
+        self.op = nn.ModuleList(self.op)
         self.op_shortcut = None
         if skip:
             self.op_shortcut = shortcut(in_channels=in_channels,
@@ -591,7 +591,6 @@ class conv_block(block_abstract):
                                         upsample_mode=upsample_mode,
                                         init=init,
                                         ndim=ndim)
-            self._register_modules({'shortcut': self.op_shortcut})
 
     def forward(self, input):
         out = input
