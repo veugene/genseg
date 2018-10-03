@@ -39,8 +39,6 @@ class gan_objective(object):
         # wasserstein
         self.objective = objective
         self.relativistic = relativistic
-        if relativistic:
-            raise NotImplementedError("relativistic=True")
         self.grad_penalty_real = grad_penalty_real
         self.grad_penalty_fake = grad_penalty_fake
         self.grad_penalty_mean = grad_penalty_mean
@@ -62,20 +60,29 @@ class gan_objective(object):
             raise ValueError("Unknown objective: {}".format(objective))
     
     def G(self, disc, fake, real=None):
+        if self.relativistic:
+            return self._foreach(lambda x: self._G(x[0]-x[1]),
+                                 [disc(fake), disc(real)])
         return self._foreach(self._G, disc(fake))
     
     def D(self, disc, fake, real):
-        loss_real = self._D(real, disc, self._D1, self.grad_penalty_real)
-        loss_fake = self._D(fake, disc, self._D0, self.grad_penalty_fake)
+        if self.relativistic:
+            loss_real = self._D_relativistic(real, fake, disc, self._D1,
+                                             self.grad_penalty_real,
+                                             self.grad_penalty_fake)
+            loss_fake = self._D_relativistic(fake, real, disc, self._D0,
+                                             self.grad_penalty_fake,
+                                             self.grad_penalty_real)
+        else:
+            loss_real = self._D(real, disc, self._D1, self.grad_penalty_real)
+            loss_fake = self._D(fake, disc, self._D0, self.grad_penalty_fake)
         return loss_real+loss_fake
     
-    def _D(self, x, disc, objective, grad_penalty_weight):
-        if grad_penalty_weight is not None:
-            x.requires_grad = True
+    def _D(self, x, disc, objective, grad_penalty):
+        x.requires_grad = True
         disc_out = disc(x)
         loss = self._foreach(objective, disc_out)
-        if grad_penalty_weight is not None:
-            Gradient penalty for each item in disc output.
+        if grad_penalty is not None:
             if isinstance(disc_out, torch.Tensor):
                 disc_out = [disc_out]
             disc_out = sum([o.sum() for o in disc_out])
@@ -89,7 +96,39 @@ class gan_objective(object):
                 penalty = (torch.sqrt(norm2)-self.grad_penalty_mean)**2
             else:
                 penalty = norm2
-            loss = loss+grad_penalty_weight*torch.mean(penalty)
+            loss = loss+grad_penalty*torch.mean(penalty)
+        return loss
+    
+    def _D_relativistic(self, a, b, disc, objective,
+                        grad_penalty_a, grad_penalty_b):
+        a.requires_grad = True
+        b.requires_grad = True
+        disc_a = disc(a)
+        disc_b = disc(b)
+        loss = self._foreach(lambda x: objective(x[0]-x[1]), [disc_a, disc_b])
+        if grad_penalty_a is not None or grad_penalty_b is not None:
+            if isinstance(disc_a, torch.Tensor):
+                disc_a = [disc_a]
+            if isinstance(disc_b, torch.Tensor):
+                disc_b = [disc_b]
+            disc_out = sum([o.sum() for o in disc_a+disc_b])
+            grad_a, grad_b = torch.autograd.grad(disc_out,
+                                                 (a, b),
+                                                 retain_graph=True,
+                                                 create_graph=True,
+                                                 only_inputs=True)
+            norm2_a = (grad_a.view(grad_a.size()[0],-1)**2).sum(-1)
+            norm2_b = (grad_b.view(grad_b.size()[0],-1)**2).sum(-1)
+            if self.grad_penalty_mean:
+                penalty_a = (torch.sqrt(norm2_a)-self.grad_penalty_mean)**2
+                penalty_b = (torch.sqrt(norm2_b)-self.grad_penalty_mean)**2
+            else:
+                penalty_a = norm2_a
+                penalty_b = norm2_b
+            if grad_penalty_a is not None:
+                loss = loss+grad_penalty_a*torch.mean(penalty_a)
+            if grad_penalty_b is not None:
+                loss = loss+grad_penalty_b*torch.mean(penalty_b)
         return loss
     
     def _foreach(self, func, x):
