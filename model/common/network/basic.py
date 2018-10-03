@@ -600,3 +600,12 @@ class conv_block(block_abstract):
         if self.skip:
             out = self.op_shortcut(input, out)
         return out
+
+
+def grad_norm(module):
+    """
+    Count the number of parameters in a module.
+    """
+    parameters = filter(lambda p: p.grad is not None, module.parameters())
+    norm = sum([torch.norm(p.grad) for p in parameters])
+    return norm
