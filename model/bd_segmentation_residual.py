@@ -34,8 +34,8 @@ class segmentation_model(nn.Module):
     """
     Interface wrapper around the `DataParallel` parts of the model.
     """
-    def __init__(self, encoder, decoder, segmenter, disc_A, disc_B,
-                 shape_sample, disc_cross=None, loss_rec=mae, loss_seg=None,
+    def __init__(self, encoder, decoder, disc_A, disc_B, shape_sample,
+                 disc_cross=None, loss_rec=mae, loss_seg=None,
                  loss_gan='hinge', num_disc_updates=1, relativistic=False,
                  grad_penalty=None, disc_clip_norm=None, lambda_disc=1,
                  lambda_x_id=10, lambda_z_id=1, lambda_seg=1, lambda_cross=0,
@@ -55,6 +55,9 @@ class segmentation_model(nn.Module):
             'rng'               : rng if rng else np.random.RandomState(),
             'encoder'           : encoder,
             'decoder'           : decoder,
+            'disc_A'            : disc_A,
+            'disc_B'            : disc_B,
+            'disc_C'            : disc_cross if disc_cross else disc_A,
             'shape_sample'      : shape_sample,
             'loss_rec'          : loss_rec,
             'loss_seg'          : loss_seg if loss_seg else dice_loss(),
@@ -71,49 +74,34 @@ class segmentation_model(nn.Module):
                                                 grad_penalty_fake=None,
                                                 grad_penalty_mean=0)
             }
-        self.separate_networks = {
-            'segmenter'         : segmenter,
-            'disc_A'            : disc_A,
-            'disc_B'            : disc_B,
-            'disc_C'            : disc_cross if disc_cross else disc_A,
-            }
         kwargs.update(lambdas)
         for key, val in kwargs.items():
             setattr(self, key, val)
-        # Separate networks not stored directly as attributes.
-        # -> Separate parameters, separate optimizers.
-        kwargs.update(self.separate_networks)
         
         # Module to compute all network outputs (except discriminator) on GPU.
-        # Outputs are placed on CPU when there are multiple GPUs.
-        keys_forward = ['encoder', 'decoder', 'segmenter', 'shape_sample',
+        # Outputs are placed on CPU.
+        keys_forward = ['encoder', 'decoder', 'shape_sample',
                         'sample_image_space', 'sample_decoder', 'rng']
         kwargs_forward = dict([(key, val) for key, val in kwargs.items()
                                if key in keys_forward])
-        self._forward = _forward(**kwargs_forward, **lambdas)
-        if torch.cuda.device_count()>1:
-            print("DEBUG: DATA PARALLEL")
-            self._forward = nn.DataParallel(self._forward, output_device=-1)
+        self._forward = nn.DataParallel(_forward(**kwargs_forward, **lambdas),
+                                        output_device=-1)
         
         # Module to compute discriminator losses on GPU.
-        # Outputs are placed on CPU when there are multiple GPUs.
+        # Outputs are placed on CPU.
         keys_D = ['gan_objective', 'disc_A', 'disc_B', 'disc_C']
         kwargs_D = dict([(key, val) for key, val in kwargs.items()
                          if key in keys_D])
-        self._loss_D =_loss_D(**kwargs_D, **lambdas)
-        if torch.cuda.device_count()>1:
-            print("DEBUG: DATA PARALLEL")
-            self._loss_D = nn.DataParallel(self._loss_D, output_device=-1)
+        self._loss_D = nn.DataParallel(_loss_D(**kwargs_D, **lambdas),
+                                       output_device=-1)
         
         # Module to compute generator updates on GPU.
-        # Outputs are placed on CPU when there are multiple GPUs.
+        # Outputs are placed on CPU.
         keys_G = ['gan_objective', 'disc_A', 'disc_B', 'disc_C', 'loss_rec']
         kwargs_G = dict([(key, val) for key, val in kwargs.items()
                          if key in keys_G])
-        self._loss_G = _loss_G(**kwargs_G, **lambdas)
-        if torch.cuda.device_count()>1:
-            print("DEBUG: DATA PARALLEL")
-            self._loss_G = nn.DataParallel(self._loss_G, output_device=-1)
+        self._loss_G = nn.DataParallel(_loss_G(**kwargs_G, **lambdas),
+                                       output_device=-1)
         
     def forward(self, x_A, x_B, mask=None, optimizer=None, disc=None,
                 rng=None):
@@ -138,23 +126,20 @@ class segmentation_model(nn.Module):
                                              x_cross=visible['x_cross'])
                     loss_D = _reduce(sum(loss_disc.values()))
                 # Update discriminator.
-                disc_A = self.separate_networks['disc_A']
-                disc_B = self.separate_networks['disc_B']
-                disc_C = self.separate_networks['disc_C']
                 if do_updates_bool:
                     optimizer['D'].zero_grad()
                     loss_D.mean().backward()
                     if self.disc_clip_norm:
-                        nn.utils.clip_grad_norm_(disc_A.parameters(),
+                        nn.utils.clip_grad_norm_(self.disc_A.parameters(),
                                                  max_norm=self.disc_clip_norm)
-                        nn.utils.clip_grad_norm_(disc_B.parameters(),
+                        nn.utils.clip_grad_norm_(self.disc_B.parameters(),
                                                  max_norm=self.disc_clip_norm)
-                        nn.utils.clip_grad_norm_(disc_C.parameters(),
+                        nn.utils.clip_grad_norm_(self.disc_C.parameters(),
                                                  max_norm=self.disc_clip_norm)
                     optimizer['D'].step()
-                    gradnorm_D = grad_norm(disc_A)+grad_norm(disc_B)
-                    if disc_C is not None:
-                        gradnorm_D = gradnorm_D+grad_norm(disc_C)
+                    gradnorm_D = grad_norm(self.disc_A)+grad_norm(self.disc_B)
+                    if self.disc_C is not None:
+                        gradnorm_D = gradnorm_D+grad_norm(self.disc_C)
         
         # Evaluate generator losses.
         gradnorm_G = 0
@@ -193,14 +178,11 @@ class segmentation_model(nn.Module):
         
         # Include segmentation loss with generator losses and update.
         losses_G['l_seg'] = _reduce([loss_seg])
-        losses_G['l_G'] += losses_G['l_seg']
         loss_G = losses_G['l_G']
         if do_updates_bool and isinstance(loss_G, torch.Tensor):
             optimizer['G'].zero_grad()
-            optimizer['S'].zero_grad()
             loss_G.mean().backward()
             optimizer['G'].step()
-            optimizer['S'].step()
             gradnorm_G = grad_norm(self)
         
         # Compile ouputs.
@@ -218,7 +200,7 @@ class segmentation_model(nn.Module):
 
 
 class _forward(nn.Module):
-    def __init__(self, encoder, decoder, segmenter, shape_sample, lambda_disc=1,
+    def __init__(self, encoder, decoder, shape_sample, lambda_disc=1,
                  lambda_x_id=10, lambda_z_id=1, lambda_seg=1, lambda_cross=0,
                  lambda_cyc=0, lambda_sample=1, sample_image_space=False,
                  sample_decoder=None, rng=None):
@@ -226,7 +208,6 @@ class _forward(nn.Module):
         self.rng = rng if rng else np.random.RandomState()
         self.encoder            = encoder
         self.decoder            = decoder
-        self.segmenter          = [segmenter]   # Separate params.
         self.shape_sample       = shape_sample
         self.lambda_disc        = lambda_disc
         self.lambda_x_id        = lambda_x_id
@@ -250,92 +231,78 @@ class _forward(nn.Module):
         assert len(x_A)==len(x_B)
         batch_size = len(x_A)
         
+        # Aliases.
+        penc = self.preprocessor  if self.preprocessor  else lambda x:x
+        pdec = self.postprocessor if self.postprocessor else lambda x:x
+        x_A_ = penc(x_A)
+        x_B_ = penc(x_B)
+        
         # Encode inputs.
-        s_A, skip_A = self.encoder(x_A)
+        s_A, skip_A = self.encoder(x_A_)
+        only_seg = True
         if (   self.lambda_disc
             or self.lambda_x_id
             or self.lambda_z_id):
-                s_B, skip_B = self.encoder(x_B)
+                s_B, skip_B = self.encoder(x_B_)
+                only_seg = False
         
         # Translate.
         x_AB = x_BA = x_AB_residual = x_BA_residual = None
-        z_BA = z_BA_im = z_BA_im_rec = None
         if self.lambda_disc or self.lambda_z_id:
-            z_BA_im = self._z_sample(batch_size, rng=rng)
             if self.sample_image_space:
                 z_BA_im = self._z_sample(batch_size, rng=rng)
-                z_BA, _ = self.encoder(z_BA_im)
+                z_BA, _ = self.encoder(penc(z_BA_im))
             else:
-                z_BA    = z_BA_im
-            if z_BA.size(1)<s_B.size(1):
-                # When the sample at the bottleneck has fewer features (n) 
-                # than the code resulting from the encoder (N), concatenate 
-                # the first N-n features from the code to the n features in 
-                # the sample.
-                z_BA = torch.cat([s_B[:,:s_B.size(1)-z_BA.size(1)],
-                                  z_BA], dim=1)
-            x_BA_residual, _ = self.decoder(z_BA, skip_info=skip_B)
-            x_AB_residual, _ = self.decoder(s_A,  skip_info=skip_A)
-            x_BA = x_B + x_BA_residual              # (+)
-            x_AB = x_A - x_AB_residual              # (-)
+                z_BA    = self._z_sample(batch_size, rng=rng)
+            z_BA = self._zcat(s_B, z_BA)
+            x_BA_residual = self.decoder(z_BA, skip_info=skip_B)
+            x_AB_residual = self.decoder(s_A,  skip_info=skip_A)
+            x_BA = pdec(x_B_ + x_BA_residual)              # (+)
+            x_AB = pdec(x_A_ - x_AB_residual)              # (-)
         x_cross = x_cross_residual = None
         if self.lambda_disc and self.lambda_cross:
-            x_cross_residual, _ = self.decoder(s_A, skip_info=skip_B)
-            x_cross = x_B + x_cross_residual        # (+)
+            x_cross_residual = self.decoder(s_A, skip_info=skip_B)
+            x_cross = pdec(x_B_ + x_cross_residual)        # (+)
                 
         # Reconstruct input.
-        x_BB = z_BA_im_rec = None
+        x_AA = x_BB = z_BA_im_rec = None
         if self.lambda_x_id:
-            x_BB_residual, _ = self.decoder(s_B, skip_info=skip_B) 
-            x_BB = x_B - x_BB_residual  # (-)
+            x_BB = pdec(x_B_ - self.decoder(s_B, skip_info=skip_B))  # (-)
+            if self.preprocessor is not None or self.postprocessor is not None:
+                x_AA = pdec(x_A_)
         if self.sample_image_space and self.sample_decoder is not None:
             z_BA_im_rec = self.sample_decoder(z_BA)
         
         # Segment.
         x_AM = None
         if self.lambda_seg:
-            _, skip_AM = self.decoder(s_A, skip_info=skip_A)
-            x_AM = self.segmenter[0](x_A, skip_info=skip_AM)
+            x_AM = self.decoder(s_A, skip_info=skip_A, out_idx=1)
         
         # Reconstruct latent code.
-        s_BA = s_cross = None
         if self.lambda_z_id:
-            s_BA, skip_BA = self.encoder(x_BA)
-            if self.lambda_cross:
-                s_cross, skip_cross = self.encoder(x_cross)
+            s_BA, skip_BA = self.encoder(penc(x_BA))
+        if self.lambda_cross:
+            s_cross, skip_cross = self.encoder(penc(x_cross))
         
         # Cycle.
         x_cross_A = x_cross_A_residual = None
         if self.lambda_cyc:
-            s_AB, skip_AB = self.encoder(x_AB)
-            x_cross_A_residual, _ = self.decoder(s_cross, skip_info=skip_AB)
-            x_cross_A = x_AB + x_cross_A_residual   # (+)
-        
-        # Don't display residuals if they have more channels than the images.
-        ch = x_A.size(1)
-        if x_AB_residual is not None and x_AB_residual.size(1)>ch:
-            x_AB_residual = None
-        if x_BA_residual is not None and x_BA_residual.size(1)>ch:
-            x_BA_residual = None
-        if x_cross_residual is not None and x_cross_residual.size(1)>ch:
-            x_cross_residual = None
-        if x_cross_A_residual is not None and x_cross_A_residual.size(1)>ch:
-            x_cross_A_residual = None
+            s_AB, skip_AB = self.encoder(penc(x_AB))
+            x_cross_A_residual = self.decoder(s_cross, skip_info=skip_AB)
+            x_cross_A = pdec(penc(x_AB) + x_cross_A_residual)   # (+)
         
         # Compile outputs and return.
         visible = OrderedDict((
             ('x_AM',               x_AM),
-            ('x_A',                x_A),
+            ('x_BB',               x_BB),
             ('x_AB',               x_AB),
             ('x_AB_residual',      x_AB_residual),
-            ('x_B',                x_B),
             ('x_BA',               x_BA),
             ('x_BA_residual',      x_BA_residual),
-            ('x_BB',               x_BB),
+            ('x_cross',            x_cross),
+            ('x_cross_residual',   x_cross_residual),
             ('x_cross_A',          x_cross_A),
             ('x_cross_A_residual', x_cross_A_residual),
-            ('x_cross',            x_cross),
-            ('x_cross_residual',   x_cross_residual)
             ))
         hidden = {
             's_BA'       : s_BA,
@@ -433,6 +400,17 @@ class _loss_G(nn.Module):
         loss_G = ( _reduce(loss_gen.values())
                   +_reduce(loss_rec.values())
                   +_reduce([loss_cyc]))
+        
+        # Don't display residuals if they have more channels than the images.
+        ch = x_A.size(1)
+        if x_AB_residual is not None and x_AB_residual.size(1)>ch:
+            x_AB_residual = None
+        if x_BA_residual is not None and x_BA_residual.size(1)>ch:
+            x_BA_residual = None
+        if x_cross_residual is not None and x_cross_residual.size(1)>ch:
+            x_cross_residual = None
+        if x_cross_A_residual is not None and x_cross_A_residual.size(1)>ch:
+            x_cross_A_residual = None
         
         # Compile outputs and return.
         losses = OrderedDict((
