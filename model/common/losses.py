@@ -43,13 +43,13 @@ class gan_objective(object):
         self.grad_penalty_fake = grad_penalty_fake
         self.grad_penalty_mean = grad_penalty_mean
         if   objective=='jenson_shannon':
-            self._D1 = bce(torch.sigmoid(x), 1)
-            self._D0 = bce(torch.sigmoid(x), 0)
-            self._G  = bce(torch.sigmoid(x), 1)
+            self._D1 = lambda x : bce(torch.sigmoid(x), 1)
+            self._D0 = lambda x : bce(torch.sigmoid(x), 0)
+            self._G  = lambda x : bce(torch.sigmoid(x), 1)
         elif objective=='least_squares':
-            self._D1 = mse(x, 1)
-            self._D0 = mse(x, 0)
-            self._G  = mse(x, 1)
+            self._D1 = lambda x : mse(x, 1)
+            self._D0 = lambda x : mse(x, 0)
+            self._G  = lambda x : mse(x, 1)
         elif objective=='hinge':
             self._D1 = lambda x : nn.ReLU()(1.-x)
             self._D0 = lambda x : nn.ReLU()(1.+x)
