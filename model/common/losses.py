@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+import torch.nn.functional as F
 
 
 def dist_ratio_mse_abs(x, y, eps=1e-7):
@@ -10,16 +11,16 @@ def bce(prediction, target, reduce=False):
     if not hasattr(target, '__len__'):
         target = torch.ones_like(prediction)*target
         if prediction.is_cuda:
-            target = target.cuda()
-    return nn.BCELoss(reduce=reduce)(prediction, target)
+            target = target.to(prediction.device)
+    return F.cross_entropy(prediction, target, reduce=reduce)
 
 
 def mse(prediction, target, reduce=False):
     if not hasattr(target, '__len__'):
         target = torch.ones_like(prediction)*target
         if prediction.is_cuda:
-            target = target.cuda()
-    return nn.MSELoss(reduce=reduce)(prediction, target)
+            target = target.to(prediction.device)
+    return F.mse_loss(prediction, target, reduce=reduce)
 
 
 def mae(prediction, target, reduce=False):
@@ -51,8 +52,8 @@ class gan_objective(object):
             self._D0 = lambda x : mse(x, 0)
             self._G  = lambda x : mse(x, 1)
         elif objective=='hinge':
-            self._D1 = lambda x : nn.ReLU()(1.-x)
-            self._D0 = lambda x : nn.ReLU()(1.+x)
+            self._D1 = lambda x : F.relu(1.-x)
+            self._D0 = lambda x : F.relu(1.+x)
             self._G  = lambda x : -x
         elif objective=='wasserstein':
             self._D1 = lambda x : -x
