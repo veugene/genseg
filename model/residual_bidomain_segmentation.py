@@ -70,13 +70,6 @@ class segmentation_model(nn.Module):
                                                 grad_penalty_fake=None,
                                                 grad_penalty_mean=0)
     
-    def _z_constant(self, batch_size):
-        ret = Variable(torch.zeros((batch_size,)+self.shape_sample,
-                                    dtype=torch.float32))
-        if self.is_cuda:
-            ret = ret.cuda()
-        return ret
-    
     def _z_sample(self, batch_size, rng=None):
         if rng is None:
             rng = self.rng
@@ -85,6 +78,14 @@ class segmentation_model(nn.Module):
         if self.is_cuda:
             ret = ret.cuda()
         return ret
+    
+    def _zcat(self, code, sample):
+        if sample.size(1)==code.size(1):
+            return sample
+        # When the sample at the bottleneck has fewer features (n) than the
+        # code resulting from the encoder (N), concatenate the first N-n
+        # features from the code to the n features in the sample.
+        return torch.cat([code[:,:code.size(1)-sample.size(1)], sample], dim=1)
     
     def _call_on_all_models(self, fname, *args, **kwargs):
         for key in self.disc:
@@ -113,8 +114,13 @@ class segmentation_model(nn.Module):
     def translate_BA(self, x_B, rng=None):
         batch_size = len(x_B)
         s_B, skip_B = self.encoder(x_B)
-        x_BA = self.decoder(self._z_sample(batch_size, rng=rng),
-                            skip_info=skip_B)
+        if self.sample_image_space:
+            z_BA_im = self._z_sample(batch_size, rng=rng)
+            z_BA, _ = self.encoder(z_BA_im)
+        else:
+            z_BA    = self._z_sample(batch_size, rng=rng)
+        z_BA = self._zcat(s_B, z_BA)
+        x_BA = self.decoder(z_BA, skip_info=skip_B)
         return x_BA
     
     def segment(self, x_A):
@@ -143,20 +149,19 @@ class segmentation_model(nn.Module):
         only_seg = True
         if (   self.lambda_disc
             or self.lambda_x_id
-            or self.lambda_z_id
-            or self.lambda_mi):
+            or self.lambda_z_id):
                 s_B, skip_B = self.encoder(x_B)
                 only_seg = False
         
         # Translate.
         x_AB = x_BA = x_AB_residual = x_BA_residual = None
         if self.lambda_disc or self.lambda_z_id:
-            z_BA_im = self._z_sample(batch_size, rng=rng)
             if self.sample_image_space:
                 z_BA_im = self._z_sample(batch_size, rng=rng)
                 z_BA, _ = self.encoder(z_BA_im)
             else:
-                z_BA    = z_BA_im
+                z_BA    = self._z_sample(batch_size, rng=rng)
+            z_BA = self._zcat(s_B, z_BA)
             x_BA_residual = self.decoder(z_BA, skip_info=skip_B)
             x_AB_residual = self.decoder(s_A,  skip_info=skip_A)
             x_BA = x_B + x_BA_residual      # plus
