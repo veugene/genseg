@@ -119,18 +119,13 @@ if __name__ == '__main__':
     # Function to convert data to pytorch usable form.
     def prepare_batch(batch):
         s, h, m = batch
-        # Identify indices of examples with masks.
-        indices = [i for i, mask in enumerate(m) if mask is not None]
-        m       = [m[i] for i in indices]
         # Prepare for pytorch.
         s = Variable(torch.from_numpy(s))
         h = Variable(torch.from_numpy(h))
-        m = Variable(torch.from_numpy(np.array(m)))
         if not args.cpu:
             s = s.cuda()
             h = h.cuda()
-            m = m.cuda()
-        return s, h, m, indices
+        return s, h, m
     
     # Prepare data.
     data = setup_mnist_data(
@@ -180,8 +175,8 @@ if __name__ == '__main__':
     def training_function(engine, batch):
         for model in experiment_state.model.values():
             model.train()
-        A, B, M, indices = prepare_batch(batch)
-        outputs = experiment_state.model['G'].evaluate(A, B, M, indices,
+        A, B, M = prepare_batch(batch)
+        outputs = experiment_state.model['G'](A, B, M,
                                          optimizer=experiment_state.optimizer)
         outputs = detach(outputs)
         return outputs
@@ -190,11 +185,10 @@ if __name__ == '__main__':
     def validation_function(engine, batch):
         for model in experiment_state.model.values():
             model.eval()
-        A, B, M, indices = prepare_batch(batch)
-        outputs = OrderedDict(zip(['out_A', 'out_B', 'out_M'], [A, B, M]))
+        A, B, M = prepare_batch(batch)
+        outputs = OrderedDict(zip(['x_A', 'x_B'], [A, B]))
         with torch.no_grad():
-            _outputs = experiment_state.model['G'].evaluate(A, B, M, indices,
-                                                            rng=engine.rng)
+            _outputs = experiment_state.model['G'](A, B, M, rng=engine.rng)
         _outputs = detach(_outputs)
         outputs.update(_outputs)
         return outputs
@@ -227,7 +221,7 @@ if __name__ == '__main__':
     for key in engines:
         metrics[key] = {}
         metrics[key]['dice'] = dice_loss(target_class=1,
-                        output_transform=lambda x: (x['out_seg'], x['mask']))
+                        output_transform=lambda x: (x['x_AM'], x['x_M']))
         if isinstance(experiment_state.model, model_ae):
             metrics[key]['loss'] = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_all'])
@@ -279,9 +273,9 @@ if __name__ == '__main__':
         directory=os.path.join(experiment_state.experiment_path, "images"),
         summary_tracker=tracker,
         num_vis=min(args.n_vis, args.n_valid),
-        output_transform=lambda x: OrderedDict([(k.replace('out_',''), _p(v))
+        output_transform=lambda x: OrderedDict([(k.replace('x_',''), _p(v))
                                                 for k, v in x.items()
-                                                if k.startswith('out_')
+                                                if k.startswith('x_')
                                                 and v is not None]))
     save_image.attach(engines['valid'], name='save_image')
     
