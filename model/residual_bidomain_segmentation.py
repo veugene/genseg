@@ -32,12 +32,12 @@ def _cat(x, dim):
 
 class segmentation_model(nn.Module):
     def __init__(self, encoder, decoder, disc_A, disc_B, shape_sample,
-                 disc_cross=None, loss_rec=mae, loss_seg=None,
-                 loss_gan='hinge', relativistic=False, grad_penalty=None,
-                 disc_clip_norm=None, lambda_disc=1, lambda_x_id=10,
-                 lambda_z_id=1, lambda_seg=1, lambda_cross=0, lambda_cyc=0,
-                 lambda_sample=1, sample_image_space=False,
-                 sample_decoder=None, rng=None):
+                 disc_cross=None, preprocessor=None, postprocessor=None,
+                 loss_rec=mae, loss_seg=None, loss_gan='hinge',
+                 relativistic=False, grad_penalty=None, disc_clip_norm=None,
+                 lambda_disc=1, lambda_x_id=10, lambda_z_id=1, lambda_seg=1,
+                 lambda_cross=0, lambda_cyc=0,lambda_sample=1,
+                 sample_image_space=False, sample_decoder=None, rng=None):
         super(segmentation_model, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.encoder          = encoder
@@ -48,6 +48,8 @@ class segmentation_model(nn.Module):
                      'B'    :     disc_B,
                      'C'    :     disc_cross}   # separate params
         self.shape_sample       = shape_sample
+        self.preprocessor       = preprocessor
+        self.postprocessor      = postprocessor
         self.loss_rec           = loss_rec
         self.loss_seg           = loss_seg if loss_seg else dice_loss()
         self.loss_gan           = loss_gan
@@ -107,25 +109,29 @@ class segmentation_model(nn.Module):
         self._call_on_all_models('eval')
         
     def translate_AB(self, x_A, rng=None):
-        s_A, skip_A = self.encoder(x_A)
-        x_AB = x_A - self.decoder(s_A, skip_info=skip_A)   # minus
+        penc = self.preprocessor  if self.preprocessor  else lambda x:x
+        pdec = self.postprocessor if self.postprocessor else lambda x:x
+        s_A, skip_A = self.encoder(penc(x_A))
+        x_AB = pdec(penc(x_A) - self.decoder(s_A, skip_info=skip_A))   # minus
         return x_AB
     
     def translate_BA(self, x_B, rng=None):
+        penc = self.preprocessor  if self.preprocessor  else lambda x:x
+        pdec = self.postprocessor if self.postprocessor else lambda x:x
         batch_size = len(x_B)
-        s_B, skip_B = self.encoder(x_B)
+        s_B, skip_B = self.encoder(penc(x_B))
         if self.sample_image_space:
             z_BA_im = self._z_sample(batch_size, rng=rng)
-            z_BA, _ = self.encoder(z_BA_im)
+            z_BA, _ = self.encoder(penc(z_BA_im))
         else:
             z_BA    = self._z_sample(batch_size, rng=rng)
         z_BA = self._zcat(s_B, z_BA)
-        x_BA = self.decoder(z_BA, skip_info=skip_B)
+        x_BA = pdec(penc(x_B) + self.decoder(z_BA, skip_info=skip_B))   # plus
         return x_BA
     
     def segment(self, x_A):
         batch_size = len(x_A)
-        s_A, skip_A = self.encoder(x_A)
+        s_A, skip_A = self.encoder(penc(x_A))
         x_AM = self.decoder(s_A, skip_info=skip_A, out_idx=1)
         return x_AM
     
@@ -144,13 +150,17 @@ class segmentation_model(nn.Module):
         assert len(x_A)==len(x_B)
         batch_size = len(x_A)
         
+        # Aliases.
+        penc = self.preprocessor  if self.preprocessor  else lambda x:x
+        pdec = self.postprocessor if self.postprocessor else lambda x:x
+        
         # Encode inputs.
-        s_A, skip_A = self.encoder(x_A)
+        s_A, skip_A = self.encoder(penc(x_A))
         only_seg = True
         if (   self.lambda_disc
             or self.lambda_x_id
             or self.lambda_z_id):
-                s_B, skip_B = self.encoder(x_B)
+                s_B, skip_B = self.encoder(penc(x_B))
                 only_seg = False
         
         # Translate.
@@ -158,23 +168,23 @@ class segmentation_model(nn.Module):
         if self.lambda_disc or self.lambda_z_id:
             if self.sample_image_space:
                 z_BA_im = self._z_sample(batch_size, rng=rng)
-                z_BA, _ = self.encoder(z_BA_im)
+                z_BA, _ = self.encoder(penc(z_BA_im))
             else:
                 z_BA    = self._z_sample(batch_size, rng=rng)
             z_BA = self._zcat(s_B, z_BA)
             x_BA_residual = self.decoder(z_BA, skip_info=skip_B)
             x_AB_residual = self.decoder(s_A,  skip_info=skip_A)
-            x_BA = x_B + x_BA_residual      # plus
-            x_AB = x_A - x_AB_residual      # minus
+            x_BA = pdec(penc(x_B) + x_BA_residual)              # plus
+            x_AB = pdec(penc(x_A) - x_AB_residual)              # minus
         x_cross = x_cross_residual = None
         if self.lambda_disc and self.lambda_cross:
             x_cross_residual = self.decoder(s_A, skip_info=skip_B)
-            x_cross = x_B + x_cross_residual  # plus
+            x_cross = pdec(penc(x_B) + x_cross_residual)        # plus
                 
         # Reconstruct input.
         x_BB = z_BA_im_rec = None
         if self.lambda_x_id:
-            x_BB = x_B - self.decoder(s_B, skip_info=skip_B)    # minus
+            x_BB = pdec(penc(x_B) - self.decoder(s_B, skip_info=skip_B)) #minus
         if self.sample_image_space and self.sample_decoder is not None:
             z_BA_im_rec = self.sample_decoder(z_BA)
         
@@ -191,16 +201,16 @@ class segmentation_model(nn.Module):
         
         # Reconstruct latent code.
         if self.lambda_z_id:
-            s_BA, skip_BA = self.encoder(x_BA)
+            s_BA, skip_BA = self.encoder(penc(x_BA))
             if self.lambda_cross:
-                s_cross, skip_cross = self.encoder(x_cross)
+                s_cross, skip_cross = self.encoder(penc(x_cross))
         
         # Cycle.
         x_cross_A = x_cross_A_residual = None
         if self.lambda_cyc:
-            s_AB, skip_AB = self.encoder(x_AB)
+            s_AB, skip_AB = self.encoder(penc(x_AB))
             x_cross_A_residual = self.decoder(s_cross, skip_info=skip_AB)
-            x_cross_A = x_AB + x_cross_A_residual   # plus
+            x_cross_A = pdec(penc(x_AB) + x_cross_A_residual)   # plus
         
         # Discriminator losses.
         loss_disc = defaultdict(int)
@@ -277,6 +287,16 @@ class segmentation_model(nn.Module):
             loss_G.mean().backward()
             optimizer['G'].step()
             gradnorm_G = grad_norm(self)
+        
+        # Don't display residuals if they have more than one channel.
+        if x_AB_residual.size(1)>1:
+            x_AB_residual = None
+        if x_BA_residual.size(1)>1:
+            x_BA_residual = None
+        if x_cross_residual.size(1)>1:
+            x_cross_residual = None
+        if x_cross_A_residual.size(1)>1:
+            x_cross_A_residual = None
         
         # Compile outputs and return.
         outputs = OrderedDict((
