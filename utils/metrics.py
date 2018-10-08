@@ -1,24 +1,45 @@
-from __future__ import (print_function,
-                        division)
 import torch
+from ignite.engine import Events
+from ignite.metrics import Metric
 from fcn_maker.loss import dice_loss as _dice_loss
 
 
-def accuracy(output, target):
-    if output.size(1) > 1:
-        compare = output.max(dim=1, keepdim=True)[0].long()
-    else:
-        compare = output.round().long()
-    return compare.eq(target).float().sum() / target.nelement() 
+class metric(Metric):
+    """
+    Just like ignite's `Metric` except that it computes the metric every
+    iteration (not only every epoch) and stores the result in the engine's
+    state.
+    """
+    def __init__(self, *args, **kwargs):
+        super(metric, self).__init__(*args, **kwargs)
+        self._cached_compute = None
+        
+    def iteration_completed(self, engine, name):
+        output = self._output_transform(engine.state.output)
+        self.update(output)
+        self._cached_compute = self.compute()
+        engine.state.metrics[name] = self._cached_compute
+        
+    def completed(self, engine, name):
+        engine.state.metrics[name] = self._cached_compute
+        
+    def attach(self, engine, name):
+        engine.add_event_handler(Events.EPOCH_STARTED, self.started)
+        engine.add_event_handler(Events.ITERATION_COMPLETED,
+                                 self.iteration_completed, name)
+        engine.add_event_handler(Events.EPOCH_COMPLETED, self.completed, name)
 
 
-class dice_loss(torch.nn.Module):
+class dice_loss(metric):
     '''
     Global Dice metric. Accumulates counts over the course of an epoch.
+    
+    target_class : integer or list
+    mask_class : integer or list
     '''
-    def __init__(self, target_class, target_index, mask_class=None,
-                 epoch_length=None, accumulate=False):
-        super(dice_loss, self).__init__()
+    def __init__(self, target_class, target_index=0, mask_class=None,
+                 output_transform=lambda x: x):
+        super(dice_loss, self).__init__(output_transform)
         if not hasattr(target_class, '__len__'):
             self.target_class = [target_class]
         else:
@@ -28,15 +49,9 @@ class dice_loss(torch.nn.Module):
         else:
             self.target_index = target_index
         self.mask_class = mask_class
-        self.epoch_length = epoch_length
-        self.accumulate = accumulate
         self._smooth = 1
-        self._iteration = 0
-        self._intersection = 0.
-        self._y_target_sum = 0.
-        self._y_pred_sum = 0.
             
-    def _dice_loss(self, y_pred, y_true):
+    def update(self, output):
         '''
         Expects integer or one-hot class labeling in y_true.
         Expects outputs in range [0, 1] in y_pred.
@@ -44,10 +59,14 @@ class dice_loss(torch.nn.Module):
         Computes the soft dice loss considering all classes in target_class as
         one aggregate target class and ignoring all elements with ground truth
         classes in mask_class.
-        
-        target_class : integer or list
-        mask_class : integer or list
         '''
+        
+        # Get outputs.
+        y_pred, y_true = output
+        if y_true is None or len(y_true)==0 or y_pred is None:
+            return
+        assert len(y_pred)==len(y_true)
+        y_pred = sum([y_pred[:,i:i+1] for i in self.target_index])
         
         # Targer variable must not require a gradient.
         assert(not y_true.requires_grad)
@@ -69,30 +88,44 @@ class dice_loss(torch.nn.Module):
             y_pred_f = y_pred_f[idxs]
         
         # Accumulate dice counts.
-        if self.epoch_length is not None:
-            if self._iteration==self.epoch_length:
-                self.reset_counts()
         self._intersection += torch.sum(y_target * y_pred_f)
         self._y_target_sum += torch.sum(y_target)
-        self._y_pred_sum += torch.sum(y_pred)
-        self._iteration += 1
+        self._y_pred_sum   += torch.sum(y_pred)
         
-        # Compute dice.
+    def compute(self):
         dice_val = -(2.*self._intersection+self._smooth) / \
                     (self._y_target_sum+self._y_pred_sum+self._smooth)
-        
-        # Reset counts if not accumulating them.
-        if not self.accumulate:
-            self.reset_counts()
-        
-        #return torch.FloatTensor([dice_val])
         return dice_val
     
-    def reset_counts(self, *args, **kwargs):
+    def reset(self):
         self._intersection = 0.
         self._y_target_sum = 0.
-        self._y_pred_sum = 0.
+        self._y_pred_sum   = 0.
+    
+    
+class batchwise_loss_accumulator(metric):
+    """
+    Accumulates a loss batchwise, weighted by the size of each batch.
+    The batch size is determined as the length of the loss input.
+    
+    output_transform : function that isolates the loss from the engine output.
+    """
+    def __init__(self, output_transform=lambda x: x):
+        super(batchwise_loss_accumulator, self).__init__(output_transform)
+    
+    def update(self, loss):
+        if loss is None:
+            return
+        if isinstance(loss, torch.Tensor) and loss.dim():
+            self._count += len(loss)
+            self._total += loss.mean()*len(loss)
+        else:
+            self._count += 1
+            self._total += loss
         
-    def forward(self, y_pred, y_true):
-        y_pred_indexed = sum([y_pred[:,i:i+1] for i in self.target_index])
-        return self._dice_loss(y_pred_indexed.contiguous(), y_true)
+    def compute(self):
+        return self._total/max(1., float(self._count))
+    
+    def reset(self):
+        self._count = 0
+        self._total = 0
