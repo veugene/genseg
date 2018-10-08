@@ -100,7 +100,8 @@ def build_model():
         'padding_mode'        : 'reflect',
         'init'                : 'kaiming_normal_'}
     
-    print("DEBUG: sample_shape={}".format(enc_out_shape))
+    shape_sample = (n,)+tuple(enc_out_shape[1:])
+    print("DEBUG: sample_shape={}".format(shape_sample))
     submodel = {
         'encoder'           : encoder_instance,
         'decoder'           : decoder(**decoder_kwargs),
@@ -109,10 +110,8 @@ def build_model():
         'disc_B'            : discriminator(**discriminator_kwargs),
         'disc_cross'        : discriminator(**discriminator_kwargs)}
     
-    #shape_sample = list(image_size)
-    #shape_sample[1] = n
     model = segmentation_model(**submodel,
-                               shape_sample=image_size,
+                               shape_sample=shape_sample,
                                sample_image_space=False,
                                loss_gan='hinge',
                                relativistic=False,

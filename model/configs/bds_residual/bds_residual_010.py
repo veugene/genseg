@@ -19,7 +19,7 @@ from model.residual_bidomain_segmentation import segmentation_model
 
 
 def build_model():
-    N = 512 # Number of features at the bottleneck.
+    N = 1024 # Number of features at the bottleneck.
     image_size = (1, 48, 48)
     lambdas = {
         'lambda_disc'       : 1,
