@@ -35,7 +35,7 @@ class segmentation_model(nn.Module):
         return self.segmentation(*self.encoder(x))
     
     def evaluate(self, x_A, x_B=None, mask=None, mask_indices=None,
-                 optimizer=None):
+                 optimizer=None, rng=None):
         compute_grad = True if optimizer is not None else False
         if compute_grad:
             if isinstance(optimizer, dict):
