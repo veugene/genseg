@@ -69,6 +69,8 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
     
     if orientations is None:
         orientations = [1,2,3]
+    elif not hasattr(orientations, '__len__'):
+        orientations = [orientations]
     if rng is None:
         rng = np.random.RandomState()
     if masked_fraction < 0 or masked_fraction > 1:
