@@ -34,10 +34,11 @@ class segmentation_model(nn.Module):
     def __init__(self, encoder, decoder, disc_A, disc_B, shape_sample,
                  disc_cross=None, preprocessor=None, postprocessor=None,
                  loss_rec=mae, loss_seg=None, loss_gan='hinge',
-                 relativistic=False, grad_penalty=None, disc_clip_norm=None,
-                 lambda_disc=1, lambda_x_id=10, lambda_z_id=1, lambda_seg=1,
-                 lambda_cross=0, lambda_cyc=0,lambda_sample=1,
-                 sample_image_space=False, sample_decoder=None, rng=None):
+                 num_disc_updates=1,  relativistic=False, grad_penalty=None,
+                 disc_clip_norm=None, lambda_disc=1, lambda_x_id=10,
+                 lambda_z_id=1, lambda_seg=1, lambda_cross=0,
+                 lambda_cyc=0,lambda_sample=1, sample_image_space=False,
+                 sample_decoder=None, rng=None):
         super(segmentation_model, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.encoder          = encoder
@@ -53,6 +54,7 @@ class segmentation_model(nn.Module):
         self.loss_rec           = loss_rec
         self.loss_seg           = loss_seg if loss_seg else dice_loss()
         self.loss_gan           = loss_gan
+        self.num_disc_updates   = num_disc_updates
         self.relativistic       = relativistic
         self.grad_penalty       = grad_penalty
         self.disc_clip_norm     = disc_clip_norm
@@ -214,33 +216,35 @@ class segmentation_model(nn.Module):
         
         # Discriminator losses.
         loss_disc = defaultdict(int)
-        gradnorm_D = 0
+        loss_D = gradnorm_D = 0
         if self.lambda_disc:
-            loss_disc_A = self._gan.D(self.disc['A'],
-                                      fake=x_BA.detach(), real=x_A)
-            loss_disc_B = self._gan.D(self.disc['B'],
-                                      fake=x_AB.detach(), real=x_B)
-            loss_disc['A'] = self.lambda_disc*loss_disc_A
-            loss_disc['B'] = self.lambda_disc*loss_disc_B
-            if self.lambda_cross:
-                loss_disc_C = self._gan.D(self.disc['C'],
-                                          fake=x_cross.detach(), real=x_A)
-                loss_disc['C'] = ( self.lambda_disc*self.lambda_cross
-                                  *loss_disc_C)
-        loss_D = _reduce([loss_disc['A']+loss_disc['B']+loss_disc['C']])
-        if self.lambda_disc and optimizer is not None:
-            loss_D.mean().backward()
-            if self.disc_clip_norm:
-                nn.utils.clip_grad_norm_(self.disc['A'].parameters(),
-                                         max_norm=self.disc_clip_norm)
-                nn.utils.clip_grad_norm_(self.disc['B'].parameters(),
-                                         max_norm=self.disc_clip_norm)
-                nn.utils.clip_grad_norm_(self.disc['C'].parameters(),
-                                         max_norm=self.disc_clip_norm)
-            optimizer['D'].step()
-            gradnorm_D = sum([grad_norm(self.disc[k])
-                              for k in self.disc.keys()
-                              if self.disc[k] is not None])
+            for i in range(self.num_disc_updates):
+                loss_disc_A = self._gan.D(self.disc['A'],
+                                          fake=x_BA.detach(), real=x_A)
+                loss_disc_B = self._gan.D(self.disc['B'],
+                                          fake=x_AB.detach(), real=x_B)
+                loss_disc['A'] = self.lambda_disc*loss_disc_A
+                loss_disc['B'] = self.lambda_disc*loss_disc_B
+                if self.lambda_cross:
+                    loss_disc_C = self._gan.D(self.disc['C'],
+                                              fake=x_cross.detach(), real=x_A)
+                    loss_disc['C'] = ( self.lambda_disc*self.lambda_cross
+                                      *loss_disc_C)
+                loss_D = _reduce([ loss_disc['A']+loss_disc['B']
+                                  +loss_disc['C']])
+                if optimizer is not None:
+                    loss_D.mean().backward()
+                    if self.disc_clip_norm:
+                        nn.utils.clip_grad_norm_(self.disc['A'].parameters(),
+                                                 max_norm=self.disc_clip_norm)
+                        nn.utils.clip_grad_norm_(self.disc['B'].parameters(),
+                                                 max_norm=self.disc_clip_norm)
+                        nn.utils.clip_grad_norm_(self.disc['C'].parameters(),
+                                                 max_norm=self.disc_clip_norm)
+                    optimizer['D'].step()
+                    gradnorm_D = sum([grad_norm(self.disc[k])
+                                     for k in self.disc.keys()
+                                     if self.disc[k] is not None])
         
         # Generator loss.
         loss_gen = defaultdict(int)
