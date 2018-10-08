@@ -115,8 +115,12 @@ class summary_tracker(object):
         self._output_transform = []
         self._epoch = []
     
-    def _iteration_completed(self, engine, prefix, idx):
+    def _iteration_completed(self, engine, prefix, idx, metric_keys=None):
         output = self._output_transform[idx](engine.state.output)
+        if hasattr(engine, 'metrics'):
+            metrics = OrderedDict([(key, engine.metrics[key])
+                                    for key in metric_keys])
+            output.update(metrics)
         self._update(output, prefix, idx)
     
     def _epoch_completed(self, engine, idx):
@@ -210,12 +214,15 @@ class summary_tracker(object):
         self._item_counter[idx] = defaultdict(int)
         self._metric_value_dict[idx] = OrderedDict()
     
-    def attach(self, engine, prefix=None, output_transform=lambda x:x):
+    def attach(self, engine, prefix=None, output_transform=lambda x:x,
+               metric_keys=None):
         '''
         prefix : A string to prefix onto the value names.
-        output_transform : function mapping Engine output to
-        `value_dict` - Dict of torch tensors for which to accumulate stats.
-        `n_items`    - # of elements in the batch used to compute values.
+        output_transform : function mapping Engine output to a dictionary
+            of the form: `(key, (tensor, n_items))`. Stats accumulated for
+            each tensor, assuming that it corresponds to `n_items` elements.
+        metric_keys : A list of keys (string) for metrics in `engine.metrics`
+            to log.
         '''
         idx = len(self._output_transform)
         self._metric_value_dict.append(OrderedDict())
@@ -223,7 +230,8 @@ class summary_tracker(object):
         self._output_transform.append(output_transform)
         self._epoch.append(self.initial_epoch)
         engine.add_event_handler(Events.ITERATION_COMPLETED,
-                                 self._iteration_completed, prefix, idx)
+                                 self._iteration_completed, prefix, idx,
+                                 metric_keys)
         engine.add_event_handler(Events.EPOCH_COMPLETED,
                                  self._epoch_completed, idx)
     
