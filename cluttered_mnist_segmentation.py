@@ -101,36 +101,36 @@ if __name__ == '__main__':
     # Data preprocessing (including data augmentation).
     def preprocessor(warp=False):
         def f(batch):
-            s, h, m, _ = zip(*batch[0])
-            s = np.expand_dims(s, 1)
+            h, s, m, _ = zip(*batch[0])
             h = np.expand_dims(h, 1)
+            s = np.expand_dims(s, 1)
             m = [np.expand_dims(x, 0) if x is not None else None for x in m]
             if warp:
-                for i, (s_, h_, m_) in enumerate(zip(s, h, m)):
-                    sm_ = image_random_transform(s_, m_, **da_kwargs)
+                for i, (h_, s_, m_) in enumerate(zip(h, s, m)):
                     h_  = image_random_transform(h_, **da_kwargs)
+                    sm_ = image_random_transform(s_, m_, **da_kwargs)
                     if m_ is None:
                         sm_ = (sm_, None)
-                    s[i], m[i] = sm_
                     h[i]       = h_
-            return s, h, m
+                    s[i], m[i] = sm_
+            return h, s, m
         return f
     
     # Function to convert data to pytorch usable form.
     def prepare_batch(batch):
-        s, h, m = batch
+        h, s, m = batch
         # Identify indices of examples with masks.
         indices = [i for i, mask in enumerate(m) if mask is not None]
         m       = [m[i] for i in indices]
         # Prepare for pytorch.
-        s = Variable(torch.from_numpy(s))
         h = Variable(torch.from_numpy(h))
+        s = Variable(torch.from_numpy(s))
         m = Variable(torch.from_numpy(np.array(m)))
         if not args.cpu:
-            s = s.cuda()
             h = h.cuda()
+            s = s.cuda()
             m = m.cuda()
-        return s, h, m, indices
+        return h, s, m, indices
     
     # Prepare data.
     data = setup_mnist_data(
@@ -180,7 +180,7 @@ if __name__ == '__main__':
     def training_function(engine, batch):
         for model in experiment_state.model.values():
             model.train()
-        A, B, M, indices = prepare_batch(batch)
+        B, A, M, indices = prepare_batch(batch)
         outputs = experiment_state.model['G'].evaluate(A, B, M, indices,
                                          optimizer=experiment_state.optimizer)
         outputs = detach(outputs)
@@ -190,8 +190,8 @@ if __name__ == '__main__':
     def validation_function(engine, batch):
         for model in experiment_state.model.values():
             model.eval()
-        A, B, M, indices = prepare_batch(batch)
-        outputs = OrderedDict(zip(['out_A', 'out_B', 'out_M'], [A, B, M]))
+        B, A, M, indices = prepare_batch(batch)
+        outputs = OrderedDict(zip(['out_B', 'out_A', 'out_M'], [B, A, M]))
         with torch.no_grad():
             _outputs = experiment_state.model['G'].evaluate(A, B, M, indices,
                                                             rng=engine.rng)

@@ -258,7 +258,7 @@ class setup_mnist_data(object):
             mask = np.zeros_like(x_out, dtype=np.int64)
             mask[x_crop_indices][x>0.5] = 1
         
-        return (x_out, clutter, mask, y)
+        return (clutter, x_out, mask, y)
         
     def _generate_cluttered(self, num, fold, indices_seg=None):
         output_list = []
