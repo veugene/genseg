@@ -114,7 +114,7 @@ class segmentation_model(nn.Module):
         penc = self.preprocessor  if self.preprocessor  else lambda x:x
         pdec = self.postprocessor if self.postprocessor else lambda x:x
         s_A, skip_A = self.encoder(penc(x_A))
-        x_AB = pdec(penc(x_A) - self.decoder(s_A, skip_info=skip_A))   # minus
+        x_AB = pdec(penc(x_A) - self.decoder(s_A, skip_info=skip_A))
         return x_AB
     
     def translate_BA(self, x_B, rng=None):
@@ -128,7 +128,7 @@ class segmentation_model(nn.Module):
         else:
             z_BA    = self._z_sample(batch_size, rng=rng)
         z_BA = self._zcat(s_B, z_BA)
-        x_BA = pdec(penc(x_B) + self.decoder(z_BA, skip_info=skip_B))   # plus
+        x_BA = pdec(penc(x_B) + self.decoder(z_BA, skip_info=skip_B))
         return x_BA
     
     def segment(self, x_A):
@@ -176,17 +176,19 @@ class segmentation_model(nn.Module):
             z_BA = self._zcat(s_B, z_BA)
             x_BA_residual = self.decoder(z_BA, skip_info=skip_B)
             x_AB_residual = self.decoder(s_A,  skip_info=skip_A)
-            x_BA = pdec(penc(x_B) + x_BA_residual)              # plus
-            x_AB = pdec(penc(x_A) - x_AB_residual)              # minus
+            x_BA = pdec(penc(x_B) + x_BA_residual)              # (+)
+            x_AB = pdec(penc(x_A) - x_AB_residual)              # (-)
         x_cross = x_cross_residual = None
         if self.lambda_disc and self.lambda_cross:
             x_cross_residual = self.decoder(s_A, skip_info=skip_B)
-            x_cross = pdec(penc(x_B) + x_cross_residual)        # plus
+            x_cross = pdec(penc(x_B) + x_cross_residual)        # (+)
                 
         # Reconstruct input.
-        x_BB = z_BA_im_rec = None
+        x_AA = x_BB = z_BA_im_rec = None
         if self.lambda_x_id:
-            x_BB = pdec(penc(x_B) - self.decoder(s_B, skip_info=skip_B)) #minus
+            x_BB = pdec(penc(x_B) - self.decoder(s_B, skip_info=skip_B))  # (-)
+            if self.preprocessor is not None or self.postprocessor is not None:
+                x_AA = pdec(penc(x_A))
         if self.sample_image_space and self.sample_decoder is not None:
             z_BA_im_rec = self.sample_decoder(z_BA)
         
@@ -212,7 +214,7 @@ class segmentation_model(nn.Module):
         if self.lambda_cyc:
             s_AB, skip_AB = self.encoder(penc(x_AB))
             x_cross_A_residual = self.decoder(s_cross, skip_info=skip_AB)
-            x_cross_A = pdec(penc(x_AB) + x_cross_A_residual)   # plus
+            x_cross_A = pdec(penc(x_AB) + x_cross_A_residual)   # (+)
         
         # Discriminator losses.
         loss_disc = defaultdict(int)
@@ -263,6 +265,8 @@ class segmentation_model(nn.Module):
         dist = self.loss_rec
         if self.lambda_x_id:
             loss_rec['BB'] = self.lambda_x_id*dist(x_BB, x_B)
+            if self.preprocessor is not None or self.postprocessor is not None:
+                loss_rec['AA'] = self.lambda_x_id*dist(x_AA, x_A)
         if self.lambda_z_id:
             loss_rec['z_BA'] = self.lambda_z_id*dist(s_BA, z_BA)
             if self.lambda_cross:
@@ -323,7 +327,6 @@ class segmentation_model(nn.Module):
             ('l_gradnorm_G',    gradnorm_G),
             ('l_gradnorm_D',    gradnorm_D),
             ('out_seg',         x_AM),
-            ('out_BB',          x_BB),
             ('out_AB',          x_AB),
             ('out_AB_res',      x_AB_residual),
             ('out_BA',          x_BA),
@@ -332,5 +335,7 @@ class segmentation_model(nn.Module):
             ('out_cross_res',   x_cross_residual),
             ('out_cross_A',     x_cross_A),
             ('out_cross_A_res', x_cross_A_residual),
+            ('out_AA',          x_AA),
+            ('out_BB',          x_BB),
             ('mask',          mask)))
         return outputs
