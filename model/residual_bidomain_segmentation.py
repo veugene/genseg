@@ -293,13 +293,13 @@ class segmentation_model(nn.Module):
             gradnorm_G = grad_norm(self)
         
         # Don't display residuals if they have more than one channel.
-        if x_AB_residual.size(1)>1:
+        if x_AB_residual is not None and x_AB_residual.size(1)>1:
             x_AB_residual = None
-        if x_BA_residual.size(1)>1:
+        if x_BA_residual is not None and x_BA_residual.size(1)>1:
             x_BA_residual = None
-        if x_cross_residual.size(1)>1:
+        if x_cross_residual is not None and x_cross_residual.size(1)>1:
             x_cross_residual = None
-        if x_cross_A_residual.size(1)>1:
+        if x_cross_A_residual is not None and x_cross_A_residual.size(1)>1:
             x_cross_A_residual = None
         
         # Compile outputs and return.
