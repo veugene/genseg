@@ -3,7 +3,7 @@ from collections import (defaultdict,
 import os
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 import tensorboardX as tb
 import torch
 from tqdm import tqdm
@@ -246,15 +246,18 @@ class image_logger(Metric):
     Expects `output` as a dictionary or list of image lists.
     """
     def __init__(self, num_vis, output_transform=lambda x:x, initial_epoch=0,
-                 directory=None, summary_tracker=None, prefix=None,
-                 min_val=None, max_val=None):
+                 directory=None, summary_tracker=None, suffix=None,
+                 min_val=None, max_val=None, output_name='outputs',
+                 fontname="LiberationSans-Regular.ttf"):
         super(image_logger, self).__init__(output_transform)
         self.num_vis = num_vis
         self.directory = directory
         self.summary_tracker = summary_tracker
-        self.prefix = prefix
+        self.suffix = suffix
         self.min_val = min_val
         self.max_val = max_val
+        self.output_name = output_name
+        self.fontname = fontname
         self._epoch = initial_epoch
     
     def reset(self):
@@ -296,7 +299,8 @@ class image_logger(Metric):
             if self._labels is not None:
                 arr_pil = Image.fromarray(arr, mode='L')
                 draw = ImageDraw.Draw(arr_pil)
-                draw.text((0, 0), self._labels[i], fill=255)
+                draw.text((0, 0), self._labels[i], fill=255,
+                          font=ImageFont.truetype(self.fontname, size=14))
                 arr = np.array(arr_pil)
             image_rows.append(arr)
         
@@ -306,7 +310,7 @@ class image_logger(Metric):
         # Log to tensorboard.
         if self.summary_tracker is not None:
             self.summary_tracker.summary_writer.add_image(
-                'outputs',
+                self.output_name,
                 final_image,
                 global_step=self._epoch)
             self.summary_tracker.summary_writer.file_writer.flush()
@@ -315,8 +319,8 @@ class image_logger(Metric):
         if self.directory is not None:
             if not os.path.exists(self.directory):
                 os.makedirs(self.directory)
-            _prefix = "_{}".format(self.prefix) if self.prefix else ""
-            fn = str(self._epoch)+_prefix+".jpg"
+            _suffix = "_{}".format(self.suffix) if self.suffix else ""
+            fn = str(self._epoch)+_suffix+".jpg"
             final_image_pil = Image.fromarray(final_image, mode='L')
             final_image_pil.save(os.path.join(self.directory, fn))
             
