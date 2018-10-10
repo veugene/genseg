@@ -88,8 +88,8 @@ def get_labels(side):
     met = {}
     def count(*classes):
         return sum([np.count_nonzero(side==c) for c in classes])
-    met["brain"] = float(count(0  )) / np.prod(side.shape)
-    met["tumor"] = float(count(4,5)) / (count(0)+1e-10)     # Lesion is 4, 5.
+    met["brain"] = 1.-float(count(0))/np.prod(side.shape)
+    met["tumor"] = float(count(4,5))/(count(0)+1e-10)     # Lesion is 4, 5.
     met["has_enough_brain"] = met["brain"] > args.b_thresh
     met["has_tumor"]        = met["tumor"] > args.t_thresh
     if args.debug:
