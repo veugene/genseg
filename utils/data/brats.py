@@ -216,7 +216,7 @@ def preprocessor_brats(data_augmentation_kwargs=None,
             index_slices = [slice(None, None),
                             slice(offset[0], offset[0]+im_shape[0]),
                             slice(offset[1], offset[1]+im_shape[1])]
-            elem_im[index_slices] = im[...]
+            elem_im[tuple(index_slices)] = im[...]
             elem.append(elem_im)
         h, s, m = elem
         

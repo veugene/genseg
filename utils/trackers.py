@@ -248,7 +248,7 @@ class image_logger(Metric):
     def __init__(self, num_vis, output_transform=lambda x:x, initial_epoch=0,
                  directory=None, summary_tracker=None, suffix=None,
                  min_val=None, max_val=None, output_name='outputs',
-                 fontname="LiberationSans-Regular.ttf"):
+                 fontname="LiberationSans-Regular.ttf", fontsize=24):
         super(image_logger, self).__init__(output_transform)
         self.num_vis = num_vis
         self.directory = directory
@@ -258,6 +258,7 @@ class image_logger(Metric):
         self.max_val = max_val
         self.output_name = output_name
         self.fontname = fontname
+        self.fontsize = fontsize
         self._epoch = initial_epoch
     
     def reset(self):
@@ -300,7 +301,8 @@ class image_logger(Metric):
                 arr_pil = Image.fromarray(arr, mode='L')
                 draw = ImageDraw.Draw(arr_pil)
                 draw.text((0, 0), self._labels[i], fill=255,
-                          font=ImageFont.truetype(self.fontname, size=14))
+                          font=ImageFont.truetype(self.fontname,
+                                                  self.fontsize))
                 arr = np.array(arr_pil)
             image_rows.append(arr)
         
