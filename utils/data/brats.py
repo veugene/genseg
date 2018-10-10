@@ -48,8 +48,7 @@ def prepare_data_brats13s(path_hgg, path_lgg,
 
 def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
                         masked_fraction=0, drop_masked=False,
-                        orientations=None,
-                        rng=None):
+                        orientations=None, rng=None):
     """
     Convenience function to prepare brats data as multi_source_array objects,
     split into training and validation subsets.
@@ -246,7 +245,7 @@ def preprocessor_brats(data_augmentation_kwargs=None,
             if im is None:
                 hs.append(None)
                 continue
-            im = np.clip(im, -2., 2.)
+            im = np.clip(im, -1., 1.)
             hs.append(im)
         h, s = hs
         

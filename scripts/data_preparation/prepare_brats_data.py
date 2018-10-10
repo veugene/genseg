@@ -128,9 +128,9 @@ def preprocess(volume, segmentation, skip_bias_correction=False):
             out = vol.copy()
         
         # Mean center and normalize by std.
-        out_nonzero_view = out[out>0]
-        out -= out_nonzero_view.mean()
-        out /= out_nonzero_view.std()
+        mask = out>0
+        out[mask] -= out[mask].mean()
+        out[mask] /= out[mask].std()*5
         
         volume_out[i] = out
         
