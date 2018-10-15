@@ -117,9 +117,11 @@ class summary_tracker(object):
     
     def _iteration_completed(self, engine, prefix, idx, metric_keys=None):
         output = self._output_transform[idx](engine.state.output)
-        if hasattr(engine, 'metrics'):
-            metrics = OrderedDict([(key, engine.metrics[key])
+        if hasattr(engine.state, 'metrics'):
+            metrics = OrderedDict([(key, engine.state.metrics[key])
                                     for key in metric_keys])
+            for key in metrics.keys():
+                metrics[key] = (metrics[key], 1) # Assume count is 1 for each.
             output.update(metrics)
         self._update(output, prefix, idx)
     
