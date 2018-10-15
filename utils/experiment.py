@@ -194,6 +194,7 @@ class experiment(object):
                                             name=optimizer_name,
                                             params=model[key].parameters(),
                                             lr=lr,
+                                            opt_kwargs=opt_kwargs,
                                             weight_decay=weight_decay)
         
         return model, optimizer
