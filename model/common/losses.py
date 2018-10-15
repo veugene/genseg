@@ -2,8 +2,11 @@ import torch
 from torch import nn
 
 
-def dist_ratio_mse_abs(x, y, eps=1e-7):
-    return torch.mean((x-y)**2) / (torch.mean(torch.abs(x-y))+eps)
+def dist_ratio_mse_abs(prediction, target, eps=1e-7, reduce=False):
+    loss = mse(prediction, target, reduce=False)/(mae(prediction, target)+eps)
+    if reduce:
+        loss = torch.mean(loss)
+    return loss
     
 
 def bce(prediction, target, reduce=False):
