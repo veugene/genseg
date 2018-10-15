@@ -24,19 +24,19 @@ def build_model():
     n = 512 # Number of features to sample at the bottleneck.
     image_size = (4, 256, 128)
     lambdas = {
-        'lambda_disc'       : 0,
-        'lambda_x_id'       : 0,
-        'lambda_z_id'       : 0,
-        'lambda_cross'      : 0,
-        'lambda_cyc'        : 0,
+        'lambda_disc'       : 1,
+        'lambda_x_id'       : 10,
+        'lambda_z_id'       : 1,
+        'lambda_cross'      : 1,
+        'lambda_cyc'        : 1,
         'lambda_seg'        : 1,
         'lambda_sample'     : 0}
     
     encoder_kwargs = {
-        'input_shape'         : image_size,
-        'num_conv_blocks'     : 5,
+        'input_shape'         : (N//64,)+image_size[1:],
+        'num_conv_blocks'     : 7,
         'block_type'          : conv_block,
-        'num_channels_list'   : [N//16, N//8, N//4, N//2, N],
+        'num_channels_list'   : [N//64, N//32, N//16, N//8, N//4, N//2, N],
         'skip'                : False,
         'dropout'             : 0.,
         'normalization'       : instance_normalization,
@@ -52,10 +52,10 @@ def build_model():
     
     decoder_kwargs = {
         'input_shape'         : enc_out_shape,
-        'output_shape'        : image_size,
-        'num_conv_blocks'     : 5,
+        'output_shape'        : (N//64,)+image_size[1:],
+        'num_conv_blocks'     : 7,
         'block_type'          : conv_block,
-        'num_channels_list'   : [N, N//2, N//4, N//8, N//16],
+        'num_channels_list'   : [N, N//2, N//4, N//8, N//16, N//32, N//64],
         'num_classes'         : 1,
         'skip'                : False,
         'dropout'             : 0.,
@@ -73,8 +73,8 @@ def build_model():
     discriminator_kwargs = {
         'input_dim'           : image_size[0],
         'num_channels_list'   : [N//16, N//8, N//4],
-        'num_scales'          : 3,
-        'normalization'       : None,
+        'num_scales'          : 4,
+        'normalization'       : layer_normalization,
         'norm_kwargs'         : None,
         'kernel_size'         : 4,
         'nonlinearity'        : lambda : nn.LeakyReLU(0.2, inplace=True),
@@ -86,6 +86,21 @@ def build_model():
     submodel = {
         'encoder'           : encoder_instance,
         'decoder'           : decoder(**decoder_kwargs),
+        'preprocessor'      : nn.Sequential(
+                                  convolution(in_channels=4,
+                                              out_channels=N//64,
+                                              kernel_size=7,
+                                              padding=3,
+                                              padding_mode='reflect'),
+                                  nn.ReLU()),
+        'postprocessor'     : nn.Sequential(
+                                  nn.ReLU(),
+                                  convolution(in_channels=N//64,
+                                              out_channels=4,
+                                              kernel_size=7,
+                                              padding=3,
+                                              padding_mode='reflect'),
+                                  nn.Tanh()),
         'disc_A'            : discriminator(**discriminator_kwargs),
         'disc_B'            : discriminator(**discriminator_kwargs),
         'disc_cross'        : discriminator(**discriminator_kwargs)}
@@ -155,8 +170,7 @@ class discriminator(nn.Module):
                                kernel_size=1,
                                nonlinearity=self.nonlinearity,
                                normalization=self.normalization,
-                               norm_kwargs=self.norm_kwargs,
-                               init=self.init)
+                               norm_kwargs=self.norm_kwargs)
         cnn.append(layer)
         cnn = nn.Sequential(*cnn)
         return cnn
@@ -212,9 +226,9 @@ class encoder(nn.Module):
         last_channels = self.in_channels
         conv = convolution(in_channels=last_channels,
                            out_channels=self.num_channels_list[0],
-                           kernel_size=7,
+                           kernel_size=3,
                            stride=1,
-                           padding=3,
+                           padding=1,
                            padding_mode=self.padding_mode,
                            init=self.init)
         self.blocks.append(conv)
@@ -358,25 +372,25 @@ class decoder(nn.Module):
         '''
         Final output - change number of channels.
         '''
-        def _make_output(out_channels, out_nlin):
-            output = []
-            if normalization is not None:
-                output.append(normalization(num_features=last_channels,
-                                            **self.norm_kwargs))
-            output.append(get_nonlinearity(self.nonlinearity))
-            output.append(convolution(in_channels=last_channels,
-                                      out_channels=out_channels,
-                                      kernel_size=7,
-                                      stride=1,
-                                      padding=3,
-                                      padding_mode=self.padding_mode,
-                                      init=self.init))
-            output.append(out_nlin)
-            output = nn.Sequential(*output)
-            return output
-        self.output_0 = _make_output(self.out_channels, nn.Tanh())
-        if self.num_classes:
-            self.output_1 = _make_output(self.num_classes, nn.Sigmoid())
+        out_kwargs = {'normalization': self.normalization,
+                      'norm_kwargs': self.norm_kwargs,
+                      'nonlinearity': self.nonlinearity,
+                      'padding_mode': self.padding_mode}
+        self.output_0 = norm_nlin_conv(in_channels=last_channels,
+                                       out_channels=self.out_channels,
+                                       kernel_size=self.kernel_size,
+                                       init=self.init,
+                                       **out_kwargs)
+        self.output_1 = nn.Sequential(
+            #norm_nlin_conv(in_channels=last_channels,
+                           #out_channels=last_channels,
+                           #kernel_size=3,
+                           #**out_kwargs),
+            norm_nlin_conv(in_channels=last_channels,
+                           out_channels=self.num_classes,
+                           kernel_size=7,
+                           **out_kwargs),
+            nn.Sigmoid())
         
     def forward(self, z, skip_info=None, out_idx=0):
         out = z
