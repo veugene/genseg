@@ -290,8 +290,7 @@ if __name__ == '__main__':
             output_name=sequence_name,
             output_transform=output_transform,
             fontsize=40)
-        save_image.attach(engines['valid'], name="save_image_{}"
-                                                 "".format(sequence_name))
+        save_image.attach(engines['valid'])
     
     '''
     Train.

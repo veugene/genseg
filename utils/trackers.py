@@ -243,15 +243,15 @@ class summary_tracker(object):
             self.summary_writer = None
 
 
-class image_logger(Metric):
+class image_logger(object):
     """
     Expects `output` as a dictionary or list of image lists.
     """
-    def __init__(self, num_vis, output_transform=lambda x:x, initial_epoch=0,
-                 directory=None, summary_tracker=None, suffix=None,
-                 min_val=None, max_val=None, output_name='outputs',
+    def __init__(self, num_vis=None, output_transform=lambda x:x,
+                 initial_epoch=0, directory=None, summary_tracker=None,
+                 suffix=None, min_val=None, max_val=None,
+                 output_name='outputs',
                  fontname="LiberationSans-Regular.ttf", fontsize=24):
-        super(image_logger, self).__init__(output_transform)
         self.num_vis = num_vis
         self.directory = directory
         self.summary_tracker = summary_tracker
@@ -261,13 +261,17 @@ class image_logger(Metric):
         self.output_name = output_name
         self.fontname = fontname
         self.fontsize = fontsize
+        self._output_transform = output_transform
         self._epoch = initial_epoch
     
     def reset(self):
         self._labels = None
         self._images = []
     
-    def update(self, output):
+    def collect(self, engine):
+        output = self._output_transform(engine.state.output)
+        if len(output)==0:
+            return
         if isinstance(output, dict):
             labels, images = zip(*output.items())
         else:
@@ -278,9 +282,12 @@ class image_logger(Metric):
         for i, stack in enumerate(images):
             self._images[i].extend(stack)    
     
-    def compute(self):
+    def process(self):
         # Select a subset of images.
-        images = [stack[:self.num_vis] for stack in self._images]
+        if self.num_vis is not None:
+            images = [stack[:self.num_vis] for stack in self._images]
+        else:
+            images = self._images
         
         # Digitize all images.
         images_digitized = []
@@ -331,4 +338,8 @@ class image_logger(Metric):
         # Update epoch count.
         self._epoch += 1
         
-        return final_image
+    def attach(self, engine):
+        engine.add_event_handler(Events.EPOCH_STARTED, lambda _: self.reset())
+        engine.add_event_handler(Events.ITERATION_COMPLETED, self.collect)
+        engine.add_event_handler(Events.EPOCH_COMPLETED,
+                                 lambda _: self.process())
