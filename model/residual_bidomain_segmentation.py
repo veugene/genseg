@@ -31,18 +31,19 @@ def _cat(x, dim):
 
 
 class segmentation_model(nn.Module):
-    def __init__(self, encoder, decoder, disc_A, disc_B, shape_sample,
-                 disc_cross=None, preprocessor=None, postprocessor=None,
-                 loss_rec=mae, loss_seg=None, loss_gan='hinge',
-                 num_disc_updates=1,  relativistic=False, grad_penalty=None,
-                 disc_clip_norm=None, lambda_disc=1, lambda_x_id=10,
-                 lambda_z_id=1, lambda_seg=1, lambda_cross=0,
+    def __init__(self, encoder, decoder, segmenter, disc_A, disc_B,
+                 shape_sample, disc_cross=None, preprocessor=None,
+                 postprocessor=None, loss_rec=mae, loss_seg=None,
+                 loss_gan='hinge', num_disc_updates=1,  relativistic=False,
+                 grad_penalty=None, disc_clip_norm=None, lambda_disc=1,
+                 lambda_x_id=10, lambda_z_id=1, lambda_seg=1, lambda_cross=0,
                  lambda_cyc=0,lambda_sample=1, sample_image_space=False,
                  sample_decoder=None, rng=None):
         super(segmentation_model, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.encoder          = encoder
         self.decoder          = decoder
+        self.segmenter        = [segmenter]     # separate params
         if disc_cross is None:
             disc_cross = disc_A
         self.disc = {'A'    :     disc_A,
@@ -134,7 +135,8 @@ class segmentation_model(nn.Module):
     def segment(self, x_A):
         batch_size = len(x_A)
         s_A, skip_A = self.encoder(penc(x_A))
-        x_AM = self.decoder(s_A, skip_info=skip_A, out_idx=1)
+        x_AM = self.segmenter[0](
+            torch.cat([self.decoder(s_A, skip_info=skip_A), x_A], dim=1))
         return x_AM
     
     def evaluate(self, x_A, x_B, mask=None, mask_indices=None,
@@ -199,9 +201,10 @@ class segmentation_model(nn.Module):
                 mask_indices = list(range(len(mask)))
             num_masks = len(mask_indices)
             skip_A_filtered = [s[mask_indices] for s in skip_A]
-            x_AM = self.decoder(s_A[mask_indices],
-                                skip_info=skip_A_filtered,
-                                out_idx=1)
+            f = torch.cat([self.decoder(s_A[mask_indices],
+                                        skip_info=skip_A_filtered),
+                           x_A[mask_indices]], dim=1)
+            x_AM = self.segmenter[0](f)
         
         # Reconstruct latent code.
         if self.lambda_z_id:
@@ -294,6 +297,7 @@ class segmentation_model(nn.Module):
         if optimizer is not None and isinstance(loss_G, torch.Tensor):
             loss_G.mean().backward()
             optimizer['G'].step()
+            optimizer['S'].step()
             gradnorm_G = grad_norm(self)
         
         # Don't display residuals if they have more channels than the images.

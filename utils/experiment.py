@@ -6,6 +6,7 @@ import sys
 from natsort import natsorted
 import torch
 import numpy as np
+import json
 from ignite.engine import (Engine,
                            Events)
 from ignite.handlers import ModelCheckpoint
@@ -23,11 +24,12 @@ class experiment(object):
     def __init__(self, name, parser):
         self.name = name
         
-        # Set up args, model, and optimizers.
+        # Set up model, and optimizers.
         args = parser.parse_args()
         self._epoch = [0]
         if args.resume_from is None:
-            model, optimizer = self._init_state(model_from=args.model_from,
+            model, optimizer = self._init_state(
+                                     model_from=args.model_from,
                                      optimizer_name=args.optimizer,
                                      cpu=args.cpu,
                                      learning_rate=args.learning_rate,
@@ -45,9 +47,17 @@ class experiment(object):
                                     and fn.endswith('.pth')])[-1]
             state_from = os.path.join(args.resume_from, state_file)
             print("Resuming from {}.".format(state_from))
-            model, optimizer = self._load_state(load_from=state_from,
+            model, optimizer = self._init_state(
+                                     model_from=state_from,
                                      optimizer_name=args.optimizer,
-                                     cpu=args.cpu)
+                                     cpu=args.cpu,
+                                     learning_rate=args.learning_rate,
+                                     opt_kwargs=args.opt_kwargs,
+                                     weight_decay=args.weight_decay)
+            model, optimizer = self._load_state(
+                                     load_from=state_from,
+                                     model=model,
+                                     optimizer=optimizer)
             self.experiment_path = args.resume_from
         self.args = args
         self.model = model
@@ -127,37 +137,6 @@ class experiment(object):
     def _increment_epoch(self, engine):
         self._epoch[0] += 1
         engine.epoch = self._epoch
-        
-    def _load_state(self, load_from, optimizer_name, cpu=False):
-        '''
-        Restore the model, its state, and the optimizer's state.
-        '''
-        saved_dict = torch.load(load_from)
-        
-        # Build model according to saved code.
-        module = imp.new_module('module')
-        exec(saved_dict['model_as_str'], module.__dict__)
-        model = getattr(module, 'build_model')()
-        if not isinstance(model, dict):
-            model = {'model': model}
-
-        # Load model and optimizer state.
-        optimizer = {}
-        for key in model.keys():
-            model[key].load_state_dict(saved_dict[key]['model_state'])
-            if not cpu:
-                model[key].cuda()
-            optimizer[key] = self._get_optimizer(
-                               name=optimizer_name,
-                               params=model[key].parameters(),
-                               state_dict=saved_dict[key]['optimizer_state'])
-        
-        # Experiment metadata.
-        self.experiment_id = saved_dict['experiment_id']
-        self._epoch[0] = saved_dict['epoch'][0]+1
-        self.model_as_str = saved_dict['model_as_str']
-        
-        return model, optimizer
     
     def _init_state(self, model_from, optimizer_name, cpu=False,
                     learning_rate=0., opt_kwargs=None, weight_decay=0.):
@@ -182,25 +161,51 @@ class experiment(object):
         if not isinstance(model, dict):
             model = {'model': model}
         
+        # If optimizer_name is in JSON format, convert string to dict.
+        try:
+            optimizer_name = json.loads(optimizer_name)
+        except ValueError:
+            # Not in JSON format; keep as a string.
+            optimizer_name = optimizer_name
+        
         # Setup the optimizer.
         optimizer = {}
         for key in model.keys():
+            def parse(arg):
+                # Helper function for args when passed as dict, with
+                # model names as keys.
+                if isinstance(arg, dict) and key in arg:
+                    return arg[key]
+                return arg
             if not cpu:
                 model[key].cuda()
-            lr = learning_rate
-            if isinstance(lr, dict):
-                lr = lr[key]
             optimizer[key] = self._get_optimizer(
-                                            name=optimizer_name,
+                                            name=parse(optimizer_name),
                                             params=model[key].parameters(),
-                                            lr=lr,
-                                            opt_kwargs=opt_kwargs,
+                                            lr=parse(learning_rate),
+                                            opt_kwargs=parse(opt_kwargs),
                                             weight_decay=weight_decay)
+        
+        return model, optimizer
+    
+    def _load_state(self, load_from, model, optimizer):
+        '''
+        Restore the model, its state, and the optimizer's state.
+        '''
+        saved_dict = torch.load(load_from)
+        for key in model.keys():
+            model[key].load_state_dict(saved_dict[key]['model_state'])
+            optimizer[key].load_state_dict(saved_dict[key]['optimizer_state'])
+        
+        # Experiment metadata.
+        self.experiment_id = saved_dict['experiment_id']
+        self._epoch[0] = saved_dict['epoch'][0]+1
+        self.model_as_str = saved_dict['model_as_str']
         
         return model, optimizer
 
     def _get_optimizer(self, name, params, lr=0., opt_kwargs=None, 
-                       weight_decay=0., state_dict=None):
+                       weight_decay=0.):
         kwargs = {'params'       : [p for p in params if p.requires_grad],
                   'lr'           : lr,
                   'weight_decay' : weight_decay}
@@ -219,10 +224,7 @@ class experiment(object):
         elif name=='sgd':
             optimizer = torch.optim.SGD(**kwargs)
         else:
-            raise NotImplemented("Optimizer {} not supported."
-                                "".format(args.optimizer))
-        if state_dict is not None:
-            optimizer.load_state_dict(state_dict)
+            raise ValueError("Optimizer {} not supported.".format(name))
         return optimizer
     
     def _load_and_merge_args(self, parser):

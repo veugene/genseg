@@ -62,8 +62,7 @@ def get_parser():
     parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument('--learning_rate', type=json.loads, default=0.001)
     parser.add_argument('--opt_kwargs', type=json.loads, default=None)
-    parser.add_argument('--optimizer', type=str, default='amsgrad',
-                        choices=['adam', 'amsgrad', 'rmsprop', 'sgd'])
+    parser.add_argument('--optimizer', type=str, default='amsgrad')
     parser.add_argument('--n_vis', type=int, default=20)
     parser.add_argument('--cpu', default=False, action='store_true')
     parser.add_argument('--nb_io_workers', type=int, default=1)
