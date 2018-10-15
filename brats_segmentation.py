@@ -275,7 +275,7 @@ if __name__ == '__main__':
                 if k.startswith('out_') and v is not None:
                     k_new = k.replace('out_','')
                     v_new = v.cpu().numpy()
-                    if k_new in ['M', 'seg']:
+                    if k_new in ['M', 'AM']:
                         v_new = np.squeeze(v_new, 1)    # Single channel seg.
                     else:
                         v_new = v_new[:,channel]        # 4 sequences per img.

@@ -326,16 +326,18 @@ class segmentation_model(nn.Module):
             ('l_seg',           _reduce([loss_seg])),
             ('l_gradnorm_G',    gradnorm_G),
             ('l_gradnorm_D',    gradnorm_D),
-            ('out_seg',         x_AM),
+            ('out_M',           mask),
+            ('out_AM',          x_AM),
+            ('out_A',           x_A),
             ('out_AB',          x_AB),
             ('out_AB_res',      x_AB_residual),
+            ('out_AA',          x_AA),
+            ('out_B',           x_B),
             ('out_BA',          x_BA),
             ('out_BA_res',      x_BA_residual),
+            ('out_BB',          x_BB),
             ('out_cross',       x_cross),
             ('out_cross_res',   x_cross_residual),
             ('out_cross_A',     x_cross_A),
-            ('out_cross_A_res', x_cross_A_residual),
-            ('out_AA',          x_AA),
-            ('out_BB',          x_BB),
-            ('mask',          mask)))
+            ('out_cross_A_res', x_cross_A_residual)))
         return outputs
