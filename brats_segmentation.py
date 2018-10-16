@@ -84,6 +84,7 @@ if __name__ == '__main__':
     # Data augmentation settings.
     da_kwargs = {'rotation_range': 3.,
                  'zoom_range': 0.1,
+                 'intensity_shift_range': 0.1,
                  'horizontal_flip': True,
                  'vertical_flip': True,
                  'fill_mode': 'reflect',
@@ -127,24 +128,6 @@ if __name__ == '__main__':
                                    nb_io_workers=args.nb_io_workers,
                                    nb_proc_workers=args.nb_proc_workers,
                                    rng=np.random.RandomState(args.rseed))}
-    
-    # Data preprocessing (including data augmentation).
-    def preprocessor(warp=False):
-        def f(batch):
-            h, s, m, _ = zip(*batch[0])
-            h = np.expand_dims(h, 1)
-            s = np.expand_dims(s, 1)
-            m = [np.expand_dims(x, 0) if x is not None else None for x in m]
-            if warp:
-                for i, (h_, s_, m_) in enumerate(zip(h, s, m)):
-                    h_  = image_random_transform(h_, **da_kwargs)
-                    sm_ = image_random_transform(s_, m_, **da_kwargs)
-                    if m_ is None:
-                        sm_ = (sm_, None)
-                    h[i]       = h_
-                    s[i], m[i] = sm_
-            return h, s, m
-        return f
     
     # Function to convert data to pytorch usable form.
     def prepare_batch(batch):
