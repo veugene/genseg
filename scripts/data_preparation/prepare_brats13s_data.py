@@ -60,7 +60,6 @@ def normalize_data(data):
     for key in data.keys():
         out = data[key].copy().astype(np.float32)
         mask = out!=0
-        out -= out.mean()
         out[mask] -= out[mask].mean()
         out[mask] /= out[mask].std()*5
         data[key] = out
