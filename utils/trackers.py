@@ -115,17 +115,19 @@ class summary_tracker(object):
         self._output_transform = []
         self._epoch = []
     
-    def _iteration_completed(self, engine, prefix, idx, metric_keys=None):
+    def _iteration_completed(self, engine, prefix, idx):
         output = self._output_transform[idx](engine.state.output)
-        if hasattr(engine.state, 'metrics'):
-            metrics = OrderedDict([(key, engine.state.metrics[key])
-                                    for key in metric_keys])
-            for key in metrics.keys():
-                metrics[key] = (metrics[key], 1) # Assume count is 1 for each.
-            output.update(metrics)
         self._update(output, prefix, idx)
     
-    def _epoch_completed(self, engine, idx):
+    def _epoch_completed(self, engine, prefix, idx, metric_keys=None):
+        if hasattr(engine.state, 'metrics'):
+            # Collect metrics stored in engine state.
+            # (Assuming these are already accumulated over an epoch.)
+            for key in metric_keys:
+                key_ = key
+                if prefix is not None:
+                    key_ = "{}_{}".format(prefix, key)
+                self._metric_value_dict[idx][key_] = engine.state.metrics[key]
         self._write(self._epoch[idx], idx)
         self._epoch[idx] += 1
     
@@ -224,7 +226,8 @@ class summary_tracker(object):
             of the form: `(key, (tensor, n_items))`. Stats accumulated for
             each tensor, assuming that it corresponds to `n_items` elements.
         metric_keys : A list of keys (string) for metrics in `engine.metrics`
-            to log.
+            to log. Assumed that the metrics stored in the engine state are
+            already accumulated over an epoch.
         '''
         idx = len(self._output_transform)
         self._metric_value_dict.append(OrderedDict())
@@ -232,10 +235,10 @@ class summary_tracker(object):
         self._output_transform.append(output_transform)
         self._epoch.append(self.initial_epoch)
         engine.add_event_handler(Events.ITERATION_COMPLETED,
-                                 self._iteration_completed, prefix, idx,
-                                 metric_keys)
+                                 self._iteration_completed, prefix, idx)
         engine.add_event_handler(Events.EPOCH_COMPLETED,
-                                 self._epoch_completed, idx)
+                                 self._epoch_completed, prefix, idx,
+                                 metric_keys)
     
     def __del__(self):
         if self.summary_writer is not None:
@@ -291,7 +294,7 @@ class image_logger(object):
         
         # Digitize all images.
         images_digitized = []
-        for image_stack in images:
+        for k, image_stack in enumerate(images):
             image_stack_digitized = np.zeros_like(image_stack, dtype=np.uint8)
             for i, im in enumerate(image_stack):
                 a = im.min() if self.min_val is None else self.min_val
