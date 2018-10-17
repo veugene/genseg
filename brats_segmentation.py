@@ -32,6 +32,8 @@ from utils.data.brats import (prepare_data_brats13s,
                               preprocessor_brats)
 from model import configs
 from model.bidomain_segmentation import segmentation_model as model_gan
+from model.residual_bidomain_segmentation import segmentation_model as \
+    model_residual_gan
 from model.ae_segmentation import segmentation_model as model_ae
 
 import itertools
@@ -166,6 +168,14 @@ if __name__ == '__main__':
         outputs = experiment_state.model['G'].evaluate(A, B, M, indices,
                                          optimizer=experiment_state.optimizer)
         outputs = detach(outputs)
+        
+        # Drop images without labels, for visualization.
+        for key in filter(lambda x: x.startswith('out_'), outputs.keys()):
+            if outputs['out_M'] is None:
+                outputs[key] = None
+            elif outputs[key] is not None and key not in ['out_M', 'out_AM']:
+                outputs[key] = outputs[key][indices]
+        
         return outputs
     
     # Validation loop.
@@ -173,12 +183,10 @@ if __name__ == '__main__':
         for model in experiment_state.model.values():
             model.eval()
         B, A, M, indices = prepare_batch(batch)
-        outputs = OrderedDict(zip(['out_B', 'out_A', 'out_M'], [B, A, M]))
         with torch.no_grad():
-            _outputs = experiment_state.model['G'].evaluate(A, B, M, indices,
-                                                            rng=engine.rng)
-        _outputs = detach(_outputs)
-        outputs.update(_outputs)
+            outputs = experiment_state.model['G'].evaluate(A, B, M, indices,
+                                                           rng=engine.rng)
+        outputs = detach(outputs)
         return outputs
     
     # Get engines.
@@ -203,12 +211,12 @@ if __name__ == '__main__':
     for key in engines:
         metrics[key] = {}
         metrics[key]['dice'] = dice_loss(target_class=target_class,
-                        output_transform=lambda x: (x['out_seg'], x['mask']))
+                        output_transform=lambda x: (x['out_AM'], x['out_M']))
+        metrics[key]['rec']  = batchwise_loss_accumulator(
+                            output_transform=lambda x: x['l_rec'])
         if isinstance(experiment_state.model, model_ae):
             metrics[key]['loss'] = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_all'])
-            metrics[key]['rec']  = batchwise_loss_accumulator(
-                            output_transform=lambda x: x['l_rec'])
         if isinstance(experiment_state.model, model_gan):
             metrics[key]['G']    = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_G'])
@@ -220,6 +228,13 @@ if __name__ == '__main__':
                             output_transform=lambda x: x['l_mi_A'])
             metrics[key]['miBA'] = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_mi_BA'])
+        if isinstance(experiment_state.model, model_residual_gan):
+            metrics[key]['G']    = batchwise_loss_accumulator(
+                            output_transform=lambda x: x['l_G'])
+            metrics[key]['DA']   = batchwise_loss_accumulator(
+                            output_transform=lambda x: x['l_DA'])
+            metrics[key]['DB']   = batchwise_loss_accumulator(
+                            output_transform=lambda x: x['l_DB'])
         for name, m in metrics[key].items():
             m.attach(engines[key], name=name)
 
@@ -254,7 +269,7 @@ if __name__ == '__main__':
         def output_transform(output, channel=channel):
             transformed = OrderedDict()
             for k, v in output.items():
-                if k.startswith('out_') and v is not None:
+                if k.startswith('out_') and v is not None and v.dim()==4:
                     k_new = k.replace('out_','')
                     v_new = v.cpu().numpy()
                     if k_new in ['M', 'AM']:
@@ -263,16 +278,18 @@ if __name__ == '__main__':
                         v_new = v_new[:,channel]        # 4 sequences per img.
                     transformed[k_new] = v_new
             return transformed
-        save_image = image_logger(
-            initial_epoch=experiment_state.get_epoch(),
-            directory=os.path.join(experiment_state.experiment_path, "images"),
-            summary_tracker=tracker,
-            num_vis=args.n_vis,
-            suffix=sequence_name,
-            output_name=sequence_name,
-            output_transform=output_transform,
-            fontsize=40)
-        save_image.attach(engines['valid'])
+        for key in ['train', 'valid']:
+            save_image = image_logger(
+                initial_epoch=experiment_state.get_epoch(),
+                directory=os.path.join(experiment_state.experiment_path,
+                                    "images/{}".format(key)),
+                summary_tracker=tracker if key=='valid' else None,
+                num_vis=args.n_vis,
+                suffix=sequence_name,
+                output_name=sequence_name,
+                output_transform=output_transform,
+                fontsize=40)
+            save_image.attach(engines[key])
     
     '''
     Train.
