@@ -34,8 +34,8 @@ class segmentation_model(nn.Module):
     """
     Interface wrapper around the `DataParallel` parts of the model.
     """
-    def __init__(self, encoder, decoder, disc_A, disc_B, shape_sample,
-                 disc_cross=None, loss_rec=mae, loss_seg=None,
+    def __init__(self, encoder, decoder, segmenter, disc_A, disc_B,
+                 shape_sample, disc_cross=None, loss_rec=mae, loss_seg=None,
                  loss_gan='hinge', num_disc_updates=1, relativistic=False,
                  grad_penalty=None, disc_clip_norm=None, lambda_disc=1,
                  lambda_x_id=10, lambda_z_id=1, lambda_seg=1, lambda_cross=0,
@@ -55,6 +55,7 @@ class segmentation_model(nn.Module):
             'rng'               : rng if rng else np.random.RandomState(),
             'encoder'           : encoder,
             'decoder'           : decoder,
+            'segmenter'         : [segmenter],  # Separate params.
             'disc_A'            : disc_A,
             'disc_B'            : disc_B,
             'disc_C'            : disc_cross if disc_cross else disc_A,
@@ -253,6 +254,13 @@ class _forward(nn.Module):
                 z_BA, _ = self.encoder(z_BA_im)
             else:
                 z_BA    = z_BA_im
+            if z_BA.size(1)<s_B.size(1):
+                # When the sample at the bottleneck has fewer features (n) 
+                # than the code resulting from the encoder (N), concatenate 
+                # the first N-n features from the code to the n features in 
+                # the sample.
+                z_BA = torch.cat([s_B[:,:s_B.size(1)-z_BA.size(1)],
+                                  z_BA], dim=1)
             x_BA_residual = self.decoder(z_BA, skip_info=skip_B)
             x_AB_residual = self.decoder(s_A,  skip_info=skip_A)
             x_BA = x_B + x_BA_residual      # plus
@@ -272,7 +280,8 @@ class _forward(nn.Module):
         # Segment.
         x_AM = None
         if self.lambda_seg:
-            x_AM = self.decoder(s_A, skip_info=skip_A, out_idx=1)
+            z_AM, skip_AM = self.decoder(s_A, skip_info=skip_A)
+            x_AM = self.segmenter[0](z_AM, skip_info=skip_AM)
         
         # Reconstruct latent code.
         if self.lambda_z_id:
@@ -287,18 +296,32 @@ class _forward(nn.Module):
             x_cross_A_residual = self.decoder(s_cross, skip_info=skip_AB)
             x_cross_A = x_AB + x_cross_A_residual   # plus
         
+        # Don't display residuals if they have more channels than the images.
+        ch = x_A.size(1)
+        if x_AB_residual is not None and x_AB_residual.size(1)>ch:
+            x_AB_residual = None
+        if x_BA_residual is not None and x_BA_residual.size(1)>ch:
+            x_BA_residual = None
+        if x_cross_residual is not None and x_cross_residual.size(1)>ch:
+            x_cross_residual = None
+        if x_cross_A_residual is not None and x_cross_A_residual.size(1)>ch:
+            x_cross_A_residual = None
+        
         # Compile outputs and return.
         visible = OrderedDict((
             ('x_AM',               x_AM),
-            ('x_BB',               x_BB),
+            ('x_A',                x_A),
             ('x_AB',               x_AB),
             ('x_AB_residual',      x_AB_residual),
+            ('x_AA',               x_AA)
+            ('x_B',                x_B),
             ('x_BA',               x_BA),
             ('x_BA_residual',      x_BA_residual),
-            ('x_cross',            x_cross),
-            ('x_cross_residual',   x_cross_residual),
+            ('x_BB',               x_BB),
             ('x_cross_A',          x_cross_A),
             ('x_cross_A_residual', x_cross_A_residual),
+            ('x_cross',            x_cross),
+            ('x_cross_residual',   x_cross_residual)
             ))
         hidden = {
             's_BA'       : s_BA,
