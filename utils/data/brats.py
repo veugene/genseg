@@ -222,9 +222,11 @@ def preprocessor_brats(data_augmentation_kwargs=None,
         # Data augmentation.
         if data_augmentation_kwargs is not None:
             if h is not None:
-                h = image_random_transform(h, **data_augmentation_kwargs)
+                h = image_random_transform(h, **data_augmentation_kwargs,
+                                           n_warp_threads=1)
             if s is not None:
-                _ = image_random_transform(s, m, **data_augmentation_kwargs)
+                _ = image_random_transform(s, m, **data_augmentation_kwargs,
+                                           n_warp_threads=1)
             if m is not None:
                 assert s is not None
                 s, m = _
