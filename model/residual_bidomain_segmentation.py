@@ -85,7 +85,7 @@ class segmentation_model(nn.Module):
         kwargs_forward = dict([(key, val) for key, val in kwargs.items()
                                if key in keys_forward])
         self._forward = _forward(**kwargs_forward, **lambdas)
-        if torch.cuda.device_count()==1:
+        if torch.cuda.device_count()>1:
             self._forward = nn.DataParallel(self._forward, output_device=-1)
         
         # Module to compute discriminator losses on GPU.
@@ -94,7 +94,7 @@ class segmentation_model(nn.Module):
         kwargs_D = dict([(key, val) for key, val in kwargs.items()
                          if key in keys_D])
         self._loss_D =_loss_D(**kwargs_D, **lambdas)
-        if torch.cuda.device_count()==1:
+        if torch.cuda.device_count()>1:
             self._loss_D = nn.DataParallel(self._loss_D, output_device=-1)
         
         # Module to compute generator updates on GPU.
@@ -103,7 +103,7 @@ class segmentation_model(nn.Module):
         kwargs_G = dict([(key, val) for key, val in kwargs.items()
                          if key in keys_G])
         self._loss_G = _loss_G(**kwargs_G, **lambdas)
-        if torch.cuda.device_count()==1:
+        if torch.cuda.device_count()>1:
             self._loss_G = nn.DataParallel(self._loss_G, output_device=-1)
         
     def forward(self, x_A, x_B, mask=None, optimizer=None, disc=None,
