@@ -55,10 +55,6 @@ class segmentation_model(nn.Module):
             'rng'               : rng if rng else np.random.RandomState(),
             'encoder'           : encoder,
             'decoder'           : decoder,
-            'segmenter'         : segmenter,
-            'disc_A'            : disc_A,
-            'disc_B'            : disc_B,
-            'disc_C'            : disc_cross if disc_cross else disc_A,
             'shape_sample'      : shape_sample,
             'loss_rec'          : loss_rec,
             'loss_seg'          : loss_seg if loss_seg else dice_loss(),
@@ -75,9 +71,18 @@ class segmentation_model(nn.Module):
                                                 grad_penalty_fake=None,
                                                 grad_penalty_mean=0)
             }
+        self.separate_networks = {
+            'segmenter'         : segmenter,
+            'disc_A'            : disc_A,
+            'disc_B'            : disc_B,
+            'disc_C'            : disc_cross if disc_cross else disc_A,
+            }
         kwargs.update(lambdas)
         for key, val in kwargs.items():
             setattr(self, key, val)
+        # Separate networks not stored directly as attributes.
+        # -> Separate parameters, separate optimizers.
+        kwargs.update(self.separate_networks)
         
         # Module to compute all network outputs (except discriminator) on GPU.
         # Outputs are placed on CPU when there are multiple GPUs.
@@ -127,20 +132,23 @@ class segmentation_model(nn.Module):
                                              x_cross=visible['x_cross'])
                     loss_D = _reduce(sum(loss_disc.values()))
                 # Update discriminator.
+                disc_A = self.separate_networks['disc_A']
+                disc_B = self.separate_networks['disc_B']
+                disc_C = self.separate_networks['disc_C']
                 if do_updates_bool:
                     optimizer['D'].zero_grad()
                     loss_D.mean().backward()
                     if self.disc_clip_norm:
-                        nn.utils.clip_grad_norm_(self.disc_A.parameters(),
+                        nn.utils.clip_grad_norm_(disc_A.parameters(),
                                                  max_norm=self.disc_clip_norm)
-                        nn.utils.clip_grad_norm_(self.disc_B.parameters(),
+                        nn.utils.clip_grad_norm_(disc_B.parameters(),
                                                  max_norm=self.disc_clip_norm)
-                        nn.utils.clip_grad_norm_(self.disc_C.parameters(),
+                        nn.utils.clip_grad_norm_(disc_C.parameters(),
                                                  max_norm=self.disc_clip_norm)
                     optimizer['D'].step()
-                    gradnorm_D = grad_norm(self.disc_A)+grad_norm(self.disc_B)
-                    if self.disc_C is not None:
-                        gradnorm_D = gradnorm_D+grad_norm(self.disc_C)
+                    gradnorm_D = grad_norm(disc_A)+grad_norm(disc_B)
+                    if disc_C is not None:
+                        gradnorm_D = gradnorm_D+grad_norm(disc_C)
         
         # Evaluate generator losses.
         gradnorm_G = 0
@@ -183,8 +191,10 @@ class segmentation_model(nn.Module):
         loss_G = losses_G['l_G']
         if do_updates_bool and isinstance(loss_G, torch.Tensor):
             optimizer['G'].zero_grad()
+            optimizer['S'].zero_grad()
             loss_G.mean().backward()
             optimizer['G'].step()
+            optimizer['S'].step()
             gradnorm_G = grad_norm(self)
         
         # Compile ouputs.
