@@ -120,8 +120,10 @@ if __name__ == '__main__':
     def prepare_batch(batch):
         s, h, m = batch
         # Prepare for pytorch.
+        s = Variable(torch.from_numpy(s))
         h = Variable(torch.from_numpy(h))
         if not args.cpu:
+            s = s.cuda()
             h = h.cuda()
         return s, h, m
     
