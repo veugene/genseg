@@ -12,13 +12,14 @@ def prepare_data_brats17(path_hgg, path_lgg,
                          orientations=None,
                          rng=None):
     # Random 20% data split.
-    validation_indices = {
-        'hgg': [0,  5,  6,  16,  33,  34,  41,  44,  48,  54,  60,  64,
-                65,  66,  69,  75,  88,  100,  101,  110,  119,  120,
-                125,  133,  143,  149,  151,  152,  158,  166,  169,
-                180,  182,  183,  184,  185,  189,  190,  198,  202,
-                203,  204],
-        'lgg': [0, 1, 4, 6, 14, 23, 24, 25, 38, 40, 41, 53, 54, 56, 59]}
+    rnd_state = np.random.RandomState(0)
+    hgg_indices = np.arange(0, 210)
+    lgg_indices = np.arange(0, 75)
+    rnd_state.shuffle(hgg_indices)
+    rnd_state.shuffle(lgg_indices)
+    hgg_val = hgg_indices[0:int(0.2*210)]
+    lgg_val = lgg_indices[0:int(0.2*75)]
+    validation_indices = {'hgg': hgg_val, 'lgg': lgg_val}
     return _prepare_data_brats(path_hgg, path_lgg,
                                masked_fraction=masked_fraction,
                                validation_indices=validation_indices,
@@ -47,17 +48,15 @@ def prepare_data_brats13s(path_hgg, path_lgg,
 
 def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
                         masked_fraction=0, drop_masked=False,
-                        orientations=None,
-                        rng=None):
+                        orientations=None, rng=None):
     """
     Convenience function to prepare brats data as multi_source_array objects,
     split into training and validation subsets.
     
     path_hgg (string) : Path of the h5py file containing the HGG data.
     path_lgg (string) : Path of the h5py file containing the LGG data.
-    masked_fraction (float) : The fraction in [0, 1.] of volumes for which 
-        to return segmentation masks as None.
-        in the training set to return as None.
+    masked_fraction (float) : The fraction in [0, 1.] of volumes in the 
+        training set for which  to return segmentation masks as None
     drop_masked (bool) : Whether to omit volumes with "masked" segmentations.
     orientations (list) : A list of integers in {1, 2, 3}, specifying the
         axes along which to slice image volumes.
@@ -69,6 +68,8 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
     
     if orientations is None:
         orientations = [1,2,3]
+    elif not hasattr(orientations, '__len__'):
+        orientations = [orientations]
     if rng is None:
         rng = np.random.RandomState()
     if masked_fraction < 0 or masked_fraction > 1:
@@ -214,16 +215,18 @@ def preprocessor_brats(data_augmentation_kwargs=None,
             index_slices = [slice(None, None),
                             slice(offset[0], offset[0]+im_shape[0]),
                             slice(offset[1], offset[1]+im_shape[1])]
-            elem_im[index_slices] = im[...]
+            elem_im[tuple(index_slices)] = im[...]
             elem.append(elem_im)
         h, s, m = elem
         
         # Data augmentation.
         if data_augmentation_kwargs is not None:
             if h is not None:
-                h = image_random_transform(h, **data_augmentation_kwargs)
+                h = image_random_transform(h, **data_augmentation_kwargs,
+                                           n_warp_threads=1)
             if s is not None:
-                _ = image_random_transform(s, m, **data_augmentation_kwargs)
+                _ = image_random_transform(s, m, **data_augmentation_kwargs,
+                                           n_warp_threads=1)
             if m is not None:
                 assert s is not None
                 s, m = _
@@ -244,7 +247,7 @@ def preprocessor_brats(data_augmentation_kwargs=None,
             if im is None:
                 hs.append(None)
                 continue
-            im = np.clip(im, -2., 2.)
+            im = np.clip(im, -1., 1.)
             hs.append(im)
         h, s = hs
         

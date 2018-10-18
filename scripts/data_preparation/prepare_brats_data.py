@@ -99,6 +99,7 @@ def get_slices(volume, segmentation, axis):
     indices_anomaly = np.unique(np.where(segmentation)[axis])
     indices_anomaly_slice = [slice(None, None)]*4
     indices_anomaly_slice[axis] = indices_anomaly
+    indices_anomaly_slice = tuple(indices_anomaly_slice)
     slices_dict['sick'] = volume[indices_anomaly_slice].transpose(order)
     slices_dict['segmentation'] = \
         segmentation[indices_anomaly_slice].transpose(order)
@@ -126,13 +127,12 @@ def preprocess(volume, segmentation, skip_bias_correction=False):
             out = sitk.GetArrayFromImage(out_sitk)
         else:
             out = vol.copy()
-        
-        # Mean center and normalize by std.
-        out_nonzero_view = out[out>0]
-        out -= out_nonzero_view.mean()
-        out /= out_nonzero_view.std()
-        
         volume_out[i] = out
+        
+    # Mean center and normalize by std.
+    mask = out!=0
+    volume_out[mask] -= volume_out[mask].mean()
+    volume_out[mask] /= volume_out[mask].std()*5
         
     return volume_out
 

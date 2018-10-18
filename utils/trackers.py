@@ -3,7 +3,7 @@ from collections import (defaultdict,
 import os
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 import tensorboardX as tb
 import torch
 from tqdm import tqdm
@@ -115,15 +115,19 @@ class summary_tracker(object):
         self._output_transform = []
         self._epoch = []
     
-    def _iteration_completed(self, engine, prefix, idx, metric_keys=None):
+    def _iteration_completed(self, engine, prefix, idx):
         output = self._output_transform[idx](engine.state.output)
-        if hasattr(engine, 'metrics'):
-            metrics = OrderedDict([(key, engine.metrics[key])
-                                    for key in metric_keys])
-            output.update(metrics)
         self._update(output, prefix, idx)
     
-    def _epoch_completed(self, engine, idx):
+    def _epoch_completed(self, engine, prefix, idx, metric_keys=None):
+        if hasattr(engine.state, 'metrics'):
+            # Collect metrics stored in engine state.
+            # (Assuming these are already accumulated over an epoch.)
+            for key in metric_keys:
+                key_ = key
+                if prefix is not None:
+                    key_ = "{}_{}".format(prefix, key)
+                self._metric_value_dict[idx][key_] = engine.state.metrics[key]
         self._write(self._epoch[idx], idx)
         self._epoch[idx] += 1
     
@@ -222,7 +226,8 @@ class summary_tracker(object):
             of the form: `(key, (tensor, n_items))`. Stats accumulated for
             each tensor, assuming that it corresponds to `n_items` elements.
         metric_keys : A list of keys (string) for metrics in `engine.metrics`
-            to log.
+            to log. Assumed that the metrics stored in the engine state are
+            already accumulated over an epoch.
         '''
         idx = len(self._output_transform)
         self._metric_value_dict.append(OrderedDict())
@@ -230,10 +235,10 @@ class summary_tracker(object):
         self._output_transform.append(output_transform)
         self._epoch.append(self.initial_epoch)
         engine.add_event_handler(Events.ITERATION_COMPLETED,
-                                 self._iteration_completed, prefix, idx,
-                                 metric_keys)
+                                 self._iteration_completed, prefix, idx)
         engine.add_event_handler(Events.EPOCH_COMPLETED,
-                                 self._epoch_completed, idx)
+                                 self._epoch_completed, prefix, idx,
+                                 metric_keys)
     
     def __del__(self):
         if self.summary_writer is not None:
@@ -241,44 +246,93 @@ class summary_tracker(object):
             self.summary_writer = None
 
 
-class image_logger(Metric):
+class image_logger(object):
     """
     Expects `output` as a dictionary or list of image lists.
     """
-    def __init__(self, num_vis, output_transform=lambda x:x, initial_epoch=0,
-                 directory=None, summary_tracker=None, prefix=None,
-                 min_val=None, max_val=None):
-        super(image_logger, self).__init__(output_transform)
+    def __init__(self, num_vis=None, output_transform=lambda x:x,
+                 initial_epoch=0, directory=None, summary_tracker=None,
+                 suffix=None, min_val=None, max_val=None,
+                 output_name='outputs',
+                 fontname="LiberationSans-Regular.ttf", fontsize=24,
+                 rng=None):
         self.num_vis = num_vis
         self.directory = directory
         self.summary_tracker = summary_tracker
-        self.prefix = prefix
+        self.suffix = suffix
         self.min_val = min_val
         self.max_val = max_val
+        self.output_name = output_name
+        self.fontname = fontname
+        self.fontsize = fontsize
+        self.rng = rng if rng else np.random.RandomState()
+        self._output_transform = output_transform
         self._epoch = initial_epoch
     
     def reset(self):
         self._labels = None
         self._images = []
+        self._num_seen = 0
+        self._num_collected = 0
     
-    def update(self, output):
+    def _collect(self, engine):
+        output = self._output_transform(engine.state.output)
+        if len(output)==0:
+            return
         if isinstance(output, dict):
             labels, images = zip(*output.items())
         else:
             labels, images = None, output
-        self._labels = labels
-        if len(self._images) < len(images):
+        num_images = len(images[0])
+        for stack in images:
+            assert len(stack)==num_images
+        self._num_seen += num_images
+        
+        # Collect up to `num_vis` images. In order to get a random sample
+        # of `num_vis` images from across all batches collected through
+        # `_collect`, a fraction of the stored images is replaced with a new
+        # sample with each call to `_collect`. For the n'th call, 
+        # b_n/(b_0+...+b_n) of the images are re-sampled, where b_i is the
+        # number of images in batch i.
+        #
+        # Init.
+        if len(self._images)==0:
             self._images = [[] for _ in images]
-        for i, stack in enumerate(images):
-            self._images[i].extend(stack)    
+        self._labels = labels
+        # If collected less than `num_vis`, fill up.
+        num_sample = self.num_vis-self._num_collected
+        num_sample = min(num_sample, num_images)
+        if self._num_collected < self.num_vis:
+            indices_sample = self.rng.choice(num_images, size=num_sample,
+                                             replace=False)
+            for i, stack in enumerate(images):
+                self._images[i].extend(stack[indices_sample])
+            self._num_collected += num_sample
+        # If collected more than `num_vis`, resample.
+        num_resample = ( self.num_vis*(num_images-num_sample)
+                        /float(self._num_seen))
+        num_resample = max(num_resample, 0)
+        round_up = self.rng.rand() < num_resample-int(num_resample)
+        num_resample = int(num_resample)+int(round_up) # Probabilistic round.
+        if self._num_collected >= self.num_vis:
+            indices_resample = self.rng.choice(num_images, size=num_resample,
+                                               replace=False)
+            indices_drop     = self.rng.choice(self.num_vis, size=num_resample,
+                                               replace=False)
+            for i, stack in enumerate(images):
+                for j, k in zip(indices_drop, indices_resample):
+                    self._images[i][j] = stack[k]
     
-    def compute(self):
+    def _process(self):
         # Select a subset of images.
-        images = [stack[:self.num_vis] for stack in self._images]
+        if self.num_vis is not None:
+            images = [stack[:self.num_vis] for stack in self._images]
+        else:
+            images = self._images
         
         # Digitize all images.
         images_digitized = []
-        for image_stack in images:
+        for k, image_stack in enumerate(images):
             image_stack_digitized = np.zeros_like(image_stack, dtype=np.uint8)
             for i, im in enumerate(image_stack):
                 a = im.min() if self.min_val is None else self.min_val
@@ -296,7 +350,9 @@ class image_logger(Metric):
             if self._labels is not None:
                 arr_pil = Image.fromarray(arr, mode='L')
                 draw = ImageDraw.Draw(arr_pil)
-                draw.text((0, 0), self._labels[i], fill=255)
+                draw.text((0, 0), self._labels[i], fill=255,
+                          font=ImageFont.truetype(self.fontname,
+                                                  self.fontsize))
                 arr = np.array(arr_pil)
             image_rows.append(arr)
         
@@ -306,7 +362,7 @@ class image_logger(Metric):
         # Log to tensorboard.
         if self.summary_tracker is not None:
             self.summary_tracker.summary_writer.add_image(
-                'outputs',
+                self.output_name,
                 final_image,
                 global_step=self._epoch)
             self.summary_tracker.summary_writer.file_writer.flush()
@@ -315,12 +371,17 @@ class image_logger(Metric):
         if self.directory is not None:
             if not os.path.exists(self.directory):
                 os.makedirs(self.directory)
-            _prefix = "_{}".format(self.prefix) if self.prefix else ""
-            fn = str(self._epoch)+_prefix+".jpg"
+            _suffix = "_{}".format(self.suffix) if self.suffix else ""
+            fn = str(self._epoch)+_suffix+".jpg"
             final_image_pil = Image.fromarray(final_image, mode='L')
             final_image_pil.save(os.path.join(self.directory, fn))
             
-        # Update epoch count.
+        # Update epoch count and clear memory.
         self._epoch += 1
+        self.reset()
         
-        return final_image
+    def attach(self, engine):
+        engine.add_event_handler(Events.EPOCH_STARTED, lambda _: self.reset())
+        engine.add_event_handler(Events.ITERATION_COMPLETED, self._collect)
+        engine.add_event_handler(Events.EPOCH_COMPLETED,
+                                 lambda _: self._process())
