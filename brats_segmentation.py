@@ -133,24 +133,14 @@ if __name__ == '__main__':
     
     # Function to convert data to pytorch usable form.
     def prepare_batch(batch):
-        h, s, m = batch
-        # Identify indices of examples with masks.
-        indices = [i for i, mask in enumerate(m) if mask is not None]
-        m       = [m[i] for i in indices]
-        # Remove all but the classes of interest (for visualization).
-        m = np.array(m)
-        m_filtered = np.zeros_like(m)
-        for i in target_class:
-            m_filtered[m==i] = i
+        s, h, m = batch
         # Prepare for pytorch.
-        h = Variable(torch.from_numpy(np.array(h)))
         s = Variable(torch.from_numpy(np.array(s)))
-        m = Variable(torch.from_numpy(m_filtered))
+        h = Variable(torch.from_numpy(np.array(h)))
         if not args.cpu:
-            h = h.cuda()
             s = s.cuda()
-            m = m.cuda()
-        return h, s, m, indices
+            h = h.cuda()
+        return s, h, m
     
     # Helper for training/validation loops : detach variables from graph.
     def detach(x):
@@ -164,16 +154,17 @@ if __name__ == '__main__':
     def training_function(engine, batch):
         for model in experiment_state.model.values():
             model.train()
-        B, A, M, indices = prepare_batch(batch)
-        outputs = experiment_state.model['G'].evaluate(A, B, M, indices,
+        B, A, M = prepare_batch(batch)
+        outputs = experiment_state.model['G'](A, B, M,
                                          optimizer=experiment_state.optimizer)
         outputs = detach(outputs)
         
         # Drop images without labels, for visualization.
-        for key in filter(lambda x: x.startswith('out_'), outputs.keys()):
-            if outputs['out_M'] is None:
+        indices = [i for i, m in enumerate(M) if m is not None]
+        for key in filter(lambda x: x.startswith('x_'), outputs.keys()):
+            if outputs['x_M'] is None:
                 outputs[key] = None
-            elif outputs[key] is not None and key not in ['out_M', 'out_AM']:
+            elif outputs[key] is not None and key not in ['x_M', 'x_AM']:
                 outputs[key] = outputs[key][indices]
         
         return outputs
@@ -182,10 +173,9 @@ if __name__ == '__main__':
     def validation_function(engine, batch):
         for model in experiment_state.model.values():
             model.eval()
-        B, A, M, indices = prepare_batch(batch)
+        B, A, M = prepare_batch(batch)
         with torch.no_grad():
-            outputs = experiment_state.model['G'].evaluate(A, B, M, indices,
-                                                           rng=engine.rng)
+            outputs = experiment_state.model['G'](A, B, M, rng=engine.rng)
         outputs = detach(outputs)
         return outputs
     
@@ -211,7 +201,7 @@ if __name__ == '__main__':
     for key in engines:
         metrics[key] = {}
         metrics[key]['dice'] = dice_loss(target_class=target_class,
-                        output_transform=lambda x: (x['out_AM'], x['out_M']))
+                        output_transform=lambda x: (x['x_AM'], x['x_M']))
         metrics[key]['rec']  = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_rec'])
         if isinstance(experiment_state.model, model_ae):
@@ -269,8 +259,8 @@ if __name__ == '__main__':
         def output_transform(output, channel=channel):
             transformed = OrderedDict()
             for k, v in output.items():
-                if k.startswith('out_') and v is not None and v.dim()==4:
-                    k_new = k.replace('out_','')
+                if k.startswith('x_') and v is not None and v.dim()==4:
+                    k_new = k.replace('x_','')
                     v_new = v.cpu().numpy()
                     if k_new in ['M', 'AM']:
                         v_new = np.squeeze(v_new, 1)    # Single channel seg.
