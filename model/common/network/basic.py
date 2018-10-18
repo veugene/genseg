@@ -1,17 +1,19 @@
 import torch
 from torch import nn
 import numpy as np
-from fcn_maker.blocks import (get_nonlinearity,
-                              get_initializer,
-                              do_upsample,
+from fcn_maker.blocks import (adjust_to_size,
                               convolution,
+                              do_upsample,
+                              get_nonlinearity,
+                              get_initializer,
                               block_abstract,
-                              identity_block,
                               basic_block,
-                              tiny_block,
                               dense_block,
+                              identity_block,
+                              norm_nlin_conv,
                               repeat_block,
-                              adjust_to_size)
+                              shortcut,
+                              tiny_block)
 
  
 def get_output_shape(layer, input_shape):
@@ -277,9 +279,9 @@ class encoder(nn.Module):
         last_channels = self.in_channels
         conv = convolution(in_channels=last_channels,
                            out_channels=self.num_channels_list[0],
-                           kernel_size=7,
+                           kernel_size=3,
                            stride=1,
-                           padding=3,
+                           padding=1,
                            padding_mode=self.padding_mode,
                            init=self.init)
         self.blocks.append(conv)
@@ -327,10 +329,10 @@ class encoder(nn.Module):
 
 class decoder(nn.Module):
     def __init__(self, input_shape, output_shape, num_conv_blocks, block_type,
-                 num_channels_list, output_transform=None, skip=True,
-                 dropout=0., normalization=layer_normalization,
-                 norm_kwargs=None, conv_padding=True, padding_mode='constant',
-                 kernel_size=3, upsample_mode='conv', init='kaiming_normal_',
+                 num_channels_list, num_classes=None, skip=True, dropout=0.,
+                 normalization=layer_normalization, norm_kwargs=None,
+                 conv_padding=True, padding_mode='constant', kernel_size=3,
+                 upsample_mode='conv', init='kaiming_normal_',
                  nonlinearity='ReLU', long_skip_merge_mode=None, ndim=2):
         super(decoder, self).__init__()
         
@@ -348,9 +350,7 @@ class decoder(nn.Module):
         self.num_conv_blocks = num_conv_blocks
         self.block_type = block_type
         self.num_channels_list = num_channels_list
-        self.output_transform = output_transform
-        if not hasattr(output_transform, '__len__'):
-            self.output_transform = [output_transform]
+        self.num_classes = num_classes
         self.skip = skip
         self.dropout = dropout
         self.normalization = normalization
@@ -425,40 +425,24 @@ class decoder(nn.Module):
         '''
         Final output - change number of channels.
         '''
-        self.out_nlin = nn.ModuleList()
-        self.out_norm = nn.ModuleList()
-        self.out_conv = nn.ModuleList()
-        for _ in self.output_transform:
-            if normalization is not None:
-                out_norm = normalization(num_features=last_channels,
-                                         **self.norm_kwargs)
-            out_nlin = get_nonlinearity(self.nonlinearity)
-            out_conv = convolution(in_channels=last_channels,
-                                   out_channels=self.output_shape[0],
-                                   kernel_size=7,
-                                   stride=1,
-                                   padding=3,
-                                   padding_mode=self.padding_mode,
-                                   init=self.init)
-            self.out_norm.append(out_norm)
-            self.out_nlin.append(out_nlin)
-            self.out_conv.append(out_conv)
+        out_kwargs = {'normalization': self.normalization,
+                      'norm_kwargs': self.norm_kwargs,
+                      'nonlinearity': self.nonlinearity,
+                      'padding_mode': self.padding_mode}
+        self.out_conv = norm_nlin_conv(in_channels=last_channels,
+                                       out_channels=self.out_channels,
+                                       kernel_size=self.kernel_size,
+                                       init=self.init,
+                                       **out_kwargs)
         
-    def forward(self, x, skip_info=None, transform_index=0):
-        out = x
-        skip_info = skip_info[::-1]
+    def forward(self, z, skip_info=None):
+        out = z
+        out_skips = []
+        if skip_info is not None:
+            skip_info = skip_info[::-1]
         for n, block in enumerate(self.blocks):
-            shape_in  = self._shapes[n]
             shape_out = self._shapes[n+1]
-            spatial_shape_in = tuple(max(out.size(i+1),
-                                         shape_out[i]-shape_in[i])
-                                     for i in range(1, self.ndim+1))
-            if np.any(np.less_equal(spatial_shape_in, 0)):
-                spatial_shape_in = shape_in[1:]
-            out = adjust_to_size(out, spatial_shape_in)
-            
-            if not out.is_contiguous():
-                out = out.contiguous()
+            out_skips.append(out)
             out = block(out)
             out = adjust_to_size(out, shape_out[1:])
             if not out.is_contiguous():
@@ -476,26 +460,20 @@ class decoder(nn.Module):
                 else:
                     raise ValueError("Skip merge mode unrecognized \'{}\'."
                                      "".format(self.long_skip_merge_mode))
-        
-        out = self.out_norm[transform_index](out)
-        out = self.out_conv[transform_index](out)
-        out_func = self.output_transform[transform_index]
-        if out_func is not None:
-            out = out_func(out)
-        return out
-    
+        out = self.out_conv(out)
+        return out, out_skips
+
     
 class mlp(nn.Module):
     def __init__(self, n_layers, n_input, n_output, n_hidden=None,
-                 init='kaiming_normal_', output_transform=None):
+                 init='kaiming_normal_'):
         super(mlp, self).__init__()
         assert(n_layers > 0)
         self.n_layers = n_layers
         self.n_input  = n_input
         self.n_output = n_output
         self.n_hidden = n_hidden
-        self.output_transform = output_transform
-        # TODO: support `init` argument.
+        self.init = init
         if n_hidden is None:
             self.n_hidden = n_output
         layers = []
@@ -511,13 +489,116 @@ class mlp(nn.Module):
             if isinstance(layer, nn.Linear) and init is not None:
                 layer.weight.data = get_initializer(init)(layer.weight.data)
     def forward(self, x):
-        out = self.model(x)
-        if self.output_transform is not None:
-            out = self.output_transform(out)
+        return self.model(x)
+
+
+class munit_discriminator(nn.Module):
+    def __init__(self, input_dim, num_channels_list, num_scales=3,
+                 normalization=None, norm_kwargs=None, kernel_size=5,
+                 nonlinearity=lambda:nn.LeakyReLU(0.2, inplace=True),
+                 padding_mode='reflect', init='kaiming_normal_'):
+        super(munit_discriminator, self).__init__()
+        self.input_dim = input_dim
+        self.num_channels_list = num_channels_list
+        self.num_scales = num_scales
+        self.normalization = normalization
+        self.norm_kwargs = norm_kwargs
+        self.kernel_size = kernel_size
+        self.nonlinearity = nonlinearity
+        self.padding_mode = padding_mode
+        self.init = init
+        self.downsample = nn.AvgPool2d(3,
+                                       stride=2,
+                                       padding=[1, 1],
+                                       count_include_pad=False)
+        self.cnns = nn.ModuleList()
+        for _ in range(self.num_scales):
+            self.cnns.append(self._make_net())
+
+    def _make_net(self):
+        cnn = []
+        layer = convolution(in_channels=self.input_dim,
+                            out_channels=self.num_channels_list[0],
+                            kernel_size=self.kernel_size,
+                            stride=2,
+                            padding=(self.kernel_size-1)//2,
+                            padding_mode=self.padding_mode,
+                            init=self.init)
+        cnn.append(layer)
+        for i, (ch0, ch1) in enumerate(zip(self.num_channels_list[:-1],
+                                           self.num_channels_list[1:])):
+            normalization = self.normalization if i>0 else None
+            layer = norm_nlin_conv(in_channels=ch0,
+                                   out_channels=ch1,
+                                   kernel_size=self.kernel_size,
+                                   subsample=True,
+                                   conv_padding=True,
+                                   padding_mode=self.padding_mode,
+                                   init=self.init,
+                                   nonlinearity=self.nonlinearity,
+                                   normalization=normalization,
+                                   norm_kwargs=self.norm_kwargs)
+            cnn.append(layer)
+        layer = norm_nlin_conv(in_channels=self.num_channels_list[-1],
+                               out_channels=1,
+                               kernel_size=1,
+                               nonlinearity=self.nonlinearity,
+                               normalization=self.normalization,
+                               norm_kwargs=self.norm_kwargs)
+        cnn.append(layer)
+        cnn = nn.Sequential(*cnn)
+        return cnn
+
+    def forward(self, x):
+        outputs = []
+        for model in self.cnns:
+            outputs.append(model(x))
+            x = self.downsample(x)
+        return outputs
+
+
+"""
+Select 2D or 3D as argument (ndim) and initialize weights on creation.
+"""
+class convolution(torch.nn.Module):
+    def __init__(self, ndim=2, init=None, padding=None,
+                 padding_mode='constant', *args, **kwargs):
+        super(convolution, self).__init__()
+        if ndim==2:
+            conv = torch.nn.Conv2d
+        elif ndim==3:
+            conv = torch.nn.Conv3d
+        else:
+            ValueError("ndim must be 2 or 3")
+        self.ndim = ndim
+        self.init = init
+        self.padding = padding
+        self.padding_mode = padding_mode
+        self.op = conv(*args, **kwargs)
+        self.in_channels = self.op.in_channels
+        self.out_channels = self.op.out_channels
+        if init is not None:
+            self.op.weight.data = get_initializer(init)(self.op.weight.data)
+
+    def forward(self, input):
+        out = input
+        if self.padding is not None:
+            padding = self.padding
+            if not hasattr(padding, '__len__'):
+                padding = [self.padding]*self.ndim*2
+            padding_mode = self.padding_mode
+            size = out.size()[2:]
+            if np.any( np.greater_equal(padding[ ::2], size)
+                      +np.greater_equal(padding[1::2], size)):
+                # Padding size should be less than the corresponding input
+                # dimension. Else, use constant.
+                padding_mode = 'constant'
+            out = F.pad(out, pad=padding, mode=padding_mode, value=0)
+        out = self.op(out)
         return out
 
 
-class conv_block(block_abstract):
+class conv_block(_conv_block):
     """
     A single basic 3x3 convolution.
     Unlike in tiny_block, stride instead of maxpool and upsample before conv.
@@ -527,7 +608,7 @@ class conv_block(block_abstract):
                  normalization=batch_normalization, norm_kwargs=None,
                  conv_padding=True, padding_mode='constant', kernel_size=3,
                  init='kaiming_normal_', nonlinearity='ReLU', ndim=2):
-        super(conv_block, self).__init__(in_channels, num_filters,
+        super(_conv_block, self).__init__(in_channels, num_filters,
                                          subsample, upsample)
         if norm_kwargs is None:
             norm_kwargs = {}
@@ -581,7 +662,7 @@ class conv_block(block_abstract):
                                 padding_mode=padding_mode)]
         if dropout > 0:
             self.op += [get_dropout(dropout, nonlin=nonlinearity)]
-        self.op = nn.ModuleList(self.op)
+        self._register_modules(self.op)
         self.op_shortcut = None
         if skip:
             self.op_shortcut = shortcut(in_channels=in_channels,
@@ -591,6 +672,7 @@ class conv_block(block_abstract):
                                         upsample_mode=upsample_mode,
                                         init=init,
                                         ndim=ndim)
+            self._register_modules({'shortcut': self.op_shortcut})
 
     def forward(self, input):
         out = input
