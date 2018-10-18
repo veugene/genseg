@@ -101,29 +101,27 @@ if __name__ == '__main__':
     # Data preprocessing (including data augmentation).
     def preprocessor(warp=False):
         def f(batch):
-            s, h, m, _ = zip(*batch[0])
-            s = np.expand_dims(s, 1)
+            h, s, m, _ = zip(*batch[0])
             h = np.expand_dims(h, 1)
+            s = np.expand_dims(s, 1)
             m = [np.expand_dims(x, 0) if x is not None else None for x in m]
             if warp:
-                for i, (s_, h_, m_) in enumerate(zip(s, h, m)):
-                    sm_ = image_random_transform(s_, m_, **da_kwargs)
+                for i, (h_, s_, m_) in enumerate(zip(h, s, m)):
                     h_  = image_random_transform(h_, **da_kwargs)
+                    sm_ = image_random_transform(s_, m_, **da_kwargs)
                     if m_ is None:
                         sm_ = (sm_, None)
-                    s[i], m[i] = sm_
                     h[i]       = h_
-            return s, h, m
+                    s[i], m[i] = sm_
+            return h, s, m
         return f
     
     # Function to convert data to pytorch usable form.
     def prepare_batch(batch):
         s, h, m = batch
         # Prepare for pytorch.
-        s = Variable(torch.from_numpy(s))
         h = Variable(torch.from_numpy(h))
         if not args.cpu:
-            s = s.cuda()
             h = h.cuda()
         return s, h, m
     
@@ -264,7 +262,8 @@ if __name__ == '__main__':
             output_transform=lambda x: dict([(k, _tuple(v))
                                              for k, v in x.items()
                                              if k.startswith('l_')
-                                             or k.startswith('prob')]))
+                                             or k.startswith('prob')]),
+            metric_keys=['dice'])
     
     # Set up image logging to tensorboard.
     def _p(val): return np.squeeze(val.cpu().numpy(), 1)

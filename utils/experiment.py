@@ -6,6 +6,7 @@ import sys
 from natsort import natsorted
 import torch
 import numpy as np
+import json
 from ignite.engine import (Engine,
                            Events)
 from ignite.handlers import ModelCheckpoint
@@ -23,12 +24,14 @@ class experiment(object):
     def __init__(self, name, parser):
         self.name = name
         
-        # Set up args, model, and optimizers.
+        # Set up model, and optimizers.
         args = parser.parse_args()
         self._epoch = [0]
         if args.resume_from is None:
-            model, optimizer = self._init_state(model_from=args.model_from,
+            model, optimizer = self._init_state(
+                                     model_from=args.model_from,
                                      optimizer_name=args.optimizer,
+                                     cpu=args.cpu,
                                      learning_rate=args.learning_rate,
                                      opt_kwargs=args.opt_kwargs,
                                      weight_decay=args.weight_decay)
@@ -44,27 +47,35 @@ class experiment(object):
                                     and fn.endswith('.pth')])[-1]
             state_from = os.path.join(args.resume_from, state_file)
             print("Resuming from {}.".format(state_from))
-            model, optimizer = self._load_state(load_from=state_from,
-                                     optimizer_name=args.optimizer)
+            model, optimizer = self._init_state(
+                                     model_from=state_from,
+                                     optimizer_name=args.optimizer,
+                                     cpu=args.cpu,
+                                     learning_rate=args.learning_rate,
+                                     opt_kwargs=args.opt_kwargs,
+                                     weight_decay=args.weight_decay)
+            model, optimizer = self._load_state(
+                                     load_from=state_from,
+                                     model=model,
+                                     optimizer=optimizer)
             self.experiment_path = args.resume_from
         self.args = args
         self.model = model
         self.optimizer = optimizer
-        if not args.cpu:
-            for model in self.model.values():
-                model.cuda()
         print("Number of parameters\n"+
               "\n".join([" {} : {}".format(key, count_params(self.model[key]))
                          for key in self.model.keys()]))
-        
+    
+    def get_model_save_dict(self):
         # For checkpoints.
-        self.model_save_dict = {'dict': {'epoch'        : self._epoch,
-                                         'experiment_id': self.experiment_id,
-                                         'model_as_str' : self.model_as_str}}
+        model_save_dict = {'dict': {'epoch'        : self._epoch,
+                                    'experiment_id': self.experiment_id,
+                                    'model_as_str' : self.model_as_str}}
         for key in self.model.keys():
-            self.model_save_dict['dict'][key] = {
+            model_save_dict['dict'][key] = {
                 'model_state'    : self.model[key].state_dict(),
                 'optimizer_state': self.optimizer[key].state_dict()}
+        return model_save_dict
     
     def setup_engine(self, function,
                      append=False, prefix=None, epoch_length=None):
@@ -80,8 +91,9 @@ class experiment(object):
     
     def setup_checkpoints(self, trainer, evaluator=None,
                           score_function=None, n_saved=2):
+        # Checkpoint for best model performance.
+        checkpoint_best_handler = None
         if evaluator is not None:
-            # Checkpoint for best model performance.
             checkpoint_best_handler = ModelCheckpoint(
                                         dirname=self.experiment_path,
                                         filename_prefix='best_state',
@@ -90,9 +102,6 @@ class experiment(object):
                                         atomic=True,
                                         create_dir=True,
                                         require_empty=False)
-            evaluator.add_event_handler(Events.EPOCH_COMPLETED,
-                                        checkpoint_best_handler,
-                                        self.model_save_dict)
             checkpoint_best_handler._iteration = self._epoch[0]
         
         # Checkpoint at every epoch and increment epoch in
@@ -105,13 +114,16 @@ class experiment(object):
                                     atomic=True,
                                     create_dir=True,
                                     require_empty=False)
-        def _on_epoch_completed(engine, model_save_dict):
-            checkpoint_last_handler(engine, model_save_dict)
-            self._increment_epoch(engine)
-        trainer.add_event_handler(Events.EPOCH_COMPLETED,
-                                  _on_epoch_completed,
-                                  self.model_save_dict)
         checkpoint_last_handler._iteration = self._epoch[0]
+        
+        # Function to update state dicts, call checkpoint handlers, and
+        # increment epoch count.
+        def checkpoint_handler(engine):
+            model_save_dict = self.get_model_save_dict()
+            checkpoint_last_handler(engine, model_save_dict)
+            checkpoint_best_handler(engine, model_save_dict)
+            self._increment_epoch(engine)
+        trainer.add_event_handler(Events.EPOCH_COMPLETED, checkpoint_handler)
         
         # Setup initial epoch in the training engine.
         trainer.add_event_handler(Events.STARTED,
@@ -125,37 +137,8 @@ class experiment(object):
     def _increment_epoch(self, engine):
         self._epoch[0] += 1
         engine.epoch = self._epoch
-        
-    def _load_state(self, load_from, optimizer_name):
-        '''
-        Restore the model, its state, and the optimizer's state.
-        '''
-        saved_dict = torch.load(load_from)
-        
-        # Build model according to saved code.
-        module = imp.new_module('module')
-        exec(saved_dict['model_as_str'], module.__dict__)
-        model = getattr(module, 'build_model')()
-        if not isinstance(model, dict):
-            model = {'model': model}
-
-        # Load model and optimizer state.
-        optimizer = {}
-        for key in model.keys():
-            model[key].load_state_dict(saved_dict[key]['model_state'])
-            optimizer[key] = self._get_optimizer(
-                               name=optimizer_name,
-                               params=model[key].parameters(),
-                               state_dict=saved_dict[key]['optimizer_state'])
-        
-        # Experiment metadata.
-        self.experiment_id = saved_dict['experiment_id']
-        self._epoch[0] = saved_dict['epoch'][0]+1
-        self.model_as_str = saved_dict['model_as_str']
-        
-        return model, optimizer
     
-    def _init_state(self, model_from, optimizer_name,
+    def _init_state(self, model_from, optimizer_name, cpu=False,
                     learning_rate=0., opt_kwargs=None, weight_decay=0.):
         '''
         Initialize the model, its state, and the optimizer's state.
@@ -178,22 +161,51 @@ class experiment(object):
         if not isinstance(model, dict):
             model = {'model': model}
         
+        # If optimizer_name is in JSON format, convert string to dict.
+        try:
+            optimizer_name = json.loads(optimizer_name)
+        except ValueError:
+            # Not in JSON format; keep as a string.
+            optimizer_name = optimizer_name
+        
         # Setup the optimizer.
         optimizer = {}
         for key in model.keys():
-            lr = learning_rate
-            if isinstance(lr, dict):
-                lr = lr[key]
+            def parse(arg):
+                # Helper function for args when passed as dict, with
+                # model names as keys.
+                if isinstance(arg, dict) and key in arg:
+                    return arg[key]
+                return arg
+            if not cpu:
+                model[key].cuda()
             optimizer[key] = self._get_optimizer(
-                                            name=optimizer_name,
+                                            name=parse(optimizer_name),
                                             params=model[key].parameters(),
-                                            lr=lr,
+                                            lr=parse(learning_rate),
+                                            opt_kwargs=parse(opt_kwargs),
                                             weight_decay=weight_decay)
+        
+        return model, optimizer
+    
+    def _load_state(self, load_from, model, optimizer):
+        '''
+        Restore the model, its state, and the optimizer's state.
+        '''
+        saved_dict = torch.load(load_from)
+        for key in model.keys():
+            model[key].load_state_dict(saved_dict[key]['model_state'])
+            optimizer[key].load_state_dict(saved_dict[key]['optimizer_state'])
+        
+        # Experiment metadata.
+        self.experiment_id = saved_dict['experiment_id']
+        self._epoch[0] = saved_dict['epoch'][0]+1
+        self.model_as_str = saved_dict['model_as_str']
         
         return model, optimizer
 
     def _get_optimizer(self, name, params, lr=0., opt_kwargs=None, 
-                       weight_decay=0., state_dict=None):
+                       weight_decay=0.):
         kwargs = {'params'       : [p for p in params if p.requires_grad],
                   'lr'           : lr,
                   'weight_decay' : weight_decay}
@@ -212,10 +224,7 @@ class experiment(object):
         elif name=='sgd':
             optimizer = torch.optim.SGD(**kwargs)
         else:
-            raise NotImplemented("Optimizer {} not supported."
-                                "".format(args.optimizer))
-        if state_dict is not None:
-            optimizer.load_state_dict(state_dict)
+            raise ValueError("Optimizer {} not supported.".format(name))
         return optimizer
     
     def _load_and_merge_args(self, parser):

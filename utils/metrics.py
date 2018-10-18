@@ -34,20 +34,22 @@ class dice_loss(metric):
     '''
     Global Dice metric. Accumulates counts over the course of an epoch.
     
-    target_class : integer or list
-    mask_class : integer or list
+    target_class : integer or list (merge these classes in the target)
+    prediction_index : integer or list (merge these channels/classes in the
+        prediction)
+    mask_class : integer or list (mask these classes out in the target)
     '''
-    def __init__(self, target_class, target_index=0, mask_class=None,
+    def __init__(self, target_class, prediction_index=0, mask_class=None,
                  output_transform=lambda x: x):
         super(dice_loss, self).__init__(output_transform)
         if not hasattr(target_class, '__len__'):
             self.target_class = [target_class]
         else:
             self.target_class = target_class
-        if not hasattr(target_index, '__len__'):
-            self.target_index = [target_index]
+        if not hasattr(prediction_index, '__len__'):
+            self.prediction_index = [prediction_index]
         else:
-            self.target_index = target_index
+            self.prediction_index = prediction_index
         self.mask_class = mask_class
         self._smooth = 1
             
@@ -66,7 +68,7 @@ class dice_loss(metric):
         if y_true is None or len(y_true)==0 or y_pred is None:
             return
         assert len(y_pred)==len(y_true)
-        y_pred = sum([y_pred[:,i:i+1] for i in self.target_index])
+        y_pred = sum([y_pred[:,i:i+1] for i in self.prediction_index])
         
         # Targer variable must not require a gradient.
         assert(not y_true.requires_grad)

@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from torch.functional import F
-from torch.nn.utils import spectral_norm
+#from torch.nn.utils import spectral_norm
 import numpy as np
 from fcn_maker.blocks import (adjust_to_size,
                               get_initializer,
@@ -10,32 +10,34 @@ from fcn_maker.blocks import (adjust_to_size,
                               do_upsample)
 from fcn_maker.blocks import convolution as _convolution
 from fcn_maker.loss import dice_loss
-from model.common import (get_output_shape,
-                          dist_ratio_mse_abs,
-                          batch_normalization,
-                          instance_normalization,
-                          layer_normalization)
-from model.common import conv_block as _conv_block
+from model.common.network.basic import (get_output_shape,
+                                        batch_normalization,
+                                        instance_normalization,
+                                        layer_normalization)
+from model.common.network.basic import conv_block as _conv_block
+from model.common.network.spectral_norm import spectral_norm
+from model.common.losses import dist_ratio_mse_abs
 from model.residual_bidomain_segmentation import segmentation_model
 
 
 def build_model():
     N = 512 # Number of features at the bottleneck.
-    image_size = (1, 48, 48)
+    n = 512 # Number of features to sample at the bottleneck.
+    image_size = (4, 256, 128)
     lambdas = {
         'lambda_disc'       : 1,
-        'lambda_x_id'       : 1,
+        'lambda_x_id'       : 10,
         'lambda_z_id'       : 1,
         'lambda_cross'      : 1,
         'lambda_cyc'        : 1,
         'lambda_seg'        : 1,
-        'lambda_sample'     : 1}
+        'lambda_sample'     : 0}
     
     encoder_kwargs = {
-        'input_shape'         : image_size,
-        'num_conv_blocks'     : 5,
+        'input_shape'         : (N//64,)+image_size[1:],
+        'num_conv_blocks'     : 7,
         'block_type'          : conv_block,
-        'num_channels_list'   : [N//16, N//8, N//4, N//2, N],
+        'num_channels_list'   : [N//64, N//32, N//16, N//8, N//4, N//2, N],
         'skip'                : False,
         'dropout'             : 0.,
         'normalization'       : instance_normalization,
@@ -51,11 +53,11 @@ def build_model():
     
     decoder_kwargs = {
         'input_shape'         : enc_out_shape,
-        'output_shape'        : image_size,
-        'num_conv_blocks'     : 5,
+        'output_shape'        : (N//64,)+image_size[1:],
+        'num_conv_blocks'     : 7,
         'block_type'          : conv_block,
-        'num_channels_list'   : [N, N//2, N//4, N//8, N//16],
-        'output_transform'    : [torch.tanh, torch.sigmoid],
+        'num_channels_list'   : [N, N//2, N//4, N//8, N//16, N//32, N//64],
+        'num_classes'         : 1,
         'skip'                : False,
         'dropout'             : 0.,
         'normalization'       : layer_normalization,
@@ -69,50 +71,47 @@ def build_model():
         'long_skip_merge_mode': 'skinny_cat',
         'ndim'                : 2}
     
-    sample_decoder_kwargs = {
-        'input_shape'         : enc_out_shape,
-        'output_shape'        : image_size,
-        'num_conv_blocks'     : 5,
-        'block_type'          : conv_block,
-        'num_channels_list'   : [N, N//2, N//4, N//8, N//16],
-        'output_transform'    : None,
-        'skip'                : False,
-        'dropout'             : 0.,
-        'normalization'       : layer_normalization,
-        'norm_kwargs'         : None,
-        'conv_padding'        : True,
-        'padding_mode'        : 'reflect',
-        'kernel_size'         : 5,
-        'init'                : 'kaiming_normal_',
-        'upsample_mode'       : 'repeat',
-        'nonlinearity'        : lambda : nn.ReLU(inplace=True),
-        'long_skip_merge_mode': None,
-        'ndim'                : 2}
-    
     discriminator_kwargs = {
         'input_dim'           : image_size[0],
         'num_channels_list'   : [N//16, N//8, N//4],
-        'num_scales'          : 3,
-        'normalization'       : None,
+        'num_scales'          : 4,
+        'normalization'       : layer_normalization,
         'norm_kwargs'         : None,
         'kernel_size'         : 4,
         'nonlinearity'        : lambda : nn.LeakyReLU(0.2, inplace=True),
         'padding_mode'        : 'reflect',
         'init'                : 'kaiming_normal_'}
     
-    print("DEBUG: sample_shape={}".format(enc_out_shape))
+    shape_sample = (n,)+tuple(enc_out_shape[1:])
+    print("DEBUG: sample_shape={}".format(shape_sample))
     submodel = {
         'encoder'           : encoder_instance,
         'decoder'           : decoder(**decoder_kwargs),
-        'sample_decoder'    : decoder(**sample_decoder_kwargs),
+        'preprocessor'      : nn.Sequential(
+                                  convolution(in_channels=4,
+                                              out_channels=N//64,
+                                              kernel_size=7,
+                                              padding=3,
+                                              padding_mode='reflect'),
+                                  nn.ReLU()),
+        'postprocessor'     : nn.Sequential(
+                                  nn.ReLU(),
+                                  convolution(in_channels=N//64,
+                                              out_channels=4,
+                                              kernel_size=7,
+                                              padding=3,
+                                              padding_mode='reflect'),
+                                  nn.Tanh()),
         'disc_A'            : discriminator(**discriminator_kwargs),
         'disc_B'            : discriminator(**discriminator_kwargs),
         'disc_cross'        : discriminator(**discriminator_kwargs)}
     
     model = segmentation_model(**submodel,
-                               shape_sample=image_size,
-                               sample_image_space=True,
-                               hinge_loss=True,
+                               shape_sample=shape_sample,
+                               sample_image_space=False,
+                               loss_gan='hinge',
+                               loss_seg=dice_loss([4,5]),
+                               relativistic=False,
                                rng=np.random.RandomState(1234),
                                **lambdas)
     
@@ -172,8 +171,7 @@ class discriminator(nn.Module):
                                kernel_size=1,
                                nonlinearity=self.nonlinearity,
                                normalization=self.normalization,
-                               norm_kwargs=self.norm_kwargs,
-                               init=self.init)
+                               norm_kwargs=self.norm_kwargs)
         cnn.append(layer)
         cnn = nn.Sequential(*cnn)
         return cnn
@@ -229,9 +227,9 @@ class encoder(nn.Module):
         last_channels = self.in_channels
         conv = convolution(in_channels=last_channels,
                            out_channels=self.num_channels_list[0],
-                           kernel_size=7,
+                           kernel_size=3,
                            stride=1,
-                           padding=3,
+                           padding=1,
                            padding_mode=self.padding_mode,
                            init=self.init)
         self.blocks.append(conv)
@@ -279,10 +277,10 @@ class encoder(nn.Module):
 
 class decoder(nn.Module):
     def __init__(self, input_shape, output_shape, num_conv_blocks, block_type,
-                 num_channels_list, output_transform=None, skip=True,
-                 dropout=0., normalization=layer_normalization,
-                 norm_kwargs=None, conv_padding=True, padding_mode='constant',
-                 kernel_size=3, upsample_mode='conv', init='kaiming_normal_',
+                 num_channels_list, num_classes=None, skip=True, dropout=0.,
+                 normalization=layer_normalization, norm_kwargs=None,
+                 conv_padding=True, padding_mode='constant', kernel_size=3,
+                 upsample_mode='conv', init='kaiming_normal_',
                  nonlinearity='ReLU', long_skip_merge_mode=None, ndim=2):
         super(decoder, self).__init__()
         
@@ -300,9 +298,7 @@ class decoder(nn.Module):
         self.num_conv_blocks = num_conv_blocks
         self.block_type = block_type
         self.num_channels_list = num_channels_list
-        self.output_transform = output_transform
-        if not hasattr(output_transform, '__len__'):
-            self.output_transform = [output_transform]
+        self.num_classes = num_classes
         self.skip = skip
         self.dropout = dropout
         self.normalization = normalization
@@ -377,24 +373,26 @@ class decoder(nn.Module):
         '''
         Final output - change number of channels.
         '''
-        self.out_nlin = nn.ModuleList()
-        self.out_norm = nn.ModuleList()
-        self.out_conv = nn.ModuleList()
-        for _ in self.output_transform:
-            if normalization is not None:
-                out_norm = normalization(num_features=last_channels,
-                                         **self.norm_kwargs)
-            out_nlin = get_nonlinearity(self.nonlinearity)
-            out_conv = convolution(in_channels=last_channels,
-                                   out_channels=self.output_shape[0],
-                                   kernel_size=7,
-                                   stride=1,
-                                   padding=3,
-                                   padding_mode=self.padding_mode,
-                                   init=self.init)
-            self.out_norm.append(out_norm)
-            self.out_nlin.append(out_nlin)
-            self.out_conv.append(out_conv)
+        out_kwargs = {'normalization': self.normalization,
+                      'norm_kwargs': self.norm_kwargs,
+                      'nonlinearity': self.nonlinearity,
+                      'padding_mode': self.padding_mode}
+        self.output_0 = norm_nlin_conv(in_channels=last_channels,
+                                       out_channels=self.out_channels,
+                                       kernel_size=self.kernel_size,
+                                       init=self.init,
+                                       **out_kwargs)
+        self.output_1 = nn.Sequential(
+            norm_nlin_conv(in_channels=last_channels,
+                           out_channels=self.out_channels,
+                           kernel_size=3,
+                           init=self.init,
+                           **out_kwargs),
+            norm_nlin_conv(in_channels=self.out_channels,
+                           out_channels=self.num_classes,
+                           kernel_size=7,
+                           **out_kwargs),
+            nn.Sigmoid())
         
     def forward(self, z, skip_info=None, out_idx=0):
         out = z
@@ -429,11 +427,12 @@ class decoder(nn.Module):
                 else:
                     raise ValueError("Skip merge mode unrecognized \'{}\'."
                                      "".format(self.long_skip_merge_mode))
-        out = self.out_norm[out_idx](out)
-        out = self.out_conv[out_idx](out)
-        out_func = self.output_transform[out_idx]
-        if out_func is not None:
-            out = out_func(out)
+        if out_idx==0:
+            out = self.output_0(out)
+        elif out_idx==1 and self.num_classes:
+            out = self.output_1(out.detach())
+        else:
+            raise ValueError("Invalid `out_idx`.")
         return out
 
 
