@@ -254,7 +254,8 @@ class image_logger(object):
                  initial_epoch=0, directory=None, summary_tracker=None,
                  suffix=None, min_val=None, max_val=None,
                  output_name='outputs',
-                 fontname="LiberationSans-Regular.ttf", fontsize=24):
+                 fontname="LiberationSans-Regular.ttf", fontsize=24,
+                 rng=None):
         self.num_vis = num_vis
         self.directory = directory
         self.summary_tracker = summary_tracker
@@ -264,14 +265,17 @@ class image_logger(object):
         self.output_name = output_name
         self.fontname = fontname
         self.fontsize = fontsize
+        self.rng = rng if rng else np.random.RandomState()
         self._output_transform = output_transform
         self._epoch = initial_epoch
     
     def reset(self):
         self._labels = None
         self._images = []
+        self._num_seen = 0
+        self._num_collected = 0
     
-    def collect(self, engine):
+    def _collect(self, engine):
         output = self._output_transform(engine.state.output)
         if len(output)==0:
             return
@@ -279,13 +283,47 @@ class image_logger(object):
             labels, images = zip(*output.items())
         else:
             labels, images = None, output
-        self._labels = labels
-        if len(self._images) < len(images):
+        num_images = len(images[0])
+        for stack in images:
+            assert len(stack)==num_images
+        self._num_seen += num_images
+        
+        # Collect up to `num_vis` images. In order to get a random sample
+        # of `num_vis` images from across all batches collected through
+        # `_collect`, a fraction of the stored images is replaced with a new
+        # sample with each call to `_collect`. For the n'th call, 
+        # b_n/(b_0+...+b_n) of the images are re-sampled, where b_i is the
+        # number of images in batch i.
+        #
+        # Init.
+        if len(self._images)==0:
             self._images = [[] for _ in images]
-        for i, stack in enumerate(images):
-            self._images[i].extend(stack)    
+        self._labels = labels
+        # If collected less than `num_vis`, fill up.
+        num_sample = self.num_vis-self._num_collected
+        num_sample = min(num_sample, num_images)
+        if self._num_collected < self.num_vis:
+            indices_sample = self.rng.choice(num_images, size=num_sample,
+                                             replace=False)
+            for i, stack in enumerate(images):
+                self._images[i].extend(stack[indices_sample])
+            self._num_collected += num_sample
+        # If collected more than `num_vis`, resample.
+        num_resample = ( self.num_vis*(num_images-num_sample)
+                        /float(self._num_seen))
+        num_resample = max(num_resample, 0)
+        round_up = self.rng.rand() < num_resample-int(num_resample)
+        num_resample = int(num_resample)+int(round_up) # Probabilistic round.
+        if self._num_collected >= self.num_vis:
+            indices_resample = self.rng.choice(num_images, size=num_resample,
+                                               replace=False)
+            indices_drop     = self.rng.choice(self.num_vis, size=num_resample,
+                                               replace=False)
+            for i, stack in enumerate(images):
+                for j, k in zip(indices_drop, indices_resample):
+                    self._images[i][j] = stack[k]
     
-    def process(self):
+    def _process(self):
         # Select a subset of images.
         if self.num_vis is not None:
             images = [stack[:self.num_vis] for stack in self._images]
@@ -338,11 +376,12 @@ class image_logger(object):
             final_image_pil = Image.fromarray(final_image, mode='L')
             final_image_pil.save(os.path.join(self.directory, fn))
             
-        # Update epoch count.
+        # Update epoch count and clear memory.
         self._epoch += 1
+        self.reset()
         
     def attach(self, engine):
         engine.add_event_handler(Events.EPOCH_STARTED, lambda _: self.reset())
-        engine.add_event_handler(Events.ITERATION_COMPLETED, self.collect)
+        engine.add_event_handler(Events.ITERATION_COMPLETED, self._collect)
         engine.add_event_handler(Events.EPOCH_COMPLETED,
-                                 lambda _: self.process())
+                                 lambda _: self._process())
