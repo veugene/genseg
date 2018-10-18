@@ -1,5 +1,7 @@
 import torch
 from torch import nn
+from torch.nn.utils import spectral_norm
+from torch.nn import functional as F
 import numpy as np
 from fcn_maker.blocks import (adjust_to_size,
                               convolution,
@@ -10,6 +12,7 @@ from fcn_maker.blocks import (adjust_to_size,
                               basic_block,
                               dense_block,
                               identity_block,
+                              max_pooling,
                               norm_nlin_conv,
                               repeat_block,
                               shortcut,
@@ -19,7 +22,7 @@ from fcn_maker.blocks import (adjust_to_size,
 def get_output_shape(layer, input_shape):
     """
     Works for `convolution`, `nn.Linear`, `identity_block`, `basic_block`,
-    `tiny_block`, `dense_block`, `repeat_block`.
+    `tiny_block`, `dense_block`, `pool_block` `repeat_block`.
     
     `input_shape` is without batch dimension.
     """
@@ -99,7 +102,7 @@ def get_output_shape(layer, input_shape):
                                            kernel_size=layer.kernel_size,
                                            stride=1)
         return out_shape
-    elif isinstance(layer, tiny_block):
+    elif isinstance(layer, (tiny_block, pool_block)):
         out_shape = input_shape
         if layer.subsample:
             out_shape = compute_pool_out_shape(input_shape=input_shape,
@@ -345,6 +348,13 @@ class decoder(nn.Module):
             raise ValueError("`num_channels_list` must have the same number "
                              "of entries as there are blocks.")
         
+        # long_skip_merge_mode settings.
+        valid_modes = [None, 'skinny_cat', 'cat', 'pool']
+        if long_skip_merge_mode not in valid_modes:
+            raise ValueError("`long_skip_merge_mode` must be one of {}."
+                             "".format(", ".join(["\'{}\'".format(mode)
+                                                  for mode in valid_modes])))
+        
         self.input_shape = input_shape
         self.output_shape = output_shape
         self.num_conv_blocks = num_conv_blocks
@@ -408,13 +418,13 @@ class decoder(nn.Module):
             if upsample:
                 if   self.long_skip_merge_mode=='skinny_cat':
                     cat = conv_block(in_channels=self.num_channels_list[n+1],
-                                 num_filters=1,
-                                 skip=False,
-                                 normalization=instance_normalization,
-                                 nonlinearity=None,
-                                 kernel_size=1,
-                                 init=self.init,
-                                 ndim=self.ndim)
+                                     num_filters=1,
+                                     skip=False,
+                                     normalization=instance_normalization,
+                                     nonlinearity=None,
+                                     kernel_size=1,
+                                     init=self.init,
+                                     ndim=self.ndim)
                     self.cats.append(cat)
                     last_channels += 1
                 elif self.long_skip_merge_mode=='cat':
@@ -443,7 +453,13 @@ class decoder(nn.Module):
         for n, block in enumerate(self.blocks):
             shape_out = self._shapes[n+1]
             out_skips.append(out)
-            out = block(out)
+            skip = skip_info[n]
+            if (self.long_skip_merge_mode=='pool' and skip_info is not None
+                                                  and n<len(skip_info)):
+                skip = skip_info[n]
+                out = block(out, unpool_indices=skip)
+            else:
+                out = block(out)
             out = adjust_to_size(out, shape_out[1:])
             if not out.is_contiguous():
                 out = out.contiguous()
@@ -557,10 +573,10 @@ class munit_discriminator(nn.Module):
         return outputs
 
 
-"""
-Select 2D or 3D as argument (ndim) and initialize weights on creation.
-"""
 class convolution(torch.nn.Module):
+    """
+    Select 2D or 3D as argument (ndim) and initialize weights on creation.
+    """
     def __init__(self, ndim=2, init=None, padding=None,
                  padding_mode='constant', *args, **kwargs):
         super(convolution, self).__init__()
@@ -598,7 +614,16 @@ class convolution(torch.nn.Module):
         return out
 
 
-class conv_block(_conv_block):
+def max_unpooling(ndim=2, *args, **kwargs):
+    if ndim==2:
+        return torch.nn.MaxUnpool2d(*args, **kwargs)
+    elif ndim==3:
+        return torch.nn.MaxUnpool3d(*args, **kwargs)
+    else:
+        raise ValueError("ndim must be 2 or 3")
+
+
+class conv_block(block_abstract):
     """
     A single basic 3x3 convolution.
     Unlike in tiny_block, stride instead of maxpool and upsample before conv.
@@ -608,7 +633,7 @@ class conv_block(_conv_block):
                  normalization=batch_normalization, norm_kwargs=None,
                  conv_padding=True, padding_mode='constant', kernel_size=3,
                  init='kaiming_normal_', nonlinearity='ReLU', ndim=2):
-        super(_conv_block, self).__init__(in_channels, num_filters,
+        super(conv_block, self).__init__(in_channels, num_filters,
                                          subsample, upsample)
         if norm_kwargs is None:
             norm_kwargs = {}
@@ -683,6 +708,130 @@ class conv_block(_conv_block):
         return out
 
 
+class pool_block(block_abstract):
+    """
+    A single basic 3x3 convolution.
+    """
+    def __init__(self, in_channels, num_filters, subsample=False,
+                 upsample=False, skip=True, dropout=0.,
+                 normalization=batch_normalization, norm_kwargs=None,
+                 conv_padding=True, padding_mode='constant', kernel_size=3,
+                 upsample_mode='not settable', init='kaiming_normal_',
+                 nonlinearity='ReLU', ndim=2):
+        super(pool_block, self).__init__(in_channels, num_filters,
+                                         subsample, upsample)
+        if norm_kwargs is None:
+            norm_kwargs = {}
+        self.out_channels = num_filters
+        self.upsample_mode = 'repeat'   # For `get_output_shape`.
+        self.skip = skip
+        self.dropout = dropout
+        self.normalization = normalization
+        self.norm_kwargs = norm_kwargs
+        self.conv_padding = conv_padding
+        self.padding_mode = padding_mode
+        self.kernel_size = kernel_size
+        self.init = init
+        self.nonlinearity = nonlinearity
+        self.ndim = ndim
+        self.op = []
+        if normalization is not None:
+            self.op += [normalization(ndim=ndim,
+                                      num_features=in_channels,
+                                      **norm_kwargs)]
+        self.op += [get_nonlinearity(nonlinearity)]
+        if subsample:
+            self.op += [max_pooling(kernel_size=2, ndim=ndim,
+                                    return_indices=True)]
+        if conv_padding:
+            # For odd kernel sizes, equivalent to kernel_size//2.
+            # For even kernel sizes, two cases:
+            #    (1) [kernel_size//2-1, kernel_size//2] @ stride 1
+            #    (2) kernel_size//2 @ stride 2
+            # This way, even kernel sizes yield the same output size as
+            # odd kernel sizes. When subsampling, even kernel sizes allow
+            # possible downscaling without aliasing.
+            padding = [(kernel_size-1)//2,
+                       (kernel_size-int(subsample))//2]*ndim
+        else:
+            padding = 0
+        self.op += [convolution(in_channels=in_channels,
+                                out_channels=num_filters,
+                                kernel_size=kernel_size,
+                                ndim=ndim,
+                                init=init,
+                                padding=padding,
+                                padding_mode=padding_mode)]
+        if dropout > 0:
+            self.op += [get_dropout(dropout, nonlinearity)]
+        if upsample:
+            self.op += [max_unpooling(kernel_size=2, ndim=ndim)]
+        self._register_modules(self.op)
+        self.op_shortcut = None
+        if skip:
+            self.op_shortcut = shortcut(in_channels=in_channels,
+                                        out_channels=num_filters,
+                                        subsample=subsample,
+                                        upsample=upsample,
+                                        upsample_mode=upsample_mode,
+                                        init=init,
+                                        ndim=ndim)
+            self._register_modules({'shortcut': self.op_shortcut})
+
+    def forward(self, input, unpool_indices=None):
+        out = input
+        indices = None
+        for op in self.op:
+            if  isinstance(op, (nn.MaxPool2d, nn.MaxPool3d)):
+                out, indices = op(out)
+            elif unpool_indices is not None \
+                         and isinstance(op, (nn.MaxUnpool2d, nn.MaxUnpool3d)):
+                out = op(out, unpool_indices)
+            else:
+                out = op(out)
+        if self.skip:
+            out = self.op_shortcut(input, out)
+        if indices is not None:
+            return out, indices
+        return out
+
+
+class AdaptiveInstanceNorm2d(nn.Module):
+    """
+    From MUNIT.
+    """
+    def __init__(self, num_features, eps=1e-5, momentum=0.1):
+        super(AdaptiveInstanceNorm2d, self).__init__()
+        self.num_features = num_features
+        self.eps = eps
+        self.momentum = momentum
+        # weight and bias are dynamically assigned
+        self.weight = None
+        self.bias = None
+        # just dummy buffers, not used
+        self.register_buffer('running_mean', torch.zeros(num_features))
+        self.register_buffer('running_var', torch.ones(num_features))
+
+    def forward(self, x):
+        assert(self.weight is not None and self.bias is not None,
+               "Please assign weight and bias before calling AdaIN!")
+        b, c = x.size(0), x.size(1)
+        running_mean = self.running_mean.repeat(b)
+        running_var = self.running_var.repeat(b)
+
+        # Apply instance norm
+        x_reshaped = x.contiguous().view(1, b * c, *x.size()[2:])
+
+        out = F.batch_norm(
+            x_reshaped, running_mean, running_var, self.weight, self.bias,
+            True, self.momentum, self.eps)
+
+        return out.view(b, c, *x.size()[2:])
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(' + str(self.num_features) + ')'
+
+
 def grad_norm(module):
     """
     Count the number of parameters in a module.
@@ -690,3 +839,20 @@ def grad_norm(module):
     parameters = filter(lambda p: p.grad is not None, module.parameters())
     norm = sum([torch.norm(p.grad) for p in parameters])
     return norm
+
+
+def recursive_spectral_norm(module):
+    """
+    Recursively traverse submodules in a module and apply spectral norm to
+    all convolutional layers.
+    """
+    for m in module.modules():
+        if isinstance(m, (nn.Conv1d,
+                          nn.Conv2d,
+                          nn.Conv3d,
+                          nn.ConvTranspose1d,
+                          nn.ConvTranspose2d,
+                          nn.ConvTranspose3d)):
+            if not hasattr(m, '_has_spectral_norm'):
+                spectral_norm(m)
+            setattr(m, '_has_spectral_norm', True)
