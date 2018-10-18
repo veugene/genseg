@@ -157,14 +157,16 @@ class segmentation_model(nn.Module):
         # Aliases.
         penc = self.preprocessor  if self.preprocessor  else lambda x:x
         pdec = self.postprocessor if self.postprocessor else lambda x:x
+        x_A_ = penc(x_A)
+        x_B_ = penc(x_B)
         
         # Encode inputs.
-        s_A, skip_A = self.encoder(penc(x_A))
+        s_A, skip_A = self.encoder(x_A_)
         only_seg = True
         if (   self.lambda_disc
             or self.lambda_x_id
             or self.lambda_z_id):
-                s_B, skip_B = self.encoder(penc(x_B))
+                s_B, skip_B = self.encoder(x_B_)
                 only_seg = False
         
         # Translate.
@@ -178,19 +180,19 @@ class segmentation_model(nn.Module):
             z_BA = self._zcat(s_B, z_BA)
             x_BA_residual = self.decoder(z_BA, skip_info=skip_B)
             x_AB_residual = self.decoder(s_A,  skip_info=skip_A)
-            x_BA = pdec(penc(x_B) + x_BA_residual)              # (+)
-            x_AB = pdec(penc(x_A) - x_AB_residual)              # (-)
+            x_BA = pdec(x_B_ + x_BA_residual)              # (+)
+            x_AB = pdec(x_A_ - x_AB_residual)              # (-)
         x_cross = x_cross_residual = None
         if self.lambda_disc and self.lambda_cross:
             x_cross_residual = self.decoder(s_A, skip_info=skip_B)
-            x_cross = pdec(penc(x_B) + x_cross_residual)        # (+)
+            x_cross = pdec(x_B_ + x_cross_residual)        # (+)
                 
         # Reconstruct input.
         x_AA = x_BB = z_BA_im_rec = None
         if self.lambda_x_id:
-            x_BB = pdec(penc(x_B) - self.decoder(s_B, skip_info=skip_B))  # (-)
+            x_BB = pdec(x_B_ - self.decoder(s_B, skip_info=skip_B))  # (-)
             if self.preprocessor is not None or self.postprocessor is not None:
-                x_AA = pdec(penc(x_A))
+                x_AA = pdec(x_A_)
         if self.sample_image_space and self.sample_decoder is not None:
             z_BA_im_rec = self.sample_decoder(z_BA)
         
