@@ -18,6 +18,7 @@ from model.common.network.basic import (get_output_shape,
                                         instance_normalization,
                                         layer_normalization)
 from model.common.network.basic import conv_block as _conv_block
+#from model.common.network.spectral_norm import spectral_norm
 from model.common.losses import dist_ratio_mse_abs
 from model.residual_bidomain_segmentation import segmentation_model
 
@@ -27,12 +28,12 @@ def build_model():
     n = 512 # Number of features to sample at the bottleneck.
     image_size = (4, 240, 120)
     lambdas = {
-        'lambda_disc'       : 1,
-        'lambda_x_id'       : 10,
-        'lambda_z_id'       : 1,
-        'lambda_cross'      : 1,
-        'lambda_cyc'        : 1,
-        'lambda_seg'        : 0.1,
+        'lambda_disc'       : 0,
+        'lambda_x_id'       : 0,
+        'lambda_z_id'       : 0,
+        'lambda_cross'      : 0,
+        'lambda_cyc'        : 0,
+        'lambda_seg'        : 1,
         'lambda_sample'     : 0}
     
     encoder_kwargs = {

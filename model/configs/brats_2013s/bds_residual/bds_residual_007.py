@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from torch.functional import F
-from torch.nn.utils import spectral_norm
+#from torch.nn.utils import spectral_norm
 import numpy as np
 from fcn_maker.blocks import (adjust_to_size,
                               get_initializer,
@@ -15,6 +15,7 @@ from model.common.network.basic import (get_output_shape,
                                         instance_normalization,
                                         layer_normalization)
 from model.common.network.basic import conv_block as _conv_block
+from model.common.network.spectral_norm import spectral_norm
 from model.common.losses import dist_ratio_mse_abs
 from model.residual_bidomain_segmentation import segmentation_model
 

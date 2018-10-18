@@ -1,21 +1,24 @@
 import torch
 from torch import nn
 from torch.functional import F
-#from torch.nn.utils import spectral_norm
+from torch.nn.utils import spectral_norm
 import numpy as np
 from fcn_maker.blocks import (adjust_to_size,
                               get_initializer,
                               get_nonlinearity,
                               shortcut,
-                              do_upsample)
+                              do_upsample,
+                              tiny_block,
+                              basic_block)
+from fcn_maker.model import assemble_resunet
 from fcn_maker.blocks import convolution as _convolution
 from fcn_maker.loss import dice_loss
 from model.common.network.basic import (get_output_shape,
-                                        batch_normalization,
+                                        layer_normalization,
                                         instance_normalization,
                                         layer_normalization)
 from model.common.network.basic import conv_block as _conv_block
-from model.common.network.spectral_norm import spectral_norm
+#from model.common.network.spectral_norm import spectral_norm
 from model.common.losses import dist_ratio_mse_abs
 from model.residual_bidomain_segmentation import segmentation_model
 
@@ -23,14 +26,14 @@ from model.residual_bidomain_segmentation import segmentation_model
 def build_model():
     N = 512 # Number of features at the bottleneck.
     n = 512 # Number of features to sample at the bottleneck.
-    image_size = (4, 256, 128)
+    image_size = (4, 240, 120)
     lambdas = {
         'lambda_disc'       : 1,
         'lambda_x_id'       : 10,
         'lambda_z_id'       : 1,
         'lambda_cross'      : 1,
         'lambda_cyc'        : 1,
-        'lambda_seg'        : 1,
+        'lambda_seg'        : 0.1,
         'lambda_sample'     : 0}
     
     encoder_kwargs = {
@@ -71,10 +74,26 @@ def build_model():
         'long_skip_merge_mode': 'skinny_cat',
         'ndim'                : 2}
     
+    segmenter_kwargs = {
+        'in_channels'         : N//64+4,
+        'num_classes'         : 1,
+        'long_skip_merge_mode': 'concat',
+        'num_init_blocks'     : 1,
+        'num_main_blocks'     : 4,
+        'main_block_depth'    : 1,
+        'init_num_filters'    : 8,
+        'init_block'          : tiny_block,
+        'main_block'          : tiny_block,
+        'normalization'       : layer_normalization,
+        'norm_kwargs'         : None,
+        'nonlinearity'        : lambda : nn.LeakyReLU(inplace=True),
+        'padding_mode'        : 'constant',
+        'init'                : 'kaiming_normal_'}
+    
     discriminator_kwargs = {
         'input_dim'           : image_size[0],
-        'num_channels_list'   : [N//16, N//8, N//4],
-        'num_scales'          : 4,
+        'num_channels_list'   : [N//8, N//4, N//2, N],
+        'num_scales'          : 3,
         'normalization'       : layer_normalization,
         'norm_kwargs'         : None,
         'kernel_size'         : 4,
@@ -102,6 +121,7 @@ def build_model():
                                               padding=3,
                                               padding_mode='reflect'),
                                   nn.Tanh()),
+        'segmenter'         : assemble_resunet(**segmenter_kwargs),
         'disc_A'            : discriminator(**discriminator_kwargs),
         'disc_B'            : discriminator(**discriminator_kwargs),
         'disc_cross'        : discriminator(**discriminator_kwargs)}
@@ -110,13 +130,14 @@ def build_model():
                                shape_sample=shape_sample,
                                sample_image_space=False,
                                loss_gan='hinge',
-                               loss_seg=dice_loss([4,5]),
+                               loss_seg=dice_loss([1,2,4]),
                                relativistic=False,
                                rng=np.random.RandomState(1234),
                                **lambdas)
     
     return {'G' : model,
-            'D' : nn.ModuleList(model.disc.values())}
+            'D' : nn.ModuleList(model.disc.values()),
+            'S' : model.segmenter[0]}
 
 
 class discriminator(nn.Module):
@@ -377,24 +398,13 @@ class decoder(nn.Module):
                       'norm_kwargs': self.norm_kwargs,
                       'nonlinearity': self.nonlinearity,
                       'padding_mode': self.padding_mode}
-        self.output_0 = norm_nlin_conv(in_channels=last_channels,
+        self.out_conv = norm_nlin_conv(in_channels=last_channels,
                                        out_channels=self.out_channels,
                                        kernel_size=self.kernel_size,
                                        init=self.init,
                                        **out_kwargs)
-        self.output_1 = nn.Sequential(
-            norm_nlin_conv(in_channels=last_channels,
-                           out_channels=self.out_channels,
-                           kernel_size=3,
-                           init=self.init,
-                           **out_kwargs),
-            norm_nlin_conv(in_channels=self.out_channels,
-                           out_channels=self.num_classes,
-                           kernel_size=7,
-                           **out_kwargs),
-            nn.Sigmoid())
         
-    def forward(self, z, skip_info=None, out_idx=0):
+    def forward(self, z, skip_info=None):
         out = z
         if skip_info is not None:
             skip_info = skip_info[::-1]
@@ -427,12 +437,7 @@ class decoder(nn.Module):
                 else:
                     raise ValueError("Skip merge mode unrecognized \'{}\'."
                                      "".format(self.long_skip_merge_mode))
-        if out_idx==0:
-            out = self.output_0(out)
-        elif out_idx==1 and self.num_classes:
-            out = self.output_1(out.detach())
-        else:
-            raise ValueError("Invalid `out_idx`.")
+        out = self.out_conv(out)
         return out
 
 
@@ -443,7 +448,7 @@ class conv_block(_conv_block):
     """
     def __init__(self, in_channels, num_filters, subsample=False,
                  upsample=False, upsample_mode='repeat', skip=True, dropout=0.,
-                 normalization=batch_normalization, norm_kwargs=None,
+                 normalization=layer_normalization, norm_kwargs=None,
                  conv_padding=True, padding_mode='constant', kernel_size=3,
                  init='kaiming_normal_', nonlinearity='ReLU', ndim=2):
         super(_conv_block, self).__init__(in_channels, num_filters,
@@ -562,7 +567,7 @@ This is an improved scheme proposed in http://arxiv.org/pdf/1603.05027v2.pdf
 class norm_nlin_conv(torch.nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size,
                  subsample=False, upsample=False, upsample_mode='repeat',
-                 nonlinearity='ReLU', normalization=batch_normalization,
+                 nonlinearity='ReLU', normalization=layer_normalization,
                  norm_kwargs=None, conv_padding=True, padding_mode='constant',
                  init='kaiming_normal_', ndim=2):
         super(norm_nlin_conv, self).__init__()
