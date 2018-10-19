@@ -136,7 +136,7 @@ class segmentation_model(nn.Module):
                                              x_B=x_B,
                                              x_BA=visible['x_BA'],
                                              x_AB=visible['x_AB'])
-                    loss_D = _reduce(sum(loss_disc.values()))
+                    loss_D = _reduce(loss_disc.values())
                 # Update discriminator.
                 disc_A = self.separate_networks['disc_A']
                 disc_B = self.separate_networks['disc_B']
