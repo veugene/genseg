@@ -334,8 +334,9 @@ class decoder(nn.Module):
         
         # Compute all intermediate conv shapes by working backward from the 
         # output shape.
-        self._shapes = [self.output_shape]
-        for i in range(1, self.num_conv_blocks):
+        self._shapes = [self.output_shape,
+                        (self.num_channels_list[-1],)+self.output_shape[1:]]
+        for i in range(1, self.num_conv_blocks+1):
             shape_spatial = np.array(self._shapes[-1][1:])//2
             shape = (self.num_channels_list[-i],)+tuple(shape_spatial)
             self._shapes.append(shape)
@@ -478,21 +479,19 @@ class decoder(nn.Module):
         if skip_info is not None and mode==0:
             skip_info = skip_info[::-1]
         for n, block in enumerate(self.blocks):
-            shape_out = self._shapes[n+1]
             if (self.long_skip_merge_mode=='pool' and skip_info is not None
                                                   and n<len(skip_info)+1
                                                   and n>0):
                 skip = skip_info[n-1]
+                out = adjust_to_size(out, skip.size()[2:])
                 out = block(out, unpool_indices=skip)
-            else:
-                out = block(out)
-            out = adjust_to_size(out, shape_out[1:])
-            if not out.is_contiguous():
-                out = out.contiguous()
-            if (self.long_skip_merge_mode is not None and skip_info is not None
-                                                      and n<len(skip_info)+1
-                                                      and n>0):
+            elif (self.long_skip_merge_mode is not None
+                                                  and skip_info is not None
+                                                  and n<len(skip_info)+1
+                                                  and n>0):
                 skip = skip_info[n-1]
+                out = block(out)
+                out = adjust_to_size(out, skip.size()[2:])
                 if   self.long_skip_merge_mode=='skinny_cat':
                     cat = self.cats[n-1]
                     out = torch.cat([out, cat(skip)], dim=1)
@@ -500,11 +499,12 @@ class decoder(nn.Module):
                     out = torch.cat([out, skip], dim=1)
                 elif self.long_skip_merge_mode=='sum':
                     out = out+skip
-                elif self.long_skip_merge_mode=='pool':
-                    pass
                 else:
-                    raise ValueError("Skip merge mode unrecognized \'{}\'."
-                                     "".format(self.long_skip_merge_mode))
+                    ValueError()
+            else:
+                out = block(out)
+            if not out.is_contiguous():
+                out = out.contiguous()
         out = self.pre_conv(out)
         out = self.out_conv[mode](out)
         if mode==0:
