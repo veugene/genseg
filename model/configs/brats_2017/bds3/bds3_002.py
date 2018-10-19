@@ -30,7 +30,7 @@ from model.residual_bidomain_segmentation import segmentation_model
 def build_model():
     N = 512 # Number of features at the bottleneck.
     n = 128 # Number of features to sample at the bottleneck.
-    image_size = (4, 256, 128)
+    image_size = (4, 240, 120)
     lambdas = {
         'lambda_disc'       : 1,
         'lambda_x_id'       : 10,
@@ -126,7 +126,7 @@ def build_model():
                                shape_sample=shape_sample,
                                loss_gan='hinge',
                                #loss_rec=dist_ratio_mse_abs,
-                               loss_seg=dice_loss([4,5]),
+                               loss_seg=dice_loss([1,2,4]),
                                relativistic=False,
                                rng=np.random.RandomState(1234),
                                **lambdas)

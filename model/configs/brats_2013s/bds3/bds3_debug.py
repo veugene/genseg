@@ -35,16 +35,16 @@ def build_model():
         'lambda_disc'       : 1,
         'lambda_x_id'       : 10,
         'lambda_z_id'       : 1,
-        'lambda_cyc'        : 10,
-        'lambda_seg'        : 0.01}
+        'lambda_cyc'        : 1,
+        'lambda_seg'        : 0}
     
     encoder_kwargs = {
         'input_shape'         : image_size,
         'num_conv_blocks'     : 6,
-        'block_type'          : conv_block,
+        'block_type'          : pool_block,
         'num_resblocks'       : 4,
         'num_channels_list'   : [N//32, N//16, N//8, N//4, N//2, N],
-        'skip'                : True,
+        'skip'                : False,
         'dropout'             : 0.,
         'normalization'       : instance_normalization,
         'norm_kwargs'         : None,
@@ -52,7 +52,7 @@ def build_model():
         'kernel_size'         : 3,
         'init'                : 'kaiming_normal_',
         'nonlinearity'        : lambda : nn.ReLU(inplace=True),
-        'skip_pool_indices'   : False,
+        'skip_pool_indices'   : True,
         'ndim'                : 2}
     encoder_instance = encoder(**encoder_kwargs)
     enc_out_shape = encoder_instance.output_shape
@@ -61,10 +61,10 @@ def build_model():
         'input_shape'         : (N-n,)+enc_out_shape[1:],
         'output_shape'        : image_size,
         'num_conv_blocks'     : 5,
-        'block_type'          : conv_block,
+        'block_type'          : pool_block,
         'num_resblocks'       : 4,
         'num_channels_list'   : [N, N//2, N//4, N//8, N//16, N//32],
-        'skip'                : True,
+        'skip'                : False,
         'dropout'             : 0.,
         'normalization'       : layer_normalization,
         'norm_kwargs'         : None,
@@ -73,28 +73,28 @@ def build_model():
         'init'                : 'kaiming_normal_',
         'upsample_mode'       : 'repeat',
         'nonlinearity'        : lambda : nn.ReLU(inplace=True),
-        'long_skip_merge_mode': 'skinny_cat',
+        'long_skip_merge_mode': 'pool',
         'ndim'                : 2}
     
     decoder_residual_kwargs = {
         'input_shape'         : enc_out_shape,
         'output_shape'        : image_size,
         'num_conv_blocks'     : 5,
-        'block_type'          : conv_block,
+        'block_type'          : pool_block,
         'num_resblocks'       : 4,
         'num_channels_list'   : [N, N//2, N//4, N//8, N//16, N//32],
         'num_classes'         : 1,
         'mlp_dim'             : 256, 
-        'skip'                : True,
+        'skip'                : False,
         'dropout'             : 0.,
-        'normalization'       : layer_normalization,
+        'normalization'       : instance_normalization,
         'norm_kwargs'         : None,
         'padding_mode'        : 'reflect',
         'kernel_size'         : 3,
         'init'                : 'kaiming_normal_',
         'upsample_mode'       : 'repeat',
         'nonlinearity'        : lambda : nn.ReLU(inplace=True),
-        'long_skip_merge_mode': 'skinny_cat',
+        'long_skip_merge_mode': 'pool',
         'ndim'                : 2}
     
     discriminator_kwargs = {

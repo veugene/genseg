@@ -30,7 +30,7 @@ from model.residual_bidomain_segmentation import segmentation_model
 def build_model():
     N = 512 # Number of features at the bottleneck.
     n = 128 # Number of features to sample at the bottleneck.
-    image_size = (4, 256, 128)
+    image_size = (4, 240, 120)
     lambdas = {
         'lambda_disc'       : 1,
         'lambda_x_id'       : 10,
@@ -41,7 +41,7 @@ def build_model():
     encoder_kwargs = {
         'input_shape'         : image_size,
         'num_conv_blocks'     : 6,
-        'block_type'          : conv_block,
+        'block_type'          : pool_block,
         'num_resblocks'       : 4,
         'num_channels_list'   : [N//32, N//16, N//8, N//4, N//2, N],
         'skip'                : True,
@@ -52,7 +52,7 @@ def build_model():
         'kernel_size'         : 3,
         'init'                : 'kaiming_normal_',
         'nonlinearity'        : lambda : nn.ReLU(inplace=True),
-        'skip_pool_indices'   : False,
+        'skip_pool_indices'   : True,
         'ndim'                : 2}
     encoder_instance = encoder(**encoder_kwargs)
     enc_out_shape = encoder_instance.output_shape
@@ -61,7 +61,7 @@ def build_model():
         'input_shape'         : (N-n,)+enc_out_shape[1:],
         'output_shape'        : image_size,
         'num_conv_blocks'     : 5,
-        'block_type'          : conv_block,
+        'block_type'          : pool_block,
         'num_resblocks'       : 4,
         'num_channels_list'   : [N, N//2, N//4, N//8, N//16, N//32],
         'skip'                : True,
@@ -73,28 +73,28 @@ def build_model():
         'init'                : 'kaiming_normal_',
         'upsample_mode'       : 'repeat',
         'nonlinearity'        : lambda : nn.ReLU(inplace=True),
-        'long_skip_merge_mode': 'skinny_cat',
+        'long_skip_merge_mode': 'pool',
         'ndim'                : 2}
     
     decoder_residual_kwargs = {
         'input_shape'         : enc_out_shape,
         'output_shape'        : image_size,
         'num_conv_blocks'     : 5,
-        'block_type'          : conv_block,
+        'block_type'          : pool_block,
         'num_resblocks'       : 4,
         'num_channels_list'   : [N, N//2, N//4, N//8, N//16, N//32],
         'num_classes'         : 1,
         'mlp_dim'             : 256, 
         'skip'                : True,
         'dropout'             : 0.,
-        'normalization'       : layer_normalization,
+        'normalization'       : instance_normalization,
         'norm_kwargs'         : None,
         'padding_mode'        : 'reflect',
         'kernel_size'         : 3,
         'init'                : 'kaiming_normal_',
         'upsample_mode'       : 'repeat',
         'nonlinearity'        : lambda : nn.ReLU(inplace=True),
-        'long_skip_merge_mode': 'skinny_cat',
+        'long_skip_merge_mode': 'pool',
         'ndim'                : 2}
     
     discriminator_kwargs = {
@@ -125,8 +125,7 @@ def build_model():
     model = segmentation_model(**submodel,
                                shape_sample=shape_sample,
                                loss_gan='hinge',
-                               #loss_rec=dist_ratio_mse_abs,
-                               loss_seg=dice_loss([4,5]),
+                               loss_seg=dice_loss([1,2,4]),
                                relativistic=False,
                                rng=np.random.RandomState(1234),
                                **lambdas)

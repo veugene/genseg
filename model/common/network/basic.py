@@ -800,7 +800,7 @@ class AdaptiveInstanceNorm2d(nn.Module):
     """
     From MUNIT.
     """
-    def __init__(self, num_features, eps=1e-5, momentum=0.1):
+    def __init__(self, num_features, eps=1e-5, momentum=0.1, ndim=None):
         super(AdaptiveInstanceNorm2d, self).__init__()
         self.num_features = num_features
         self.eps = eps

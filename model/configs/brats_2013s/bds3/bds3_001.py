@@ -35,7 +35,7 @@ def build_model():
         'lambda_disc'       : 1,
         'lambda_x_id'       : 10,
         'lambda_z_id'       : 1,
-        'lambda_cyc'        : 1,
+        'lambda_cyc'        : 10,
         'lambda_seg'        : 0.01}
     
     encoder_kwargs = {
@@ -85,12 +85,12 @@ def build_model():
         'num_channels_list'   : [N, N//2, N//4, N//8, N//16, N//32],
         'num_classes'         : 1,
         'mlp_dim'             : 256, 
-        'skip'                : False,
+        'skip'                : True,
         'dropout'             : 0.,
         'normalization'       : layer_normalization,
         'norm_kwargs'         : None,
         'padding_mode'        : 'reflect',
-        'kernel_size'         : 5,
+        'kernel_size'         : 3,
         'init'                : 'kaiming_normal_',
         'upsample_mode'       : 'repeat',
         'nonlinearity'        : lambda : nn.ReLU(inplace=True),
@@ -103,7 +103,7 @@ def build_model():
         'num_scales'          : 3,
         'normalization'       : layer_normalization,
         'norm_kwargs'         : None,
-        'kernel_size'         : 4,
+        'kernel_size'         : 3,
         'nonlinearity'        : lambda : nn.LeakyReLU(0.2, inplace=True),
         'padding_mode'        : 'reflect',
         'init'                : 'kaiming_normal_'}
