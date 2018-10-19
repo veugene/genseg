@@ -31,9 +31,6 @@ from utils.data.brats import (prepare_data_brats13s,
                               prepare_data_brats17,
                               preprocessor_brats)
 from model import configs
-from model.bidomain_segmentation import segmentation_model as model_gan
-from model.residual_bidomain_segmentation import segmentation_model as \
-    model_residual_gan
 from model.ae_segmentation import segmentation_model as model_ae
 
 import itertools
@@ -207,24 +204,17 @@ if __name__ == '__main__':
         if isinstance(experiment_state.model, model_ae):
             metrics[key]['loss'] = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_all'])
-        if isinstance(experiment_state.model, model_gan):
+        if isinstance(experiment_state.model, dict):
             metrics[key]['G']    = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_G'])
             metrics[key]['DA']   = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_DA'])
             metrics[key]['DB']   = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_DB'])
-            metrics[key]['miA']  = batchwise_loss_accumulator(
-                            output_transform=lambda x: x['l_mi_A'])
-            metrics[key]['miBA'] = batchwise_loss_accumulator(
-                            output_transform=lambda x: x['l_mi_BA'])
-        if isinstance(experiment_state.model, model_residual_gan):
-            metrics[key]['G']    = batchwise_loss_accumulator(
-                            output_transform=lambda x: x['l_G'])
-            metrics[key]['DA']   = batchwise_loss_accumulator(
-                            output_transform=lambda x: x['l_DA'])
-            metrics[key]['DB']   = batchwise_loss_accumulator(
-                            output_transform=lambda x: x['l_DB'])
+            #metrics[key]['miA']  = batchwise_loss_accumulator(
+                            #output_transform=lambda x: x['l_mi_A'])
+            #metrics[key]['miBA'] = batchwise_loss_accumulator(
+                            #output_transform=lambda x: x['l_mi_BA'])
         for name, m in metrics[key].items():
             m.attach(engines[key], name=name)
 
