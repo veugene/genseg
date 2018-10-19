@@ -36,7 +36,7 @@ def build_model():
         'lambda_x_id'       : 10,
         'lambda_z_id'       : 1,
         'lambda_cyc'        : 1,
-        'lambda_seg'        : 0.1}
+        'lambda_seg'        : 0.01}
     
     encoder_kwargs = {
         'input_shape'         : image_size,
@@ -64,7 +64,6 @@ def build_model():
         'block_type'          : pool_block,
         'num_resblocks'       : 4,
         'num_channels_list'   : [N, N//2, N//4, N//8, N//16, N//32],
-        'num_classes'         : 1,
         'skip'                : True,
         'dropout'             : 0.,
         'normalization'       : layer_normalization,
@@ -81,10 +80,11 @@ def build_model():
         'input_shape'         : enc_out_shape,
         'output_shape'        : image_size,
         'num_conv_blocks'     : 5,
-        'block_type'          : pool_block,
+        'block_type'          : conv_block,
         'num_resblocks'       : 4,
         'num_channels_list'   : [N, N//2, N//4, N//8, N//16, N//32],
         'num_classes'         : 1,
+        'mlp_dim'             : 256, 
         'skip'                : False,
         'dropout'             : 0.,
         'normalization'       : instance_normalization,
@@ -253,6 +253,27 @@ class encoder(nn.Module):
                 else:
                     skips.append(out_prev)
         return out, skips
+
+
+# In translation mode, normalization is as specified; in segmentation 
+# mode, `AdaptiveInstanceNorm2d`, conditioned on the translation, is used
+# instead.
+class switching_normalization(nn.Module):
+    def __init__(self, normalization, num_features, ndim,
+                    **norm_kwargs):
+        super(switching_normalization, self).__init__()
+        self.mode = 0
+        self.norm_t = normalization(
+            num_features=num_features,
+            ndim=ndim,
+            **norm_kwargs)
+        self.norm_s = AdaptiveInstanceNorm2d(
+            num_features=num_features)  # TODO momentum
+    def forward(self, x):
+        if self.mode==0:
+            return self.norm_t(x)
+        if self.mode==1:
+            return self.norm_s(x)
     
 
 class decoder(nn.Module):
@@ -304,33 +325,11 @@ class decoder(nn.Module):
         self.in_channels  = self.input_shape[0]
         self.out_channels = self.output_shape[0]
         
-        # Buffer holds switch that determines whether module run in 
-        # translation or segmention mode. In translation mode, normalization
-        # is as specified; in segmentation mode, `AdaptiveInstanceNorm2d`,
-        # conditioned on the translation, is used instead and an alternative
-        # convolution layer is applied at the end.
-        self.register_buffer('mode', torch.zeros(1))    # 0: trans, 1: seg
-        def normalization_switch(num_features, ndim=self.ndim, **norm_kwargs):
-            # Use user-specified normalization layer in mode 0 and AdaIN in 1.
-            class norm(nn.Module):
-                def __init__(self, mode, normalization, num_features,
-                             ndim, **norm_kwargs):
-                    super(norm, self).__init__()
-                    self.mode = mode
-                    self.norm_t = normalization(
-                        num_features=num_features,
-                        ndim=ndim,
-                        **norm_kwargs)
-                    self.norm_s = AdaptiveInstanceNorm2d(
-                        num_features=num_features)  # TODO momentum
-                def forward(self, x):
-                    if self.mode[0]==0:
-                        return self.norm_t(x)
-                    if self.mode[0]==1:
-                        return self.norm_s(x)
-            return norm(mode=self.mode, normalization=self.normalization,
-                        num_features=num_features, ndim=ndim,
-                        **norm_kwargs)
+        # Normalization switch (translation, segmentation modes).
+        def normalization_switch(*args, **kwargs):
+            return switching_normalization(*args,
+                                           normalization=self.normalization,
+                                           **kwargs)
         
         # Compute all intermediate conv shapes by working backward from the 
         # output shape.
@@ -433,11 +432,12 @@ class decoder(nn.Module):
         self.out_conv = nn.ModuleList(self.out_conv)
         
         # Classifier for segmentation (mode 1).
-        self.classifier = convolution(
-            in_channels=self.out_channels,
-            out_channels=self.num_classes,
-            kernel_size=1,
-            ndim=self.ndim)
+        if self.num_classes is not None:
+            self.classifier = convolution(
+                in_channels=self.out_channels,
+                out_channels=self.num_classes,
+                kernel_size=1,
+                ndim=self.ndim)
         
         # Count number of AdaIN parameters required.
         num_adain_params = 0
@@ -454,8 +454,11 @@ class decoder(nn.Module):
         
         
     def forward(self, z, skip_info=None, mode=0):
+        # Set mode (0: trans, 1: seg).
         assert mode in [0, 1]
-        self.mode[0] = mode     # Set mode (0: trans, 1: seg)
+        for m in self.modules():
+            if isinstance(m, switching_normalization):
+                m.mode = mode
         
         # In segmentation mode, assign AdaIN parameters.
         if mode==1:
@@ -490,7 +493,7 @@ class decoder(nn.Module):
                                                       and n>0):
                 skip = skip_info[n-1]
                 if   self.long_skip_merge_mode=='skinny_cat':
-                    cat = self.cats[n]
+                    cat = self.cats[n-1]
                     out = torch.cat([out, cat(skip)], dim=1)
                 elif self.long_skip_merge_mode=='cat':
                     out = torch.cat([out, skip], dim=1)
