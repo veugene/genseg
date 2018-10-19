@@ -173,7 +173,6 @@ class segmentation_model(nn.Module):
         if mask is not None:
             # Prepare a mask Tensor without None entries.
             mask_indices = [i for i, m in enumerate(mask) if m is not None]
-            x_AM_packed = visible['x_AM'][mask_indices]
             mask_packed = np.array([mask[i] for i in mask_indices])
             mask_packed = Variable(torch.from_numpy(mask_packed))
             if torch.cuda.device_count()==1:
@@ -184,6 +183,7 @@ class segmentation_model(nn.Module):
                 mask_packed = mask_packed.cuda()
         loss_seg = 0.
         if self.lambda_seg and mask_packed is not None and len(mask_packed):
+            x_AM_packed = visible['x_AM'][mask_indices]
             loss_seg = self.lambda_seg*self.loss_seg(x_AM_packed, mask_packed)
         
         # Include segmentation loss with generator losses and update.
