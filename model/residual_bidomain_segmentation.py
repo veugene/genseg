@@ -209,6 +209,8 @@ class segmentation_model(nn.Module):
         outputs['l_D']  = loss_D
         outputs['l_DA'] = _reduce([loss_disc['A']])
         outputs['l_DB'] = _reduce([loss_disc['B']])
+        outputs['l_gradnorm_D'] = gradnorm_D
+        outputs['l_gradnorm_G'] = gradnorm_G
         
         return outputs
 
@@ -397,8 +399,17 @@ class _loss_G(nn.Module):
             ('l_gen_AB',        _reduce([loss_gen['AB']])),
             ('l_gen_BA',        _reduce([loss_gen['BA']])),
             ('l_rec_sample',    _reduce([loss_rec['sample']])),
-            ('l_rec',           _reduce([loss_rec['BB']])),
-            ('l_rec_z',         _reduce([loss_rec['z_BA']])),
+            ('l_rec',           _reduce([_cat([loss_rec['AA'],
+                                               loss_rec['BB']], dim=1)])),
+            ('l_rec_AA',        _reduce([loss_rec['AA']])),
+            ('l_rec_BB',        _reduce([loss_rec['BB']])),
+            ('l_rec_c',         _reduce([_cat([loss_rec['z_AB'],
+                                               loss_rec['z_BB']], dim=1)])),
+            ('l_rec_s',         _reduce([_cat([loss_rec['z_BA'],
+                                               loss_rec['z_AA']], dim=1)])),
             ('l_rec_z_BA',      _reduce([loss_rec['z_BA']])),
+            ('l_rec_z_AB',      _reduce([loss_rec['z_AB']])),
+            ('l_rec_z_AA',      _reduce([loss_rec['z_AA']])),
+            ('l_rec_z_BB',      _reduce([loss_rec['z_BB']])),
             ))
         return losses
