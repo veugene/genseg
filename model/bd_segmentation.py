@@ -24,13 +24,6 @@ def _reduce(loss):
     return sum([_mean(v) for v in loss])
 
 
-def _cat(x, dim):
-    _x = [t for t in x if isinstance(t, torch.Tensor)]
-    if len(_x):
-        return torch.cat(_x, dim=dim)
-    return 0
-
-
 class segmentation_model(nn.Module):
     """
     Interface wrapper around the `DataParallel` parts of the model.
@@ -40,13 +33,14 @@ class segmentation_model(nn.Module):
                  loss_rec=mae, loss_seg=None, loss_gan='hinge',
                  num_disc_updates=1, relativistic=False, grad_penalty=None,
                  disc_clip_norm=None, lambda_disc=1, lambda_x_id=10,
-                 lambda_z_id=1, lambda_seg=1, lambda_cyc=0, lambda_mi=1,
-                 rng=None):
+                 lambda_z_id=1, lambda_f_id=1, lambda_seg=1, lambda_cyc=0,
+                 lambda_mi=1, rng=None):
         super(segmentation_model, self).__init__()
         lambdas = {
             'lambda_disc'       : lambda_disc,
             'lambda_x_id'       : lambda_x_id,
             'lambda_z_id'       : lambda_z_id,
+            'lambda_f_id'       : lambda_f_id,
             'lambda_seg'        : lambda_seg,
             'lambda_cyc'        : lambda_cyc,
             'lambda_mi'         : lambda_mi,
@@ -123,7 +117,7 @@ class segmentation_model(nn.Module):
         
         # Compute all outputs.
         with torch.set_grad_enabled(do_updates_bool):
-            visible, hidden = self._forward(x_A, x_B, rng=rng)
+            visible, hidden, intermediates = self._forward(x_A, x_B, rng=rng)
         
         # Evaluate discriminator loss and update.
         loss_disc = defaultdict(int)
@@ -162,7 +156,8 @@ class segmentation_model(nn.Module):
                                     x_BA=visible['x_BA'],
                                     x_BB=visible['x_BB'],
                                     x_BAB=visible['x_BAB'],
-                                    **hidden)
+                                    **hidden,
+                                    **intermediates)
         
         # Compute segmentation loss outside of DataParallel modules,
         # avoiding various issues:
@@ -218,7 +213,8 @@ class segmentation_model(nn.Module):
 class _forward(nn.Module):
     def __init__(self, encoder, decoder_common, decoder_residual, segmenter,
                  shape_sample, lambda_disc=1, lambda_x_id=10, lambda_z_id=1,
-                 lambda_seg=1, lambda_cyc=0, lambda_mi=1, rng=None):
+                 lambda_f_id=1, lambda_seg=1, lambda_cyc=0, lambda_mi=1,
+                 rng=None):
         super(_forward, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.encoder            = encoder
@@ -229,6 +225,7 @@ class _forward(nn.Module):
         self.lambda_disc        = lambda_disc
         self.lambda_x_id        = lambda_x_id
         self.lambda_z_id        = lambda_z_id
+        self.lambda_f_id        = lambda_f_id
         self.lambda_seg         = lambda_seg
         self.lambda_cyc         = lambda_cyc
         self.lambda_mi          = lambda_mi
@@ -252,23 +249,51 @@ class _forward(nn.Module):
             or self.lambda_z_id):
                 s_B, skip_B = self.encoder(x_B)
         
+        # Helper function for summing either two tensors or pairs of tensors
+        # across two lists of tensors.
+        def add(a, b):
+            if isinstance(a, torch.Tensor) and isinstance(b, torch.Tensor):
+                return a+b
+            else:
+                assert not isinstance(a, torch.Tensor)
+                assert not isinstance(b, torch.Tensor)
+                return [elem_a+elem_b for elem_a, elem_b in zip(a, b)]
+        
+        # Helper function to split an output into the final image output
+        # tensor and a list of intermediate tensors.
+        def unpack(x):
+            x_list = None
+            if not isinstance(x, torch.Tensor):
+                x, x_list = x[-1], x[:-1]
+            return x, x_list
+        
         # A->(B, dA)->A
-        x_AB = x_AB_residual = X_AA = None
+        x_AB = x_AB_residual = X_AA = x_AA_list = None
         if self.lambda_disc or self.lambda_x_id or self.lambda_z_id:
             c_A = s_A[:,:s_A.size(1)-self.shape_sample[0]]
             x_AB, _ = self.decoder_common(c_A, skip_info=skip_A)
             x_AB_residual, _ = self.decoder_residual(s_A, skip_info=skip_A)
-            x_AA = x_AB+x_AB_residual
+            x_AA = add(x_AB, x_AB_residual)
+            
+            # Unpack.
+            x_AA, x_AA_list = unpack(x_AA)
+            x_AB, _         = unpack(x_AB)
+            x_AB_residual, _= unpack(x_AB_residual)
         
         # B->(B, dA)->A
-        x_BA = x_BA_residual = x_BB = z_BA = None
+        x_BA = x_BA_residual = x_BB = z_BA = x_BB_list = None
         if self.lambda_disc or self.lambda_x_id or self.lambda_z_id:
             u_BA = self._z_sample(batch_size, rng=rng)
             c_B  = s_B[:,:s_B.size(1)-u_BA.size(1)]
             z_BA = torch.cat([c_B, u_BA], dim=1)
             x_BB, _ = self.decoder_common(c_B, skip_info=skip_B)
             x_BA_residual, _ = self.decoder_residual(z_BA, skip_info=skip_B)
-            x_BA = x_BB+x_BA_residual
+            x_BA = add(x_BB, x_BA_residual)
+            
+            # Unpack.
+            x_BA, _         = unpack(x_BA)
+            x_BB, x_BB_list = unpack(x_BB)
+            x_BA_residual, _= unpack(x_BA_residual)
         
         # Segment.
         x_AM = None
@@ -279,14 +304,15 @@ class _forward(nn.Module):
             else:
                 # Re-use residual decoder in mode 1.
                 x_AM = self.decoder_residual(s_A, skip_info=skip_AM, mode=1)
+                x_AM, _ = unpack(x_AM)
         
         # Reconstruct latent codes.
         s_BA = s_AA = c_AB = c_BB = None
         if self.lambda_z_id or self.lambda_cyc:
             s_BA, skip_BA = self.encoder(x_BA)
-            s_AA, _ = self.encoder(x_AA)
-            s_AB, _ = self.encoder(x_AB)
-            s_BB, _ = self.encoder(x_BB)
+            s_AA, _       = self.encoder(x_AA)
+            s_AB, _       = self.encoder(x_AB)
+            s_BB, _       = self.encoder(x_BB)
             c_AB = s_AB[:,:s_AB.size(1)-self.shape_sample[0]]
             c_BB = s_BB[:,:s_BB.size(1)-self.shape_sample[0]]
         
@@ -295,6 +321,7 @@ class _forward(nn.Module):
         if self.lambda_cyc:
             c_BA = s_BA[:,:s_BA.size(1)-self.shape_sample[0]]
             x_BAB, _ = self.decoder_common(c_BA, skip_info=skip_BA)
+            x_BAB, _ = unpack(x_BAB)
         
         # Compile outputs and return.
         visible = OrderedDict((
@@ -318,13 +345,18 @@ class _forward(nn.Module):
             's_A'        : s_A,
             'c_A'        : c_A,
             'c_B'        : c_B}
-        return visible, hidden
+        intermediates = {
+            'x_AA_list'  : x_AA_list,
+            'x_BB_list'  : x_BB_list,
+            'skip_A'     : skip_A,
+            'skip_B'     : skip_B}
+        return visible, hidden, intermediates
 
 
 class _loss_D(nn.Module):
     def __init__(self, gan_objective, disc_A, disc_B, mi_estimator=None,
-                 lambda_disc=1, lambda_x_id=10, lambda_z_id=1, lambda_seg=1,
-                 lambda_cyc=0, lambda_mi=1):
+                 lambda_disc=1, lambda_x_id=10, lambda_z_id=1, lambda_f_id=1,
+                 lambda_seg=1, lambda_cyc=0, lambda_mi=1):
         super(_loss_D, self).__init__()
         self._gan               = gan_objective
         self.disc_A             = disc_A
@@ -333,11 +365,16 @@ class _loss_D(nn.Module):
         self.lambda_disc        = lambda_disc
         self.lambda_x_id        = lambda_x_id
         self.lambda_z_id        = lambda_z_id
+        self.lambda_f_id        = lambda_f_id
         self.lambda_seg         = lambda_seg
         self.lambda_cyc         = lambda_cyc
         self.lambda_mi          = lambda_mi
     
     def forward(self, x_A, x_B, x_BA, x_AB):
+        if not isinstance(x_BA, torch.Tensor):
+            x_BA = x_BA[-1]     # Last item in a list.
+        if not isinstance(x_AB, torch.Tensor):
+            x_AB = x_AB[-1]     # Last item in a list.
         loss_disc = OrderedDict()
         loss_disc_A = self._gan.D(self.disc_A,
                                   fake=x_BA.detach(), real=x_A)
@@ -352,8 +389,8 @@ class _loss_D(nn.Module):
 
 class _loss_G(nn.Module):
     def __init__(self, gan_objective, disc_A, disc_B, loss_rec=mae,
-                 lambda_disc=1, lambda_x_id=10, lambda_z_id=1, lambda_seg=1,
-                 lambda_cyc=0, lambda_mi=1):
+                 lambda_disc=1, lambda_x_id=10, lambda_z_id=1, lambda_f_id=1, 
+                 lambda_seg=1, lambda_cyc=0, lambda_mi=1):
         super(_loss_G, self).__init__()
         self._gan               = gan_objective
         self.disc_A             = disc_A
@@ -362,12 +399,14 @@ class _loss_G(nn.Module):
         self.lambda_disc        = lambda_disc
         self.lambda_x_id        = lambda_x_id
         self.lambda_z_id        = lambda_z_id
+        self.lambda_f_id        = lambda_f_id
         self.lambda_seg         = lambda_seg
         self.lambda_cyc         = lambda_cyc
         self.lambda_mi          = lambda_mi
     
     def forward(self, x_AM, x_A, x_AB, x_AA, x_B, x_BA, x_BB, x_BAB,
-                s_BA, s_AA, c_AB, c_BB, z_BA, s_A, c_A, c_B):
+                s_BA, s_AA, c_AB, c_BB, z_BA, s_A, c_A, c_B,
+                x_AA_list, x_BB_list, skip_A, skip_B):
         # Generator loss.
         loss_gen = defaultdict(int)
         if self.lambda_disc:
@@ -382,12 +421,23 @@ class _loss_G(nn.Module):
             loss_rec['AA'] = self.lambda_x_id*self.loss_rec(x_AA, x_A)
             loss_rec['BB'] = self.lambda_x_id*self.loss_rec(x_BB, x_B)
         if self.lambda_x_id and self.lambda_cyc:
-            loss_rec['AA'] = self.lambda_cyc*self.loss_rec(x_BAB, x_B)
+            loss_rec['BB'] += self.lambda_cyc*self.loss_rec(x_BAB, x_B)
         if self.lambda_z_id:
             loss_rec['z_BA'] = self.lambda_z_id*self.loss_rec(s_BA, z_BA)
             loss_rec['z_AB'] = self.lambda_z_id*self.loss_rec(c_AB, c_A)
             loss_rec['z_AA'] = self.lambda_z_id*self.loss_rec(s_AA, s_A)
             loss_rec['z_BB'] = self.lambda_z_id*self.loss_rec(c_BB, c_B)
+        
+        # Reconstruction of intermediate features.
+        if self.lambda_f_id:
+            loss_rec['AA'] = _reduce([loss_rec['AA']])
+            loss_rec['BB'] = _reduce([loss_rec['BB']])
+            for s, t in zip(x_AA_list, skip_A[::-1]):
+                loss_rec['AA'] += _reduce([ self.lambda_f_id
+                                           *self.loss_rec(s, t)])
+            for s, t in zip(x_BB_list, skip_B[::-1]):
+                loss_rec['BB'] += _reduce([ self.lambda_f_id
+                                           *self.loss_rec(s, t)])
         
         # All generator losses combined.
         loss_G = ( _reduce(loss_gen.values())
@@ -398,15 +448,14 @@ class _loss_G(nn.Module):
             ('l_G',             loss_G),
             ('l_gen_AB',        _reduce([loss_gen['AB']])),
             ('l_gen_BA',        _reduce([loss_gen['BA']])),
-            ('l_rec_sample',    _reduce([loss_rec['sample']])),
-            ('l_rec',           _reduce([_cat([loss_rec['AA'],
-                                               loss_rec['BB']], dim=1)])),
+            ('l_rec',            _reduce([loss_rec['AA']])
+                                +_reduce([loss_rec['BB']])),
             ('l_rec_AA',        _reduce([loss_rec['AA']])),
             ('l_rec_BB',        _reduce([loss_rec['BB']])),
-            ('l_rec_c',         _reduce([_cat([loss_rec['z_AB'],
-                                               loss_rec['z_BB']], dim=1)])),
-            ('l_rec_s',         _reduce([_cat([loss_rec['z_BA'],
-                                               loss_rec['z_AA']], dim=1)])),
+            ('l_rec_c',          _reduce([loss_rec['z_AB']])
+                                +_reduce([loss_rec['z_BB']])),
+            ('l_rec_s',          _reduce([loss_rec['z_BA']])
+                                +_reduce([loss_rec['z_AA']])),
             ('l_rec_z_BA',      _reduce([loss_rec['z_BA']])),
             ('l_rec_z_AB',      _reduce([loss_rec['z_AB']])),
             ('l_rec_z_AA',      _reduce([loss_rec['z_AA']])),
