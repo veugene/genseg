@@ -30,13 +30,19 @@ from model.bd_segmentation import segmentation_model
 def build_model():
     N = 512 # Number of features at the bottleneck.
     n = 128 # Number of features to sample at the bottleneck.
-    image_size = (4, 240, 120)
+    image_size = (4, 256, 128)
     lambdas = {
         'lambda_disc'       : 1,
         'lambda_x_id'       : 10,
         'lambda_z_id'       : 1,
-        'lambda_cyc'        : 10,
+        'lambda_cyc'        : 1,
         'lambda_seg'        : 0.01}
+    #lambdas = {
+        #'lambda_disc'       : 0,
+        #'lambda_x_id'       : 10,
+        #'lambda_z_id'       : 0,
+        #'lambda_cyc'        : 0,
+        #'lambda_seg'        : 0}
     
     encoder_kwargs = {
         'input_shape'         : image_size,
@@ -85,12 +91,12 @@ def build_model():
         'num_channels_list'   : [N, N//2, N//4, N//8, N//16, N//32],
         'num_classes'         : 1,
         'mlp_dim'             : 256, 
-        'skip'                : True,
+        'skip'                : False,
         'dropout'             : 0.,
         'normalization'       : layer_normalization,
         'norm_kwargs'         : None,
         'padding_mode'        : 'reflect',
-        'kernel_size'         : 3,
+        'kernel_size'         : 5,
         'init'                : 'kaiming_normal_',
         'upsample_mode'       : 'repeat',
         'nonlinearity'        : lambda : nn.ReLU(inplace=True),
@@ -103,7 +109,7 @@ def build_model():
         'num_scales'          : 3,
         'normalization'       : layer_normalization,
         'norm_kwargs'         : None,
-        'kernel_size'         : 3,
+        'kernel_size'         : 4,
         'nonlinearity'        : lambda : nn.LeakyReLU(0.2, inplace=True),
         'padding_mode'        : 'reflect',
         'init'                : 'kaiming_normal_'}
@@ -126,7 +132,8 @@ def build_model():
                                shape_sample=shape_sample,
                                loss_gan='hinge',
                                #loss_rec=dist_ratio_mse_abs,
-                               loss_seg=dice_loss([1,2,4]),
+                               loss_seg=dice_loss([4,5]),
+                               num_disc_updates=5,
                                relativistic=False,
                                rng=np.random.RandomState(1234),
                                **lambdas)

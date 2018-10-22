@@ -24,7 +24,7 @@ from model.common.network.basic import (AdaptiveInstanceNorm2d,
                                         recursive_spectral_norm,
                                         repeat_block)
 from model.common.losses import dist_ratio_mse_abs
-from model.residual_bidomain_segmentation import segmentation_model
+from model.bd_segmentation import segmentation_model
 
 
 def build_model():
