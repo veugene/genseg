@@ -204,7 +204,7 @@ if __name__ == '__main__':
         if isinstance(experiment_state.model, model_ae):
             metrics[key]['loss'] = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_all'])
-        if isinstance(experiment_state.model, dict):
+        elif isinstance(experiment_state.model, dict):
             metrics[key]['G']    = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_G'])
             metrics[key]['DA']   = batchwise_loss_accumulator(

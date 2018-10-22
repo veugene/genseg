@@ -35,6 +35,7 @@ def build_model():
         'lambda_disc'       : 1,
         'lambda_x_id'       : 10,
         'lambda_z_id'       : 1,
+        'lambda_f_id'       : 0,
         'lambda_cyc'        : 10,
         'lambda_seg'        : 0.01}
     
