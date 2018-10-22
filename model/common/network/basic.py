@@ -22,7 +22,8 @@ from fcn_maker.blocks import (adjust_to_size,
 def get_output_shape(layer, input_shape):
     """
     Works for `convolution`, `nn.Linear`, `identity_block`, `basic_block`,
-    `tiny_block`, `dense_block`, `pool_block` `repeat_block`.
+    `bottleneck_block`, `tiny_block`, `dense_block`, `pool_block`,
+    `repeat_block`.
     
     `input_shape` is without batch dimension.
     """
@@ -102,6 +103,26 @@ def get_output_shape(layer, input_shape):
                                            kernel_size=layer.kernel_size,
                                            stride=1)
         return out_shape
+    elif isinstance(layer, bottleneck_block):
+        padding = 0
+        if layer.conv_padding:
+            padding = [(layer.kernel_size-1)//2,
+                       (layer.kernel_size-int(layer.subsample))//2]*layer.ndim
+        out_shape = (layer.out_channels//4,)+input_shape[1:]
+        out_shape = compute_conv_out_shape(input_shape=out_shape,
+                                           out_channels=layer.out_channels//4,
+                                           padding=padding,
+                                           kernel_size=layer.kernel_size,
+                                           stride=2 if layer.subsample else 1)
+        out_shape = (layer.out_channels,)+out_shape[1:]
+        if layer.upsample:
+            out_shape = compute_block_upsample(layer, out_shape)
+        out_shape = compute_conv_out_shape(input_shape=out_shape,
+                                           out_channels=layer.out_channels,
+                                           padding=padding,
+                                           kernel_size=layer.kernel_size,
+                                           stride=1)
+        return out_shape
     elif isinstance(layer, (tiny_block, pool_block)):
         out_shape = input_shape
         if layer.subsample:
@@ -134,8 +155,16 @@ def get_output_shape(layer, input_shape):
             out_shape = compute_block_upsample(layer, out_shape)
         return out_shape
     elif isinstance(layer, dense_block):
-        raise NotImplementedError("TODO: implement shape inference for "
-                                  "`dense_block`.")
+        # Setting `conv_padding` to False doesn't make sense.
+        out_shape = input_shape
+        if layer.subsample:
+            out_shape = compute_pool_out_shape(input_shape=input_shape,
+                                               padding=0,
+                                               stride=2)
+        if layer.upsample:
+            out_shape = compute_block_upsample(layer, out_shape)
+        out_shape = (layer.out_channels,)+out_shape[1:]
+        return out_shape
     elif isinstance(layer, repeat_block):
         out_shape = input_shape
         for block in layer.blocks:
@@ -623,6 +652,89 @@ def max_unpooling(ndim=2, *args, **kwargs):
         raise ValueError("ndim must be 2 or 3")
 
 
+"""
+Bottleneck architecture for > 34 layer resnet.
+Follows improved proposed scheme in http://arxiv.org/pdf/1603.05027v2.pdf
+"""
+class bottleneck_block(block_abstract):
+    def __init__(self, in_channels, num_filters, subsample=False,
+                 upsample=False, upsample_mode='repeat', skip=True,
+                 dropout=0., normalization=batch_normalization,
+                 norm_kwargs=None, conv_padding=True, padding_mode='constant',
+                 kernel_size=3, init='kaiming_normal_', nonlinearity='ReLU',
+                 ndim=2):
+        super(bottleneck_block, self).__init__(in_channels, num_filters,
+                                               subsample, upsample)
+        if norm_kwargs is None:
+            norm_kwargs = {}
+        self.out_channels = num_filters
+        self.upsample_mode = upsample_mode
+        self.skip = skip
+        self.dropout = dropout
+        self.normalization = normalization
+        self.norm_kwargs = norm_kwargs
+        self.conv_padding = conv_padding
+        self.padding_mode = padding_mode
+        self.kernel_size = kernel_size
+        self.init = init
+        self.nonlinearity = nonlinearity
+        self.ndim = ndim
+        self.op = []
+        self.op += [norm_nlin_conv(in_channels=in_channels,
+                                   out_channels=num_filters//4,
+                                   kernel_size=1,
+                                   subsample=subsample,
+                                   normalization=normalization,
+                                   norm_kwargs=norm_kwargs,
+                                   conv_padding=conv_padding,
+                                   padding_mode=padding_mode,
+                                   init=init,
+                                   nonlinearity=nonlinearity,
+                                   ndim=ndim)]
+        self.op += [norm_nlin_conv(in_channels=num_filters//4,
+                                   out_channels=num_filters//4,
+                                   kernel_size=kernel_size,
+                                   normalization=normalization,
+                                   norm_kwargs=norm_kwargs,
+                                   conv_padding=conv_padding,
+                                   padding_mode=padding_mode,
+                                   init=init,
+                                   nonlinearity=nonlinearity,
+                                   ndim=ndim)]
+        self.op += [norm_nlin_conv(in_channels=num_filters//4,
+                                   out_channels=num_filters,
+                                   kernel_size=1,
+                                   upsample=upsample,
+                                   upsample_mode=upsample_mode,
+                                   normalization=normalization,
+                                   norm_kwargs=norm_kwargs,
+                                   conv_padding=conv_padding,
+                                   padding_mode=padding_mode,
+                                   init=init,
+                                   nonlinearity=nonlinearity,
+                                   ndim=ndim)]
+        if dropout > 0:
+            self.op += [get_dropout(dropout, nonlinearity)]
+        self.op = nn.ModuleList(self.op)
+        self.op_shortcut = None
+        if skip:
+            self.op_shortcut = shortcut(in_channels=in_channels,
+                                        out_channels=num_filters,
+                                        subsample=subsample,
+                                        upsample=upsample,
+                                        upsample_mode=upsample_mode,
+                                        init=init,
+                                        ndim=ndim)
+
+    def forward(self, input):
+        out = input
+        for op in self.op:
+            out = op(out)
+        if self.skip:
+            out = self.op_shortcut(input, out)
+        return out
+
+
 class conv_block(block_abstract):
     """
     A single basic 3x3 convolution.
@@ -687,7 +799,7 @@ class conv_block(block_abstract):
                                 padding_mode=padding_mode)]
         if dropout > 0:
             self.op += [get_dropout(dropout, nonlin=nonlinearity)]
-        self._register_modules(self.op)
+        self.op = nn.ModuleList(self.op)
         self.op_shortcut = None
         if skip:
             self.op_shortcut = shortcut(in_channels=in_channels,
@@ -697,7 +809,6 @@ class conv_block(block_abstract):
                                         upsample_mode=upsample_mode,
                                         init=init,
                                         ndim=ndim)
-            self._register_modules({'shortcut': self.op_shortcut})
 
     def forward(self, input):
         out = input
@@ -766,7 +877,7 @@ class pool_block(block_abstract):
             self.op += [get_dropout(dropout, nonlinearity)]
         if upsample:
             self.op += [max_unpooling(kernel_size=2, ndim=ndim)]
-        self._register_modules(self.op)
+        self.op = nn.ModuleList(self.op)
         self.op_shortcut = None
         if skip:
             self.op_shortcut = shortcut(in_channels=in_channels,
@@ -776,7 +887,6 @@ class pool_block(block_abstract):
                                         upsample_mode=upsample_mode,
                                         init=init,
                                         ndim=ndim)
-            self._register_modules({'shortcut': self.op_shortcut})
 
     def forward(self, input, unpool_indices=None):
         out = input
