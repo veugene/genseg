@@ -437,7 +437,7 @@ class _loss_G(nn.Module):
                 x_AA_list, x_BB_list, skip_A, skip_B):
         # Mutual information loss for generator.
         loss_mi_gen = defaultdict(int)
-        if self.lambda_mi and self.mi_estimator is not None:
+        if self.mi_estimator is not None:
             loss_mi_gen['A']  = -self.lambda_mi*self.mi_estimator(c_A, u_A)
             loss_mi_gen['BA'] = -self.lambda_mi*self.mi_estimator(c_BA, u_BA)
         
