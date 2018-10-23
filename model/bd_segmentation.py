@@ -94,7 +94,7 @@ class segmentation_model(nn.Module):
         
         # Module to compute discriminator losses on GPU.
         # Outputs are placed on CPU when there are multiple GPUs.
-        keys_D = ['gan_objective', 'disc_A', 'disc_B']
+        keys_D = ['gan_objective', 'disc_A', 'disc_B', 'mi_estimator']
         kwargs_D = dict([(key, val) for key, val in kwargs.items()
                          if key in keys_D])
         self._loss_D =_loss_D(**kwargs_D, **lambdas)
@@ -103,7 +103,8 @@ class segmentation_model(nn.Module):
         
         # Module to compute generator updates on GPU.
         # Outputs are placed on CPU when there are multiple GPUs.
-        keys_G = ['gan_objective', 'disc_A', 'disc_B', 'loss_rec']
+        keys_G = ['gan_objective', 'disc_A', 'disc_B', 'mi_estimator',
+                  'loss_rec']
         kwargs_G = dict([(key, val) for key, val in kwargs.items()
                          if key in keys_G])
         self._loss_G = _loss_G(**kwargs_G, **lambdas)
@@ -126,10 +127,14 @@ class segmentation_model(nn.Module):
             for i in range(self.num_disc_updates):
                 # Evaluate.
                 with torch.set_grad_enabled(do_updates_bool):
-                    loss_disc = self._loss_D(x_A=x_A,
-                                             x_B=x_B,
-                                             x_BA=visible['x_BA'],
-                                             x_AB=visible['x_AB'])
+                    loss_disc, loss_mi_est = self._loss_D(x_A=x_A,
+                                                          x_B=x_B,
+                                                          x_BA=visible['x_BA'],
+                                                          x_AB=visible['x_AB'],
+                                                          c_A=hidden['c_A'],
+                                                          u_A=hidden['u_A'],
+                                                          c_BA=hidden['c_BA'],
+                                                          u_BA=hidden['u_BA'])
                     loss_D = _reduce(loss_disc.values())
                 # Update discriminator.
                 disc_A = self.separate_networks['disc_A']
@@ -144,6 +149,13 @@ class segmentation_model(nn.Module):
                                                  max_norm=self.disc_clip_norm)
                     optimizer['D'].step()
                     gradnorm_D = grad_norm(disc_A)+grad_norm(disc_B)
+                # Update MI estimator.
+                mi_estimator = self.separate_networks['mi_estimator']
+                if do_updates_bool and mi_estimator is not None:
+                    optimizer['E'].zero_grad()
+                    _reduce([loss_mi_est['A'],
+                             loss_mi_est['BA']]).mean().backward()
+                    optimizer['E'].step()
         
         # Evaluate generator losses.
         gradnorm_G = 0
@@ -268,9 +280,10 @@ class _forward(nn.Module):
             return x, x_list
         
         # A->(B, dA)->A
-        x_AB = x_AB_residual = X_AA = x_AA_list = None
+        x_AB = x_AB_residual = X_AA = x_AA_list = c_A = u_A = None
         if self.lambda_disc or self.lambda_x_id or self.lambda_z_id:
-            c_A = s_A[:,:s_A.size(1)-self.shape_sample[0]]
+            c_A, u_A = torch.split(s_A, [s_A.size(1)-self.shape_sample[0],
+                                         self.shape_sample[0]], dim=1)
             x_AB, _ = self.decoder_common(c_A, skip_info=skip_A)
             x_AB_residual, _ = self.decoder_residual(s_A, skip_info=skip_A)
             x_AA = add(x_AB, x_AB_residual)
@@ -317,39 +330,43 @@ class _forward(nn.Module):
             c_BB = s_BB[:,:s_BB.size(1)-self.shape_sample[0]]
         
         # Cycle.
-        x_BAB = None
+        x_BAB = c_BA = u_BA = None
         if self.lambda_cyc:
-            c_BA = s_BA[:,:s_BA.size(1)-self.shape_sample[0]]
+            c_BA, u_BA = torch.split(s_BA, [s_BA.size(1)-self.shape_sample[0],
+                                            self.shape_sample[0]], dim=1)
             x_BAB, _ = self.decoder_common(c_BA, skip_info=skip_BA)
             x_BAB, _ = unpack(x_BAB)
         
         # Compile outputs and return.
         visible = OrderedDict((
-            ('x_AM',               x_AM),
-            ('x_A',                x_A),
-            ('x_AB',               x_AB),
-            ('x_AB_residual',      x_AB_residual),
-            ('x_AA',               x_AA),
-            ('x_B',                x_B),
-            ('x_BA',               x_BA),
-            ('x_BA_residual',      x_BA_residual),
-            ('x_BB',               x_BB),
-            ('x_BAB',              x_BAB),
+            ('x_AM',          x_AM),
+            ('x_A',           x_A),
+            ('x_AB',          x_AB),
+            ('x_AB_residual', x_AB_residual),
+            ('x_AA',          x_AA),
+            ('x_B',           x_B),
+            ('x_BA',          x_BA),
+            ('x_BA_residual', x_BA_residual),
+            ('x_BB',          x_BB),
+            ('x_BAB',         x_BAB),
             ))
         hidden = {
-            's_BA'       : s_BA,
-            's_AA'       : s_AA,
-            'c_AB'       : c_AB,
-            'c_BB'       : c_BB,
-            'z_BA'       : z_BA,
-            's_A'        : s_A,
-            'c_A'        : c_A,
-            'c_B'        : c_B}
+            's_BA'          : s_BA,
+            's_AA'          : s_AA,
+            'c_AB'          : c_AB,
+            'c_BB'          : c_BB,
+            'z_BA'          : z_BA,
+            's_A'           : s_A,
+            'c_A'           : c_A,
+            'u_A'           : u_A,
+            'c_B'           : c_B,
+            'c_BA'          : c_BA,
+            'u_BA'          : u_BA}
         intermediates = {
-            'x_AA_list'  : x_AA_list,
-            'x_BB_list'  : x_BB_list,
-            'skip_A'     : skip_A,
-            'skip_B'     : skip_B}
+            'x_AA_list'     : x_AA_list,
+            'x_BB_list'     : x_BB_list,
+            'skip_A'        : skip_A,
+            'skip_B'        : skip_B}
         return visible, hidden, intermediates
 
 
@@ -370,11 +387,14 @@ class _loss_D(nn.Module):
         self.lambda_cyc         = lambda_cyc
         self.lambda_mi          = lambda_mi
     
-    def forward(self, x_A, x_B, x_BA, x_AB):
+    def forward(self, x_A, x_B, x_BA, x_AB, c_A, u_A, c_BA, u_BA):
+        # If outputs are lists, get the last item (image).
         if not isinstance(x_BA, torch.Tensor):
-            x_BA = x_BA[-1]     # Last item in a list.
+            x_BA = x_BA[-1]
         if not isinstance(x_AB, torch.Tensor):
-            x_AB = x_AB[-1]     # Last item in a list.
+            x_AB = x_AB[-1]
+        
+        # Discriminators.
         loss_disc = OrderedDict()
         loss_disc_A = self._gan.D(self.disc_A,
                                   fake=x_BA.detach(), real=x_A)
@@ -382,19 +402,27 @@ class _loss_D(nn.Module):
                                   fake=x_AB.detach(), real=x_B)
         loss_disc['A'] = self.lambda_disc*loss_disc_A
         loss_disc['B'] = self.lambda_disc*loss_disc_B
-        if self.lambda_mi and self.mi_estimator is not None:
-            pass    # TODO
-        return loss_disc
+        
+        # Mutual information estimate.
+        loss_mi_est = defaultdict()
+        if self.mi_estimator is not None:
+            loss_mi_est['A'] = self.mi_estimator(c_A.detach(), u_A.detach())
+            if self.lambda_cyc:
+                loss_mi_est['BA'] = self.mi_estimator(c_BA.detach(),
+                                                      u_BA.detach())
+        
+        return loss_disc, loss_mi_est
 
 
 class _loss_G(nn.Module):
-    def __init__(self, gan_objective, disc_A, disc_B, loss_rec=mae,
-                 lambda_disc=1, lambda_x_id=10, lambda_z_id=1, lambda_f_id=1, 
-                 lambda_seg=1, lambda_cyc=0, lambda_mi=1):
+    def __init__(self, gan_objective, disc_A, disc_B, mi_estimator=None,
+                 loss_rec=mae, lambda_disc=1, lambda_x_id=10, lambda_z_id=1,
+                 lambda_f_id=1, lambda_seg=1, lambda_cyc=0, lambda_mi=1):
         super(_loss_G, self).__init__()
         self._gan               = gan_objective
         self.disc_A             = disc_A
         self.disc_B             = disc_B
+        self.mi_estimator       = mi_estimator
         self.loss_rec           = loss_rec
         self.lambda_disc        = lambda_disc
         self.lambda_x_id        = lambda_x_id
@@ -405,8 +433,14 @@ class _loss_G(nn.Module):
         self.lambda_mi          = lambda_mi
     
     def forward(self, x_AM, x_A, x_AB, x_AA, x_B, x_BA, x_BB, x_BAB,
-                s_BA, s_AA, c_AB, c_BB, z_BA, s_A, c_A, c_B,
+                s_BA, s_AA, c_AB, c_BB, z_BA, s_A, c_A, u_A, c_B, c_BA, u_BA,
                 x_AA_list, x_BB_list, skip_A, skip_B):
+        # Mutual information loss for generator.
+        loss_mi_gen = defaultdict(int)
+        if self.lambda_mi and self.mi_estimator is not None:
+            loss_mi_gen['A']  = -self.lambda_mi*self.mi_estimator(c_A, u_A)
+            loss_mi_gen['BA'] = -self.lambda_mi*self.mi_estimator(c_BA, u_BA)
+        
         # Generator loss.
         loss_gen = defaultdict(int)
         if self.lambda_disc:
@@ -441,24 +475,25 @@ class _loss_G(nn.Module):
         
         # All generator losses combined.
         loss_G = ( _reduce(loss_gen.values())
-                  +_reduce(loss_rec.values()))
+                  +_reduce(loss_rec.values())
+                  +_reduce(loss_mi_gen.values()))
         
         # Compile outputs and return.
         losses = OrderedDict((
-            ('l_G',             loss_G),
-            ('l_gen_AB',        _reduce([loss_gen['AB']])),
-            ('l_gen_BA',        _reduce([loss_gen['BA']])),
-            ('l_rec',            _reduce([loss_rec['AA']])
-                                +_reduce([loss_rec['BB']])),
-            ('l_rec_AA',        _reduce([loss_rec['AA']])),
-            ('l_rec_BB',        _reduce([loss_rec['BB']])),
-            ('l_rec_c',          _reduce([loss_rec['z_AB']])
-                                +_reduce([loss_rec['z_BB']])),
-            ('l_rec_s',          _reduce([loss_rec['z_BA']])
-                                +_reduce([loss_rec['z_AA']])),
-            ('l_rec_z_BA',      _reduce([loss_rec['z_BA']])),
-            ('l_rec_z_AB',      _reduce([loss_rec['z_AB']])),
-            ('l_rec_z_AA',      _reduce([loss_rec['z_AA']])),
-            ('l_rec_z_BB',      _reduce([loss_rec['z_BB']])),
+            ('l_G',           loss_G),
+            ('l_gen_AB',      _reduce([loss_gen['AB']])),
+            ('l_gen_BA',      _reduce([loss_gen['BA']])),
+            ('l_rec',         _reduce([loss_rec['AA'], loss_rec['BB']])),
+            ('l_rec_AA',      _reduce([loss_rec['AA']])),
+            ('l_rec_BB',      _reduce([loss_rec['BB']])),
+            ('l_rec_c',       _reduce([loss_rec['z_AB'], loss_rec['z_BB']])),
+            ('l_rec_s',       _reduce([loss_rec['z_BA'], loss_rec['z_AA']])),
+            ('l_rec_z_BA',    _reduce([loss_rec['z_BA']])),
+            ('l_rec_z_AB',    _reduce([loss_rec['z_AB']])),
+            ('l_rec_z_AA',    _reduce([loss_rec['z_AA']])),
+            ('l_rec_z_BB',    _reduce([loss_rec['z_BB']])),
+            ('l_mi',          _reduce([loss_mi_gen['A'], loss_mi_gen['BA']])),
+            ('l_mi_A',        _reduce([loss_mi_gen['A']])),
+            ('l_mi_BA',       _reduce([loss_mi_gen['BA']]))
             ))
         return losses

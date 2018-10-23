@@ -211,10 +211,10 @@ if __name__ == '__main__':
                             output_transform=lambda x: x['l_DA'])
             metrics[key]['DB']   = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_DB'])
-            #metrics[key]['miA']  = batchwise_loss_accumulator(
-                            #output_transform=lambda x: x['l_mi_A'])
-            #metrics[key]['miBA'] = batchwise_loss_accumulator(
-                            #output_transform=lambda x: x['l_mi_BA'])
+            metrics[key]['miA']  = batchwise_loss_accumulator(
+                            output_transform=lambda x: x['l_mi_A'])
+            metrics[key]['miBA'] = batchwise_loss_accumulator(
+                            output_transform=lambda x: x['l_mi_BA'])
         for name, m in metrics[key].items():
             m.attach(engines[key], name=name)
 
