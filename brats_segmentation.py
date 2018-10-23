@@ -66,6 +66,8 @@ def get_parser():
     parser.add_argument('--cpu', default=False, action='store_true')
     parser.add_argument('--nb_io_workers', type=int, default=1)
     parser.add_argument('--nb_proc_workers', type=int, default=1)
+    parser.add_argument('--save_image_events', action='store_true',
+                        help="Save images into tensorboard event files.")
     parser.add_argument('--rseed', type=int, default=1234)
     return parser
 
@@ -244,7 +246,7 @@ if __name__ == '__main__':
                                              or k.startswith('prob')]),
             metric_keys=['dice'])
     
-    # Set up image logging to tensorboard.
+    # Set up image logging.
     for channel, sequence_name in enumerate(['flair', 't1', 't1c', 't2']):
         def output_transform(output, channel=channel):
             transformed = OrderedDict()
@@ -263,7 +265,8 @@ if __name__ == '__main__':
                 initial_epoch=experiment_state.get_epoch(),
                 directory=os.path.join(experiment_state.experiment_path,
                                     "images/{}".format(key)),
-                summary_tracker=tracker if key=='valid' else None,
+                summary_tracker=(tracker if key=='valid'
+                                         and args.save_image_events else None),
                 num_vis=args.n_vis,
                 suffix=sequence_name,
                 output_name=sequence_name,
