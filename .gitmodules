@@ -1,0 +1,9 @@
+[submodule "submodules/fcn_maker"]
+	path = submodules/fcn_maker
+	url = https://github.com/veugene/fcn_maker.git
+[submodule "submodules/data_tools"]
+	path = submodules/data_tools
+	url = https://github.com/veugene/data_tools.git
+[submodule "submodules/ignite"]
+	path = submodules/ignite
+	url = https://github.com/pytorch/ignite.git
