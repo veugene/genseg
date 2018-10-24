@@ -281,11 +281,14 @@ class _forward(nn.Module):
         
         # A->(B, dA)->A
         x_AB = x_AB_residual = X_AA = x_AA_list = c_A = u_A = None
+        if (self.lambda_seg
+         or self.lambda_disc or self.lambda_x_id or self.lambda_z_id):
+            x_AB_residual, skip_AM = self.decoder_residual(s_A,
+                                                           skip_info=skip_A)
         if self.lambda_disc or self.lambda_x_id or self.lambda_z_id:
             c_A, u_A = torch.split(s_A, [s_A.size(1)-self.shape_sample[0],
                                          self.shape_sample[0]], dim=1)
             x_AB, _ = self.decoder_common(c_A, skip_info=skip_A)
-            x_AB_residual, _ = self.decoder_residual(s_A, skip_info=skip_A)
             x_AA = add(x_AB, x_AB_residual)
             
             # Unpack.
@@ -311,7 +314,6 @@ class _forward(nn.Module):
         # Segment.
         x_AM = None
         if self.lambda_seg:
-            _, skip_AM = self.decoder_residual(s_A, skip_info=skip_A)
             if self.segmenter[0] is not None:
                 x_AM = self.segmenter(s_A, skip_info=skip_AM)
             else:
