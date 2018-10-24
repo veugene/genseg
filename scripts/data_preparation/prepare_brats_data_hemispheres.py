@@ -181,13 +181,17 @@ def process_case(case_num, h5py_file, volume, segmentation, fn,
     vol, seg, m = preprocess(volume, segmentation, skip_bias_correction)
     slices = get_slices(vol, seg, m, min_tumor_fraction, min_brain_fraction)
     for key in slices.keys():
+        if len(slices[key])==0:
+            kwargs = {}
+        else:
+            kwargs = {'chunks': (1,)+slices[key].shape[1:],
+                      'compression': 'lzf'}
         group_k = group_p.require_group(key)
         group_k.create_dataset('axis_1',
                                shape=slices[key].shape,
                                data=slices[key],
                                dtype=slices[key].dtype,
-                               chunks=(1,)+slices[key].shape[1:],
-                               compression='lzf')
+                               **kwargs)
                                        
                                        
 class thread_pool_executor(object):

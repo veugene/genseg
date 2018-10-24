@@ -408,9 +408,9 @@ class _loss_G(nn.Module):
             loss_gen['BA'] = self.lambda_disc*self._gan.G(self.disc_A,
                                                           fake=x_BA, real=x_A)
         if self.lambda_disc and self.lambda_cross:
-            loss_gen['C'] = ( self.lambda_disc*self.lambda_cross
-                             *self._gan.G(self.disc_C,
-                                          fake=x_cross, real=x_A))
+            loss_gen['C'] = self.lambda_disc*self._gan.G(self.disc_C,
+                                                         fake=x_cross,
+                                                         real=x_A)
         
         # Reconstruction loss.
         loss_rec = defaultdict(int)
@@ -418,9 +418,8 @@ class _loss_G(nn.Module):
             loss_rec['BB'] = self.lambda_x_id*self.loss_rec(x_BB, x_B)
         if self.lambda_z_id:
             loss_rec['z_BA'] = self.lambda_z_id*self.loss_rec(s_BA, z_BA)
-            if self.lambda_cross:
-                loss_rec['z_cross'] = self.lambda_z_id*self.loss_rec(s_cross,
-                                                                     s_A)
+        if self.lambda_cross:
+            loss_rec['z_cross'] = self.lambda_cross*self.loss_rec(s_cross, s_A)
         if self.lambda_sample:
             loss_rec['sample'] = self.lambda_sample*self.loss_rec(z_BA_im,
                                                                   z_BA_im_rec)
@@ -432,7 +431,8 @@ class _loss_G(nn.Module):
         
         # All generator losses combined.
         loss_G = ( _reduce(loss_gen.values())
-                  +_reduce(loss_rec.values()))
+                  +_reduce(loss_rec.values())
+                  +_reduce([loss_cyc]))
         
         # Compile outputs and return.
         losses = OrderedDict((

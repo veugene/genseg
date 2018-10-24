@@ -31,9 +31,6 @@ from utils.data.brats import (prepare_data_brats13s,
                               prepare_data_brats17,
                               preprocessor_brats)
 from model import configs
-from model.bidomain_segmentation import segmentation_model as model_gan
-from model.residual_bidomain_segmentation import segmentation_model as \
-    model_residual_gan
 from model.ae_segmentation import segmentation_model as model_ae
 
 import itertools
@@ -69,6 +66,8 @@ def get_parser():
     parser.add_argument('--cpu', default=False, action='store_true')
     parser.add_argument('--nb_io_workers', type=int, default=1)
     parser.add_argument('--nb_proc_workers', type=int, default=1)
+    parser.add_argument('--save_image_events', action='store_true',
+                        help="Save images into tensorboard event files.")
     parser.add_argument('--rseed', type=int, default=1234)
     return parser
 
@@ -133,24 +132,14 @@ if __name__ == '__main__':
     
     # Function to convert data to pytorch usable form.
     def prepare_batch(batch):
-        h, s, m = batch
-        # Identify indices of examples with masks.
-        indices = [i for i, mask in enumerate(m) if mask is not None]
-        m       = [m[i] for i in indices]
-        # Remove all but the classes of interest (for visualization).
-        m = np.array(m)
-        m_filtered = np.zeros_like(m)
-        for i in target_class:
-            m_filtered[m==i] = i
+        s, h, m = batch
         # Prepare for pytorch.
-        h = Variable(torch.from_numpy(np.array(h)))
         s = Variable(torch.from_numpy(np.array(s)))
-        m = Variable(torch.from_numpy(m_filtered))
+        h = Variable(torch.from_numpy(np.array(h)))
         if not args.cpu:
-            h = h.cuda()
             s = s.cuda()
-            m = m.cuda()
-        return h, s, m, indices
+            h = h.cuda()
+        return s, h, m
     
     # Helper for training/validation loops : detach variables from graph.
     def detach(x):
@@ -164,16 +153,17 @@ if __name__ == '__main__':
     def training_function(engine, batch):
         for model in experiment_state.model.values():
             model.train()
-        B, A, M, indices = prepare_batch(batch)
-        outputs = experiment_state.model['G'].evaluate(A, B, M, indices,
+        B, A, M = prepare_batch(batch)
+        outputs = experiment_state.model['G'](A, B, M,
                                          optimizer=experiment_state.optimizer)
         outputs = detach(outputs)
         
         # Drop images without labels, for visualization.
-        for key in filter(lambda x: x.startswith('out_'), outputs.keys()):
-            if outputs['out_M'] is None:
+        indices = [i for i, m in enumerate(M) if m is not None]
+        for key in filter(lambda x: x.startswith('x_'), outputs.keys()):
+            if outputs['x_M'] is None:
                 outputs[key] = None
-            elif outputs[key] is not None and key not in ['out_M', 'out_AM']:
+            elif outputs[key] is not None and key not in ['x_M', 'x_AM']:
                 outputs[key] = outputs[key][indices]
         
         return outputs
@@ -182,10 +172,9 @@ if __name__ == '__main__':
     def validation_function(engine, batch):
         for model in experiment_state.model.values():
             model.eval()
-        B, A, M, indices = prepare_batch(batch)
+        B, A, M = prepare_batch(batch)
         with torch.no_grad():
-            outputs = experiment_state.model['G'].evaluate(A, B, M, indices,
-                                                           rng=engine.rng)
+            outputs = experiment_state.model['G'](A, B, M, rng=engine.rng)
         outputs = detach(outputs)
         return outputs
     
@@ -211,13 +200,13 @@ if __name__ == '__main__':
     for key in engines:
         metrics[key] = {}
         metrics[key]['dice'] = dice_loss(target_class=target_class,
-                        output_transform=lambda x: (x['out_AM'], x['out_M']))
+                        output_transform=lambda x: (x['x_AM'], x['x_M']))
         metrics[key]['rec']  = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_rec'])
         if isinstance(experiment_state.model, model_ae):
             metrics[key]['loss'] = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_all'])
-        if isinstance(experiment_state.model, model_gan):
+        elif isinstance(experiment_state.model, dict):
             metrics[key]['G']    = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_G'])
             metrics[key]['DA']   = batchwise_loss_accumulator(
@@ -228,13 +217,6 @@ if __name__ == '__main__':
                             output_transform=lambda x: x['l_mi_A'])
             metrics[key]['miBA'] = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_mi_BA'])
-        if isinstance(experiment_state.model, model_residual_gan):
-            metrics[key]['G']    = batchwise_loss_accumulator(
-                            output_transform=lambda x: x['l_G'])
-            metrics[key]['DA']   = batchwise_loss_accumulator(
-                            output_transform=lambda x: x['l_DA'])
-            metrics[key]['DB']   = batchwise_loss_accumulator(
-                            output_transform=lambda x: x['l_DB'])
         for name, m in metrics[key].items():
             m.attach(engines[key], name=name)
 
@@ -264,13 +246,13 @@ if __name__ == '__main__':
                                              or k.startswith('prob')]),
             metric_keys=['dice'])
     
-    # Set up image logging to tensorboard.
+    # Set up image logging.
     for channel, sequence_name in enumerate(['flair', 't1', 't1c', 't2']):
         def output_transform(output, channel=channel):
             transformed = OrderedDict()
             for k, v in output.items():
-                if k.startswith('out_') and v is not None and v.dim()==4:
-                    k_new = k.replace('out_','')
+                if k.startswith('x_') and v is not None and v.dim()==4:
+                    k_new = k.replace('x_','')
                     v_new = v.cpu().numpy()
                     if k_new in ['M', 'AM']:
                         v_new = np.squeeze(v_new, 1)    # Single channel seg.
@@ -283,7 +265,8 @@ if __name__ == '__main__':
                 initial_epoch=experiment_state.get_epoch(),
                 directory=os.path.join(experiment_state.experiment_path,
                                     "images/{}".format(key)),
-                summary_tracker=tracker if key=='valid' else None,
+                summary_tracker=(tracker if key=='valid'
+                                         and args.save_image_events else None),
                 num_vis=args.n_vis,
                 suffix=sequence_name,
                 output_name=sequence_name,
