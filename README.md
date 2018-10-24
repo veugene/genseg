@@ -2,12 +2,17 @@
 
 ## Initialization
 
-Run `git submodule init` to download submodules.  
-Run `source link_submodules.sh` from *within the root directory of the source tree* to set up submodule links and add then to the PYTHONPATH.
+Run `git submodule init` to initialize submodules.  
+Run `git submodule update` to download submodules.  
+Run `source link_submodules.sh` from *within the root directory of the source tree* to set up submodule links and add then to the PYTHONPATH.  
 
 Requires:
+- h5py
+- imageio
+- natsort
 - tqdm
 - SimpleITK
+- zarr
 
 ## Models
 
