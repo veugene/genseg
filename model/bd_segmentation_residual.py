@@ -90,30 +90,24 @@ class segmentation_model(nn.Module):
                         'sample_image_space', 'sample_decoder', 'rng']
         kwargs_forward = dict([(key, val) for key, val in kwargs.items()
                                if key in keys_forward])
-        self._forward = _forward(**kwargs_forward, **lambdas)
-        if torch.cuda.device_count()>1:
-            print("DEBUG: DATA PARALLEL")
-            self._forward = nn.DataParallel(self._forward, output_device=-1)
+        self._forward = nn.DataParallel(_forward(**kwargs_forward, **lambdas),
+                                        output_device=-1)
         
         # Module to compute discriminator losses on GPU.
-        # Outputs are placed on CPU when there are multiple GPUs.
+        # Outputs are placed on CPU.
         keys_D = ['gan_objective', 'disc_A', 'disc_B', 'disc_C']
         kwargs_D = dict([(key, val) for key, val in kwargs.items()
                          if key in keys_D])
-        self._loss_D =_loss_D(**kwargs_D, **lambdas)
-        if torch.cuda.device_count()>1:
-            print("DEBUG: DATA PARALLEL")
-            self._loss_D = nn.DataParallel(self._loss_D, output_device=-1)
+        self._loss_D = nn.DataParallel(_loss_D(**kwargs_D, **lambdas),
+                                       output_device=-1)
         
         # Module to compute generator updates on GPU.
-        # Outputs are placed on CPU when there are multiple GPUs.
+        # Outputs are placed on CPU.
         keys_G = ['gan_objective', 'disc_A', 'disc_B', 'disc_C', 'loss_rec']
         kwargs_G = dict([(key, val) for key, val in kwargs.items()
                          if key in keys_G])
-        self._loss_G = _loss_G(**kwargs_G, **lambdas)
-        if torch.cuda.device_count()>1:
-            print("DEBUG: DATA PARALLEL")
-            self._loss_G = nn.DataParallel(self._loss_G, output_device=-1)
+        self._loss_G = nn.DataParallel(_loss_G(**kwargs_G, **lambdas),
+                                       output_device=-1)
         
     def forward(self, x_A, x_B, mask=None, optimizer=None, disc=None,
                 rng=None):
@@ -301,8 +295,8 @@ class _forward(nn.Module):
         s_BA = s_cross = None
         if self.lambda_z_id:
             s_BA, skip_BA = self.encoder(x_BA)
-            if self.lambda_cross:
-                s_cross, skip_cross = self.encoder(x_cross)
+        if self.lambda_cross:
+            s_cross, skip_cross = self.encoder(x_cross)
         
         # Cycle.
         x_cross_A = x_cross_A_residual = None
