@@ -315,7 +315,7 @@ class _forward(nn.Module):
         x_AM = None
         if self.lambda_seg:
             if self.segmenter[0] is not None:
-                x_AM = self.segmenter(s_A, skip_info=skip_AM)
+                x_AM = self.segmenter[0](s_A, skip_info=skip_AM)
             else:
                 # Re-use residual decoder in mode 1.
                 x_AM = self.decoder_residual(s_A, skip_info=skip_AM, mode=1)
