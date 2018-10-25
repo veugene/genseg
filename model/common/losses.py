@@ -15,7 +15,7 @@ def bce(prediction, target, reduce=False):
         target = torch.ones_like(prediction)*target
         if prediction.is_cuda:
             target = target.to(prediction.device)
-    return F.cross_entropy(prediction, target, reduce=reduce)
+    return F.binary_cross_entropy(prediction, target, reduce=reduce)
 
 
 def mse(prediction, target, reduce=False):
