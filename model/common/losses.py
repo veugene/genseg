@@ -140,9 +140,11 @@ class gan_objective(object):
     
     def _foreach(self, func, x):
         # If x is a list, process every element (and reduce to batch dim).
-        # (For multi-scale discriminators).
+        # Each tensor is reduced by `mean` and reduced tensors are averaged
+        # together.
+        # (For multi-scale discriminators. Each scale is given equal weight.)
         if not isinstance(x, torch.Tensor):
-            return sum([self._foreach(func, elem) for elem in x])
+            return sum([self._foreach(func, elem) for elem in x])/float(len(x))
         out = func(x)
         if out.dim()<=1:
             return out

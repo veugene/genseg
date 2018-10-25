@@ -32,7 +32,7 @@ def build_model():
     n = 128 # Number of features to sample at the bottleneck.
     image_size = (4, 240, 120)
     lambdas = {
-        'lambda_disc'       : 1,
+        'lambda_disc'       : 3,
         'lambda_x_id'       : 100,
         'lambda_z_id'       : 1,
         'lambda_f_id'       : 0,
