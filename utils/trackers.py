@@ -51,10 +51,11 @@ class progress_report(object):
         desc = ""
         metrics = {}
         if hasattr(engine.state, 'metrics'):
-            metrics = dict([(prefix+key, val.item())
-                            if isinstance(val, torch.Tensor)
-                            else (prefix+key, val)
-                            for key, val in engine.state.metrics.items()])
+            metrics = OrderedDict(
+                [(prefix+key, val.item())
+                 if isinstance(val, torch.Tensor)
+                 else (prefix+key, val)
+                 for key, val in engine.state.metrics.items()])
         if hasattr(engine.state, 'epoch'):
             desc += "Epoch {}".format(engine.state.epoch)
         if self.progress_bar:
@@ -350,9 +351,10 @@ class image_logger(object):
             if self._labels is not None:
                 arr_pil = Image.fromarray(arr, mode='L')
                 draw = ImageDraw.Draw(arr_pil)
-                draw.text((0, 0), self._labels[i], fill=255,
-                          font=ImageFont.truetype(self.fontname,
-                                                  self.fontsize))
+                font = None
+                if self.fontname is not None:
+                    font = ImageFont.truetype(self.fontname, self.fontsize)
+                draw.text((0, 0), self._labels[i], fill=255, font=font)
                 arr = np.array(arr_pil)
             image_rows.append(arr)
         
