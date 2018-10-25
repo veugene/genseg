@@ -34,8 +34,7 @@ class segmentation_model(nn.Module):
     def segment(self, x):
         return self.segmentation(*self.encoder(x))
     
-    def evaluate(self, x_A, x_B=None, mask=None, mask_indices=None,
-                 optimizer=None, rng=None):
+    def forward(self, x_A, x_B=None, mask=None, optimizer=None, rng=None):
         compute_grad = True if optimizer is not None else False
         if compute_grad:
             if isinstance(optimizer, dict):
@@ -46,15 +45,13 @@ class segmentation_model(nn.Module):
         if x_B is not None:
             x = torch.cat([x_A, x_B], dim=0)
         with torch.set_grad_enabled(compute_grad):
-            return self._evaluate(x, mask, mask_indices, optimizer=optimizer)
+            return self._evaluate(x, mask, optimizer=optimizer)
     
-    def _evaluate(self, x, mask=None, mask_indices=None, optimizer=None):
+    def _evaluate(self, x, mask=None, optimizer=None):
         loss_rec = 0
         loss_seg = 0
         
         code, skip = self.encoder(x)
-        x_rec = None
-        y     = None
         
         def _mean(x):
             if not isinstance(x, torch.Tensor) or x.dim()<=1:
@@ -63,16 +60,26 @@ class segmentation_model(nn.Module):
                 return x.view(x.size(0), -1).mean(1)
         
         # Reconstruct.
+        x_AA = None
         if self.lambda_rec:
-            x_rec = self.decoder_rec(code)
-            loss_rec = _mean(self.loss_rec(x_rec, x))
+            x_AA = self.decoder_rec(code, skip)
+            loss_rec = _mean(self.loss_rec(x_AA, x))
+            x_AA = torch.chunk(x_AA, 2)[0]  # Only sick.
+        
+        # Prepare a mask Tensor without None entries.
+        mask_packed = x_AM_packed = None
+        mask_indices = []
+        if mask is not None:
+            mask_indices = [i for i, m in enumerate(mask) if m is not None]
+            mask_packed = np.array([mask[i] for i in mask_indices])
+            mask_packed = Variable(torch.from_numpy(mask_packed))
+            mask_packed = mask_packed.cuda()
         
         # Segment.
-        if mask is not None and self.lambda_seg:
-            if mask_indices is None:
-                mask_indices = list(range(len(mask)))
-            y = self.decoder_seg(code, skip)
-            loss_seg = _mean(self.loss_seg(y[mask_indices], mask))
+        if len(mask_indices) and self.lambda_seg:
+            x_AM = self.decoder_seg(code, skip)
+            x_AM_packed = x_AM[mask_indices]
+            loss_seg = _mean(self.loss_seg(x_AM_packed, mask_packed))
         
         # Loss. Compute gradients, if requested.
         loss = ( self.lambda_rec*loss_rec
@@ -86,7 +93,7 @@ class segmentation_model(nn.Module):
             ('l_all',   loss),
             ('l_seg',   loss_seg),
             ('l_rec',   loss_rec),
-            ('out_rec', x_rec),
-            ('out_seg', y[mask_indices]),
-            ('mask',    mask)))
+            ('x_AA',    x_AA),
+            ('x_AM',    x_AM_packed),
+            ('x_M',     mask_packed)))
         return outputs

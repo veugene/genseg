@@ -198,15 +198,15 @@ if __name__ == '__main__':
     # Set up metrics.
     metrics = {}
     for key in engines:
-        metrics[key] = {}
+        metrics[key] = OrderedDict()
         metrics[key]['dice'] = dice_loss(target_class=target_class,
                         output_transform=lambda x: (x['x_AM'], x['x_M']))
         metrics[key]['rec']  = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_rec'])
-        if isinstance(experiment_state.model, model_ae):
+        if isinstance(experiment_state.model['G'], model_ae):
             metrics[key]['loss'] = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_all'])
-        elif isinstance(experiment_state.model, dict):
+        else:
             metrics[key]['G']    = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_G'])
             metrics[key]['DA']   = batchwise_loss_accumulator(
