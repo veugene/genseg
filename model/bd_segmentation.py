@@ -300,7 +300,7 @@ class _forward(nn.Module):
         x_BA = x_BA_residual = x_BB = z_BA = x_BB_list = None
         if self.lambda_disc or self.lambda_x_id or self.lambda_z_id:
             u_BA = self._z_sample(batch_size, rng=rng)
-            c_B  = s_B[:,:s_B.size(1)-u_BA.size(1)]
+            c_B  = s_B[:,:s_B.size(1)-self.shape_sample[0]]
             z_BA = torch.cat([c_B, u_BA], dim=1)
             x_BB, _ = self.decoder_common(c_B, skip_info=skip_B)
             x_BA_residual, _ = self.decoder_residual(z_BA, skip_info=skip_B)
