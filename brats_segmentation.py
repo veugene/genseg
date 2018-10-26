@@ -25,7 +25,7 @@ from utils.trackers import(image_logger,
                            scoring_function,
                            summary_tracker)
 from utils.metrics import (batchwise_loss_accumulator,
-                           dice_loss)
+                           dice_global)
 from utils.data.common import data_flow_sampler
 from utils.data.brats import (prepare_data_brats13s,
                               prepare_data_brats17,
@@ -45,8 +45,6 @@ def get_parser():
     parser.add_argument('--dataset', type=str, default='brats13s',
                         choices=['brats13s', 'brats17'])
     parser.add_argument('--data_dir', type=str, default='./data/brats/2013')
-    parser.add_argument('--classes', type=str, default='1,2,4',
-                        help='Comma-separated list of class labels')
     parser.add_argument('--orientation', type=int, default=None)
     parser.add_argument('--save_path', type=str, default='./experiments')
     mutex_parser = parser.add_mutually_exclusive_group()
@@ -197,10 +195,19 @@ if __name__ == '__main__':
     
     # Set up metrics.
     metrics = {}
+    def dice_transform(x):
+        if x['x_AM'].size(1)==1:
+            return (x['x_AM'], x['x_M'])
+        return (1.-x['x_AM'][:,0:1], x['x_M'])
     for key in engines:
         metrics[key] = OrderedDict()
-        metrics[key]['dice'] = dice_loss(target_class=target_class,
-                        output_transform=lambda x: (x['x_AM'], x['x_M']))
+        metrics[key]['dice'] = dice_global(target_class=target_class,
+                                           output_transform=dice_transform)
+        for i, c in enumerate(target_class):
+            metrics[key]['dice{}'.format(c)] = dice_global(
+                target_class=c,
+                prediction_index=i+1,
+                output_transform=lambda x: (x['x_AM'], x['x_M']))
         metrics[key]['rec']  = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_rec'])
         if isinstance(experiment_state.model['G'], model_ae):
@@ -255,9 +262,20 @@ if __name__ == '__main__':
                     k_new = k.replace('x_','')
                     v_new = v.cpu().numpy()
                     if k_new in ['M', 'AM']:
-                        v_new = np.squeeze(v_new, 1)    # Single channel seg.
+                        if v_new.shape[1]==1:
+                            # 'M', or 'AM' with single class.
+                            v_new = np.squeeze(v_new, axis=1)
+                        else:
+                            # 'AM' with multiple classes.
+                            v_new = np.argmax(v_new, axis=1)
+                            v_new = sum([(v_new==i+1)*c
+                                         for i, c in enumerate(target_class)])
+                        if output['x_AM'].shape[1]!=1:
+                            # HACK (min and max values for correct vis)
+                            v_new[:,0,0]  = max(target_class)
+                            v_new[:,0,-1] = 0
                     else:
-                        v_new = v_new[:,channel]        # 4 sequences per img.
+                        v_new = v_new[:,channel]         # 4 sequences per img.
                     transformed[k_new] = v_new
             return transformed
         for key in ['train', 'valid']:
