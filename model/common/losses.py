@@ -149,3 +149,66 @@ class gan_objective(object):
         if out.dim()<=1:
             return out
         return out.view(out.size(0), -1).mean(1)    # Reduce to batch dim.
+
+
+class dice_loss(torch.nn.Module):
+    '''
+    Dice loss.
+    
+    Expects integer or one-hot class labeling in y_true.
+    Expects outputs in range [0, 1] in y_pred.
+    
+    Computes the soft dice loss considering all classes in target_class as one
+    aggregate target class and ignoring all elements with ground truth classes
+    in mask_class.
+    
+    target_class : integer or list, integer class(es) to use from target.
+    prediction_index : integer or list, channel index corresponding to each
+        class.
+    mask_class : integer or list, class(es) specifying points at which
+        not to compute a loss.
+    '''
+    def __init__(self, target_class=1, prediction_index=0, mask_class=None):
+        super(dice_loss, self).__init__()
+        if not hasattr(target_class, '__len__'):
+            target_class = [target_class]
+        if not hasattr(prediction_index, '__len__'):
+            prediction_index = [prediction_index]
+        if mask_class is not None and not hasattr(mask_class, '__len__'):
+            mask_class = [mask_class]
+        self.target_class = target_class
+        self.prediction_index = prediction_index
+        self.mask_class = mask_class
+        self.smooth = 1
+            
+    def forward(self, y_pred, y_true):
+        # Targer variable must not require a gradient.
+        assert(not y_true.requires_grad)
+        
+        # Index into y_pred.
+        y_pred = sum([y_pred[:,i:i+1] for i in self.prediction_index])
+        #if not y_pred.is_contiguous:
+            #y_pred.contiguous()
+    
+        # If needed, change ground truth from categorical to integer format.
+        if y_true.ndimension() > y_pred.ndimension():
+            y_true = torch.max(y_true, dim=1)[1]   # argmax
+            
+        # Flatten all inputs.
+        y_true_f = y_true.view(-1).int()
+        y_pred_f = y_pred.view(-1)
+        
+        # Aggregate target classes, mask out classes in mask_class.
+        y_target = sum([y_true_f==t for t in self.target_class]).float()
+        if self.mask_class is not None:
+            mask_out = sum([y_true_f==t for t in self.mask_class])
+            idxs = (mask_out==0).nonzero()
+            y_target = y_target[idxs]
+            y_pred_f = y_pred_f[idxs]
+        
+        # Compute dice value.
+        intersection = torch.sum(y_target * y_pred_f)
+        dice_val = -(2.*intersection+self.smooth) / \
+                    (torch.sum(y_target)+torch.sum(y_pred_f)+self.smooth)
+                    
+        return dice_val

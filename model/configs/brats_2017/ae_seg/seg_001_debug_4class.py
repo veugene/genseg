@@ -71,7 +71,6 @@ class multi_class_dice_loss(object):
     def __call__(self, y_pred, y_true):
         loss = self._loss_all(1.-y_pred[:,0:1], y_true)
         for i, l in enumerate(self._losses_single):
-            #print("DEBUG", i, l.target_class)
             loss += l(y_pred[:,i:i+1].contiguous(), y_true)
         loss /= len(self._losses_single)+1
         return loss
