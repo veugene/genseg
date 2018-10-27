@@ -130,14 +130,14 @@ if __name__ == '__main__':
     
     # Function to convert data to pytorch usable form.
     def prepare_batch(batch):
-        s, h, m = batch
+        h, s, m = batch
         # Prepare for pytorch.
-        s = Variable(torch.from_numpy(np.array(s)))
         h = Variable(torch.from_numpy(np.array(h)))
+        s = Variable(torch.from_numpy(np.array(s)))
         if not args.cpu:
-            s = s.cuda()
             h = h.cuda()
-        return s, h, m
+            s = s.cuda()
+        return h, s, m
     
     # Helper for training/validation loops : detach variables from graph.
     def detach(x):
@@ -196,9 +196,10 @@ if __name__ == '__main__':
     # Set up metrics.
     metrics = {}
     def dice_transform(x):
-        if x['x_AM'].size(1)==1:
-            return (x['x_AM'], x['x_M'])
-        return (1.-x['x_AM'][:,0:1], x['x_M'])
+        if x['x_AM'] is not None and x['x_AM'].size(1)!=1:
+            return (1.-x['x_AM'][:,0:1], x['x_M'])
+        return (x['x_AM'], x['x_M'])
+        
     for key in engines:
         metrics[key] = OrderedDict()
         metrics[key]['dice'] = dice_global(target_class=target_class,
