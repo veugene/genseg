@@ -89,8 +89,15 @@ def get_parser():
 
 
 def dispatch():
-    args = get_parser().parse_args()
-    name = re.sub('[\W]', '_', args.name)         # Strip non-alphanumeric.
+    parser = get_parser()
+    args = parser.parse_args()
+    if args.resume_from is not None:
+        with open(os.path.join(args.resume_from, "args.txt"), 'r') as f:
+            saved_args = f.read().split('\n')[1:]
+            name = parser.parse_args(saved_args).name
+    else:
+        name = args.name
+    name = re.sub('[\W]', '_', name)         # Strip non-alphanumeric.
     pre_cmd = ("export HOME=/tmp; "
                "export ROOT=/scratch/; "
                "cd /scratch/ssl-seg-eugene; "
