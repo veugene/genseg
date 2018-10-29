@@ -1,11 +1,13 @@
 from __future__ import (print_function,
                         division)
-from functools import partial
-from collections import OrderedDict
-import sys
-import os
-import shutil
 import argparse
+from collections import OrderedDict
+from functools import partial
+import os
+import re
+import shutil
+import subprocess
+import sys
 import warnings
 
 import numpy as np
@@ -42,43 +44,77 @@ Process arguments.
 '''
 def get_parser():
     parser = argparse.ArgumentParser(description="Cluttered MNIST seg.")
-    parser.add_argument('--name', type=str, default="")
-    parser.add_argument('--data_dir', type=str, default='./data/mnist')
-    parser.add_argument('--save_path', type=str, default='./experiments')
-    mutex_parser = parser.add_mutually_exclusive_group()
+    g_exp = parser.add_argument_group('Experiment')
+    g_exp.add_argument('--name', type=str, default="")
+    g_exp.add_argument('--data_dir', type=str, default='./data/mnist')
+    g_exp.add_argument('--save_path', type=str, default='./experiments')
+    mutex_parser = g_exp.add_mutually_exclusive_group()
     mutex_parser.add_argument('--model_from', type=str, default=None)
     mutex_parser.add_argument('--resume_from', type=str, default=None)
-    parser.add_argument('--weight_decay', type=float, default=1e-4)
-    parser.add_argument('--labeled_fraction', type=float, default=0.1)
-    parser.add_argument('--unlabeled_digits', type=int, default=None,
-                        nargs='+')
-    parser.add_argument('--yield_only_labeled', action='store_true')
-    parser.add_argument('--augment_data', action='store_true')
-    parser.add_argument('--batch_size_train', type=int, default=20)
-    parser.add_argument('--batch_size_valid', type=int, default=20)
-    parser.add_argument('--epoch_length', type=int, default=None,
-                        help="By default, the training set is pregenerated. "
-                             "Otherwise, `epoch_length` batches are "
-                             "generated online per epoch.")
-    parser.add_argument('--epochs', type=int, default=200)
-    parser.add_argument('--learning_rate', type=json.loads, default=0.001)
-    parser.add_argument('--opt_kwargs', type=json.loads, default=None)
-    parser.add_argument('--optimizer', type=str, default='amsgrad',
-                        choices=['adam', 'amsgrad', 'rmsprop', 'sgd'])
-    parser.add_argument('--n_clutter', type=int, default=8)
-    parser.add_argument('--size_clutter', type=int, default=10)
-    parser.add_argument('--size_output', type=int, default=100)
-    parser.add_argument('--background_noise', type=float, default=0.01)
-    parser.add_argument('--n_valid', type=int, default=500)
-    parser.add_argument('--n_vis', type=int, default=20)
-    parser.add_argument('--cpu', default=False, action='store_true')
-    parser.add_argument('--nb_io_workers', type=int, default=1)
-    parser.add_argument('--nb_proc_workers', type=int, default=1)
-    parser.add_argument('--rseed', type=int, default=1234)
+    g_exp.add_argument('--weight_decay', type=float, default=1e-4)
+    g_exp.add_argument('--labeled_fraction', type=float, default=0.1)
+    g_exp.add_argument('--unlabeled_digits', type=int, default=None,
+                       nargs='+')
+    g_exp.add_argument('--yield_only_labeled', action='store_true')
+    g_exp.add_argument('--augment_data', action='store_true')
+    g_exp.add_argument('--batch_size_train', type=int, default=20)
+    g_exp.add_argument('--batch_size_valid', type=int, default=20)
+    g_exp.add_argument('--epoch_length', type=int, default=None,
+                       help="By default, the training set is pregenerated. "
+                            "Otherwise, `epoch_length` batches are "
+                            "generated online per epoch.")
+    g_exp.add_argument('--epochs', type=int, default=200)
+    g_exp.add_argument('--learning_rate', type=json.loads, default=0.001)
+    g_exp.add_argument('--opt_kwargs', type=json.loads, default=None)
+    g_exp.add_argument('--optimizer', type=str, default='amsgrad',
+                       choices=['adam', 'amsgrad', 'rmsprop', 'sgd'])
+    g_exp.add_argument('--n_clutter', type=int, default=8)
+    g_exp.add_argument('--size_clutter', type=int, default=10)
+    g_exp.add_argument('--size_output', type=int, default=100)
+    g_exp.add_argument('--background_noise', type=float, default=0.01)
+    g_exp.add_argument('--n_valid', type=int, default=500)
+    g_exp.add_argument('--n_vis', type=int, default=20)
+    g_exp.add_argument('--nb_io_workers', type=int, default=1)
+    g_exp.add_argument('--nb_proc_workers', type=int, default=1)
+    g_exp.add_argument('--rseed', type=int, default=1234)
+    g_clu = parser.add_argument_group('Cluster')
+    g_clu.add_argument('--dispatch', default=False, action='store_true')
+    g_clu.add_argument('--cluster_id', type=int, default=425)
+    g_clu.add_argument('--docker_id', type=str, default="nvidian_general/"
+                       "9.0-cudnn7-devel-ubuntu16.04_genseg:v2")
+    g_clu.add_argument('--gpu', type=int, default=1)
+    g_clu.add_argument('--cpu', type=int, default=2)
+    g_clu.add_argument('--mem', type=int, default=12)
     return parser
 
 
-if __name__ == '__main__':
+def dispatch():
+    args = get_parser().parse_args()
+    name = re.sub('[\W]', '_', args.name)         # Strip non-alphanumeric.
+    pre_cmd = ("export HOME=/tmp; "
+               "export ROOT=/scratch/; "
+               "cd /scratch/ssl-seg-eugene; "
+               "source link_submodules.sh;")
+    cmd = subprocess.list2cmdline(sys.argv)       # Shell executable.
+    cmd = cmd.replace(" --dispatch", "")          # Remove recursion.
+    cmd = "bash -c '{} python3 {};'".format(pre_cmd, cmd)  # Combine.
+    share_path = "/export/ganloc.cosmos253/"
+    share_host = "dcg-zfs-03.nvidia.com"
+    mount_point = "/scratch"
+    subprocess.run(["dgx", "job", "submit",
+                    "-n", name,
+                    "-i", str(args.docker_id),
+                    "--gpu", str(args.gpu),
+                    "--cpu", str(args.cpu),
+                    "--mem", str(args.mem),
+                    "--clusterid", str(args.cluster_id),
+                    "--volume", "{}@{}:{}".format(share_path,
+                                                  share_host,
+                                                  mount_point),
+                    "-c", cmd])
+
+
+def run()
     # Disable buggy profiler.
     torch.backends.cudnn.benchmark = True
     
@@ -120,11 +156,8 @@ if __name__ == '__main__':
     def prepare_batch(batch):
         s, h, m = batch
         # Prepare for pytorch.
-        s = Variable(torch.from_numpy(s))
-        h = Variable(torch.from_numpy(h))
-        if not args.cpu:
-            s = s.cuda()
-            h = h.cuda()
+        s = Variable(torch.from_numpy(s)).cuda()
+        h = Variable(torch.from_numpy(h)).cuda()
         return s, h, m
     
     # Prepare data.
@@ -290,3 +323,11 @@ if __name__ == '__main__':
     '''
     print("\nTESTING\n")
     engines['test'].run(loader['test'])
+
+
+if __name__ == '__main__':
+    args = get_parser().parse_args()
+    if args.dispatch:
+        dispatch()
+    else:
+        run()

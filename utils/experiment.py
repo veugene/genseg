@@ -31,7 +31,6 @@ class experiment(object):
             model, optimizer = self._init_state(
                                      model_from=args.model_from,
                                      optimizer_name=args.optimizer,
-                                     cpu=args.cpu,
                                      learning_rate=args.learning_rate,
                                      opt_kwargs=args.opt_kwargs,
                                      weight_decay=args.weight_decay)
@@ -50,7 +49,6 @@ class experiment(object):
             model, optimizer = self._init_state(
                                      model_from=state_from,
                                      optimizer_name=args.optimizer,
-                                     cpu=args.cpu,
                                      learning_rate=args.learning_rate,
                                      opt_kwargs=args.opt_kwargs,
                                      weight_decay=args.weight_decay)
@@ -138,8 +136,8 @@ class experiment(object):
         self._epoch[0] += 1
         engine.epoch = self._epoch
     
-    def _init_state(self, model_from, optimizer_name, cpu=False,
-                    learning_rate=0., opt_kwargs=None, weight_decay=0.):
+    def _init_state(self, model_from, optimizer_name, learning_rate=0.,
+                    opt_kwargs=None, weight_decay=0.):
         '''
         Initialize the model, its state, and the optimizer's state.
 
@@ -177,8 +175,7 @@ class experiment(object):
                 if isinstance(arg, dict) and key in arg:
                     return arg[key]
                 return arg
-            if not cpu:
-                model[key].cuda()
+            model[key].cuda()
             optimizer[key] = self._get_optimizer(
                                             name=parse(optimizer_name),
                                             params=model[key].parameters(),
