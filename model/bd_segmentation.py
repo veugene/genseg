@@ -36,41 +36,41 @@ class segmentation_model(nn.Module):
                  lambda_z_id=1, lambda_f_id=1, lambda_seg=1, lambda_cyc=0,
                  lambda_mi=1, rng=None):
         super(segmentation_model, self).__init__()
-        lambdas = {
-            'lambda_disc'       : lambda_disc,
-            'lambda_x_id'       : lambda_x_id,
-            'lambda_z_id'       : lambda_z_id,
-            'lambda_f_id'       : lambda_f_id,
-            'lambda_seg'        : lambda_seg,
-            'lambda_cyc'        : lambda_cyc,
-            'lambda_mi'         : lambda_mi,
-            }
-        kwargs = {
-            'rng'               : rng if rng else np.random.RandomState(),
-            'encoder'           : encoder,
-            'decoder_common'    : decoder_common,
-            'decoder_residual'  : decoder_residual,
-            'mutual_information': mutual_information,
-            'shape_sample'      : shape_sample,
-            'loss_rec'          : loss_rec,
-            'loss_seg'          : loss_seg if loss_seg else dice_loss(),
-            'loss_gan'          : loss_gan,
-            'num_disc_updates'  : num_disc_updates,
-            'relativistic'      : relativistic,
-            'grad_penalty'      : grad_penalty,
-            'disc_clip_norm'    : disc_clip_norm,
-            'gan_objective'     : gan_objective(loss_gan,
+        lambdas = OrderedDict((
+            ('lambda_disc',       lambda_disc),
+            ('lambda_x_id',       lambda_x_id),
+            ('lambda_z_id',       lambda_z_id),
+            ('lambda_f_id',       lambda_f_id),
+            ('lambda_seg',        lambda_seg),
+            ('lambda_cyc',        lambda_cyc),
+            ('lambda_mi',         lambda_mi)
+            ))
+        kwargs = OrderedDict((
+            ('rng',               rng if rng else np.random.RandomState()),
+            ('encoder',           encoder),
+            ('decoder_residual',  decoder_residual),
+            ('decoder_common',    decoder_common),
+            ('mutual_information',mutual_information),
+            ('shape_sample',      shape_sample),
+            ('loss_rec',          loss_rec),
+            ('loss_seg',          loss_seg if loss_seg else dice_loss()),
+            ('loss_gan',          loss_gan),
+            ('num_disc_updates',  num_disc_updates),
+            ('relativistic',      relativistic),
+            ('grad_penalty',      grad_penalty),
+            ('disc_clip_norm',    disc_clip_norm),
+            ('gan_objective',     gan_objective(loss_gan,
                                                 relativistic=relativistic,
                                                 grad_penalty_real=grad_penalty,
                                                 grad_penalty_fake=None,
-                                                grad_penalty_mean=0)
-            }
-        self.separate_networks = {
-            'segmenter'         : segmenter,
-            'mi_estimator'      : None,
-            'disc_A'            : disc_A,
-            'disc_B'            : disc_B,
-            }
+                                                grad_penalty_mean=0))
+            ))
+        self.separate_networks = OrderedDict((
+            ('segmenter',         segmenter),
+            ('mi_estimator',      None),
+            ('disc_A',            disc_A),
+            ('disc_B',            disc_B)
+            ))
         kwargs.update(lambdas)
         for key, val in kwargs.items():
             setattr(self, key, val)
@@ -352,23 +352,25 @@ class _forward(nn.Module):
             ('x_BB',          x_BB),
             ('x_BAB',         x_BAB),
             ))
-        hidden = {
-            's_BA'          : s_BA,
-            's_AA'          : s_AA,
-            'c_AB'          : c_AB,
-            'c_BB'          : c_BB,
-            'z_BA'          : z_BA,
-            's_A'           : s_A,
-            'c_A'           : c_A,
-            'u_A'           : u_A,
-            'c_B'           : c_B,
-            'c_BA'          : c_BA,
-            'u_BA'          : u_BA}
-        intermediates = {
-            'x_AA_list'     : x_AA_list,
-            'x_BB_list'     : x_BB_list,
-            'skip_A'        : skip_A,
-            'skip_B'        : skip_B}
+        hidden = OrderedDict((
+            ('s_BA',          s_BA),
+            ('s_AA',          s_AA),
+            ('c_AB',          c_AB),
+            ('c_BB',          c_BB),
+            ('z_BA',          z_BA),
+            ('s_A',           s_A),
+            ('c_A',           c_A),
+            ('u_A',           u_A),
+            ('c_B',           c_B),
+            ('c_BA',          c_BA),
+            ('u_BA',          u_BA)
+            ))
+        intermediates = OrderedDict((
+            ('x_AA_list',     x_AA_list),
+            ('x_BB_list',     x_BB_list),
+            ('skip_A',        skip_A),
+            ('skip_B',        skip_B)
+            ))
         return visible, hidden, intermediates
 
 
