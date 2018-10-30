@@ -95,7 +95,7 @@ class experiment(object):
             checkpoint_best_handler = ModelCheckpoint(
                                         dirname=self.experiment_path,
                                         filename_prefix='best_state',
-                                        n_saved=n_saved,
+                                        n_saved=1,
                                         score_function=score_function,
                                         atomic=True,
                                         create_dir=True,
