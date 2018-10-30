@@ -233,20 +233,23 @@ def run():
     
     # Set up metrics.
     metrics = {}
-    def dice_transform(x):
+    def dice_transform_all(x):
         if x['x_AM'] is not None and x['x_AM'].size(1)!=1:
-            return (1.-x['x_AM'][:,0:1], x['x_M'])
-        return (x['x_AM'], x['x_M'])
-        
+            return (1.-x['x_AM'][:,0:1], x['x_M'])  # 4 out; get whole lesion.
+        return (x['x_AM'], x['x_M'])                # 1 out; get whole lesion.
+    def dice_transform_single(x):
+        if x['x_AM'] is not None and x['x_AM'].size(1)!=1:
+            return (x['x_AM'], x['x_M'])            # 4 out; get single class.
+        return (None, x['x_M'])                     # 1 out; do nothing. HACK
     for key in engines:
         metrics[key] = OrderedDict()
         metrics[key]['dice'] = dice_global(target_class=target_class,
-                                           output_transform=dice_transform)
+                                           output_transform=dice_transform_all)
         for i, c in enumerate(target_class):
             metrics[key]['dice{}'.format(c)] = dice_global(
                 target_class=c,
                 prediction_index=i+1,
-                output_transform=lambda x: (x['x_AM'], x['x_M']))
+                output_transform=dice_transform_single)
         metrics[key]['rec']  = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_rec'])
         if isinstance(experiment_state.model['G'], model_ae):
