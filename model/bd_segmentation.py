@@ -48,9 +48,8 @@ class segmentation_model(nn.Module):
         kwargs = OrderedDict((
             ('rng',               rng if rng else np.random.RandomState()),
             ('encoder',           encoder),
-            ('decoder_residual',  decoder_residual),
             ('decoder_common',    decoder_common),
-            ('mutual_information',mutual_information),
+            ('decoder_residual',  decoder_residual),
             ('shape_sample',      shape_sample),
             ('loss_rec',          loss_rec),
             ('loss_seg',          loss_seg if loss_seg else dice_loss()),
@@ -380,9 +379,6 @@ class _loss_D(nn.Module):
                  lambda_seg=1, lambda_cyc=0, lambda_mi=1):
         super(_loss_D, self).__init__()
         self._gan               = gan_objective
-        self.disc_A             = disc_A
-        self.disc_B             = disc_B
-        self.mi_estimator       = mi_estimator
         self.lambda_disc        = lambda_disc
         self.lambda_x_id        = lambda_x_id
         self.lambda_z_id        = lambda_z_id
@@ -390,6 +386,9 @@ class _loss_D(nn.Module):
         self.lambda_seg         = lambda_seg
         self.lambda_cyc         = lambda_cyc
         self.lambda_mi          = lambda_mi
+        self.net = {'disc_A'    : disc_A,
+                    'disc_B'    : disc_B,
+                    'mi'        : mi_estimator}  # Separate params.
     
     def forward(self, x_A, x_B, x_BA, x_AB, c_A, u_A, c_BA, u_BA):
         # If outputs are lists, get the last item (image).
@@ -400,20 +399,20 @@ class _loss_D(nn.Module):
         
         # Discriminators.
         loss_disc = OrderedDict()
-        loss_disc_A = self._gan.D(self.disc_A,
+        loss_disc_A = self._gan.D(self.net['disc_A'],
                                   fake=x_BA.detach(), real=x_A)
-        loss_disc_B = self._gan.D(self.disc_B,
+        loss_disc_B = self._gan.D(self.net['disc_B'],
                                   fake=x_AB.detach(), real=x_B)
         loss_disc['A'] = self.lambda_disc*loss_disc_A
         loss_disc['B'] = self.lambda_disc*loss_disc_B
         
         # Mutual information estimate.
         loss_mi_est = defaultdict()
-        if self.mi_estimator is not None:
-            loss_mi_est['A'] = self.mi_estimator(c_A.detach(), u_A.detach())
+        if self.net['mi'] is not None:
+            loss_mi_est['A'] = self.net['mi'](c_A.detach(), u_A.detach())
             if self.lambda_cyc:
-                loss_mi_est['BA'] = self.mi_estimator(c_BA.detach(),
-                                                      u_BA.detach())
+                loss_mi_est['BA'] = self.net['mi'](c_BA.detach(),
+                                                   u_BA.detach())
         
         return loss_disc, loss_mi_est
 
@@ -424,9 +423,6 @@ class _loss_G(nn.Module):
                  lambda_f_id=1, lambda_seg=1, lambda_cyc=0, lambda_mi=1):
         super(_loss_G, self).__init__()
         self._gan               = gan_objective
-        self.disc_A             = disc_A
-        self.disc_B             = disc_B
-        self.mi_estimator       = mi_estimator
         self.loss_rec           = loss_rec
         self.lambda_disc        = lambda_disc
         self.lambda_x_id        = lambda_x_id
@@ -435,22 +431,25 @@ class _loss_G(nn.Module):
         self.lambda_seg         = lambda_seg
         self.lambda_cyc         = lambda_cyc
         self.lambda_mi          = lambda_mi
+        self.net = {'disc_A'    : disc_A,
+                    'disc_B'    : disc_B,
+                    'mi'        : mi_estimator}  # Separate params.
     
     def forward(self, x_AM, x_A, x_AB, x_AA, x_B, x_BA, x_BB, x_BAB,
                 s_BA, s_AA, c_AB, c_BB, z_BA, s_A, c_A, u_A, c_B, c_BA, u_BA,
                 x_AA_list, x_BB_list, skip_A, skip_B):
         # Mutual information loss for generator.
         loss_mi_gen = defaultdict(int)
-        if self.mi_estimator is not None:
-            loss_mi_gen['A']  = -self.lambda_mi*self.mi_estimator(c_A, u_A)
-            loss_mi_gen['BA'] = -self.lambda_mi*self.mi_estimator(c_BA, u_BA)
+        if self.net['mi'] is not None:
+            loss_mi_gen['A']  = -self.lambda_mi*self.net['mi'](c_A, u_A)
+            loss_mi_gen['BA'] = -self.lambda_mi*self.net['mi'](c_BA, u_BA)
         
         # Generator loss.
         loss_gen = defaultdict(int)
         if self.lambda_disc:
-            loss_gen['AB'] = self.lambda_disc*self._gan.G(self.disc_B,
+            loss_gen['AB'] = self.lambda_disc*self._gan.G(self.net['disc_B'],
                                                           fake=x_AB, real=x_B)
-            loss_gen['BA'] = self.lambda_disc*self._gan.G(self.disc_A,
+            loss_gen['BA'] = self.lambda_disc*self._gan.G(self.net['disc_A'],
                                                           fake=x_BA, real=x_A)
         
         # Reconstruction loss.
