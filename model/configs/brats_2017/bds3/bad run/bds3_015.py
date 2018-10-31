@@ -1,4 +1,3 @@
-from collections import OrderedDict
 import torch
 from torch import nn
 from torch.functional import F
@@ -110,18 +109,13 @@ def build_model():
         'padding_mode'        : 'reflect',
         'init'                : 'kaiming_normal_'}
     
-    x_shape = (N-n,)+tuple(enc_out_shape[1:])
-    z_shape = (n,)+tuple(enc_out_shape[1:])
-    print("DEBUG: sample_shape={}".format(z_shape))
+    shape_sample = (n,)+tuple(enc_out_shape[1:])
+    print("DEBUG: sample_shape={}".format(shape_sample))
     submodel = {
         'encoder'           : encoder_instance,
         'decoder_common'    : decoder(**decoder_common_kwargs),
         'decoder_residual'  : decoder(**decoder_residual_kwargs),
         'segmenter'         : None,
-        'mutual_information': mi_estimation_network(
-                                            x_size=np.product(x_shape),
-                                            z_size=np.product(z_shape),
-                                            n_hidden=1000),
         'disc_A'            : munit_discriminator(**discriminator_kwargs),
         'disc_B'            : munit_discriminator(**discriminator_kwargs)}
     for m in submodel.values():
@@ -130,19 +124,17 @@ def build_model():
         recursive_spectral_norm(m)
     
     model = segmentation_model(**submodel,
-                               shape_sample=z_shape,
+                               shape_sample=shape_sample,
                                loss_gan='hinge',
+                               #loss_rec=dist_ratio_mse_abs,
                                loss_seg=multi_class_dice_loss([1,2,4]),
                                relativistic=False,
                                rng=np.random.RandomState(1234),
                                **lambdas)
     
-    return OrderedDict((
-        ('G', model),
-        ('D', nn.ModuleList([model.separate_networks['disc_A'],
-                             model.separate_networks['disc_B']])),
-        ('E', model.separate_networks['mi_estimator'])
-        ))
+    return {'G' : model,
+            'D' : nn.ModuleList([model.separate_networks['disc_A'],
+                                 model.separate_networks['disc_B']])}
 
 
 class encoder(nn.Module):
@@ -532,27 +524,6 @@ class decoder(nn.Module):
             return out
         else:
             AssertionError()
-
-
-class mi_estimation_network(nn.Module):
-    def __init__(self, x_size, z_size, n_hidden):
-        super(mi_estimation_network, self).__init__()
-        self.x_size = x_size
-        self.z_size = z_size
-        self.n_hidden = n_hidden
-        modules = []
-        modules.append(nn.Linear(x_size+z_size, self.n_hidden))
-        modules.append(nn.ReLU())
-        for i in range(2):
-            modules.append(nn.Linear(self.n_hidden, self.n_hidden))
-            modules.append(nn.ReLU())
-        modules.append(nn.Linear(self.n_hidden, 1))
-        self.model = nn.Sequential(*tuple(modules))
-    
-    def forward(self, x, z):
-        out = self.model(torch.cat([x.view(x.size(0), -1),
-                                    z.view(z.size(0), -1)], dim=-1))
-        return out
 
 
 class multi_class_dice_loss(object):

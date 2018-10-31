@@ -43,7 +43,7 @@ def build_model():
     encoder_kwargs = {
         'input_shape'         : image_size,
         'num_conv_blocks'     : 6,
-        'block_type'          : conv_block,
+        'block_type'          : pool_block,
         'num_resblocks'       : 4,
         'num_channels_list'   : [N//32, N//16, N//8, N//4, N//2, N],
         'skip'                : True,
@@ -54,7 +54,7 @@ def build_model():
         'kernel_size'         : 3,
         'init'                : 'kaiming_normal_',
         'nonlinearity'        : lambda : nn.ReLU(inplace=True),
-        'skip_pool_indices'   : False,
+        'skip_pool_indices'   : True,
         'ndim'                : 2}
     encoder_instance = encoder(**encoder_kwargs)
     enc_out_shape = encoder_instance.output_shape
@@ -63,7 +63,7 @@ def build_model():
         'input_shape'         : (N-n,)+enc_out_shape[1:],
         'output_shape'        : image_size,
         'num_conv_blocks'     : 5,
-        'block_type'          : conv_block,
+        'block_type'          : pool_block,
         'num_resblocks'       : 4,
         'num_channels_list'   : [N, N//2, N//4, N//8, N//16, N//32],
         'skip'                : True,
@@ -75,14 +75,14 @@ def build_model():
         'init'                : 'kaiming_normal_',
         'upsample_mode'       : 'repeat',
         'nonlinearity'        : lambda : nn.ReLU(inplace=True),
-        'long_skip_merge_mode': 'skinny_cat',
+        'long_skip_merge_mode': 'pool',
         'ndim'                : 2}
     
     decoder_residual_kwargs = {
         'input_shape'         : enc_out_shape,
         'output_shape'        : image_size,
         'num_conv_blocks'     : 5,
-        'block_type'          : conv_block,
+        'block_type'          : pool_block,
         'num_resblocks'       : 4,
         'num_channels_list'   : [N, N//2, N//4, N//8, N//16, N//32],
         'num_classes'         : 4,
@@ -96,7 +96,7 @@ def build_model():
         'init'                : 'kaiming_normal_',
         'upsample_mode'       : 'repeat',
         'nonlinearity'        : lambda : nn.ReLU(inplace=True),
-        'long_skip_merge_mode': 'skinny_cat',
+        'long_skip_merge_mode': 'pool',
         'ndim'                : 2}
     
     discriminator_kwargs = {
@@ -293,7 +293,7 @@ class decoder(nn.Module):
                  normalization=layer_normalization, norm_kwargs=None,
                  padding_mode='constant', kernel_size=3, upsample_mode='conv',
                  init='kaiming_normal_', nonlinearity='ReLU',
-                 long_skip_merge_mode=None, output_list=False, ndim=2):
+                 long_skip_merge_mode=None, ndim=2):
         super(decoder, self).__init__()
         
         # ndim must be only 2 or 3.
@@ -330,7 +330,6 @@ class decoder(nn.Module):
         self.init = init
         self.nonlinearity = nonlinearity
         self.long_skip_merge_mode = long_skip_merge_mode
-        self.output_list = output_list
         self.ndim = ndim
         
         self.in_channels  = self.input_shape[0]
@@ -485,7 +484,6 @@ class decoder(nn.Module):
                         adain_params = adain_params[:, 2*m.num_features:]
         
         # Compute output.
-        out_list = []
         out = z
         if skip_info is not None and mode==0:
             skip_info = skip_info[::-1]
@@ -516,12 +514,8 @@ class decoder(nn.Module):
                 out = block(out)
             if not out.is_contiguous():
                 out = out.contiguous()
-            out_list.append(out)
         out = self.pre_conv(out)
         out = self.out_conv[mode](out)
-        out_list.append(out)
-        if self.output_list:
-            out = out_list
         if mode==0:
             out = torch.tanh(out)
             adain_params = self.mlp(z.view(z.size(0), -1))

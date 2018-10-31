@@ -38,7 +38,7 @@ def build_model():
         'lambda_z_id'       : 1,
         'lambda_f_id'       : 0,
         'lambda_cyc'        : 50,
-        'lambda_seg'        : 0.01}
+        'lambda_seg'        : 1}
     
     encoder_kwargs = {
         'input_shape'         : image_size,

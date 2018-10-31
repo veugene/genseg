@@ -34,10 +34,10 @@ def build_model():
     image_size = (4, 240, 120)
     lambdas = {
         'lambda_disc'       : 3,
-        'lambda_x_id'       : 50,
-        'lambda_z_id'       : 1,
+        'lambda_x_id'       : 100,
+        'lambda_z_id'       : 10,
         'lambda_f_id'       : 0,
-        'lambda_cyc'        : 50,
+        'lambda_cyc'        : 100,
         'lambda_seg'        : 0.01}
     
     encoder_kwargs = {

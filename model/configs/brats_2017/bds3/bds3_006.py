@@ -87,12 +87,12 @@ def build_model():
         'num_channels_list'   : [N, N//2, N//4, N//8, N//16, N//32],
         'num_classes'         : 4,
         'mlp_dim'             : 256, 
-        'skip'                : False,
+        'skip'                : True,
         'dropout'             : 0.,
         'normalization'       : layer_normalization,
         'norm_kwargs'         : None,
         'padding_mode'        : 'reflect',
-        'kernel_size'         : 5,
+        'kernel_size'         : 3,
         'init'                : 'kaiming_normal_',
         'upsample_mode'       : 'repeat',
         'nonlinearity'        : lambda : nn.ReLU(inplace=True),
@@ -105,7 +105,7 @@ def build_model():
         'num_scales'          : 3,
         'normalization'       : layer_normalization,
         'norm_kwargs'         : None,
-        'kernel_size'         : 4,
+        'kernel_size'         : 3,
         'nonlinearity'        : lambda : nn.LeakyReLU(0.2, inplace=True),
         'padding_mode'        : 'reflect',
         'init'                : 'kaiming_normal_'}
@@ -293,7 +293,7 @@ class decoder(nn.Module):
                  normalization=layer_normalization, norm_kwargs=None,
                  padding_mode='constant', kernel_size=3, upsample_mode='conv',
                  init='kaiming_normal_', nonlinearity='ReLU',
-                 long_skip_merge_mode=None, output_list=False, ndim=2):
+                 long_skip_merge_mode=None, ndim=2):
         super(decoder, self).__init__()
         
         # ndim must be only 2 or 3.
@@ -330,7 +330,6 @@ class decoder(nn.Module):
         self.init = init
         self.nonlinearity = nonlinearity
         self.long_skip_merge_mode = long_skip_merge_mode
-        self.output_list = output_list
         self.ndim = ndim
         
         self.in_channels  = self.input_shape[0]
@@ -485,7 +484,6 @@ class decoder(nn.Module):
                         adain_params = adain_params[:, 2*m.num_features:]
         
         # Compute output.
-        out_list = []
         out = z
         if skip_info is not None and mode==0:
             skip_info = skip_info[::-1]
@@ -516,12 +514,8 @@ class decoder(nn.Module):
                 out = block(out)
             if not out.is_contiguous():
                 out = out.contiguous()
-            out_list.append(out)
         out = self.pre_conv(out)
         out = self.out_conv[mode](out)
-        out_list.append(out)
-        if self.output_list:
-            out = out_list
         if mode==0:
             out = torch.tanh(out)
             adain_params = self.mlp(z.view(z.size(0), -1))

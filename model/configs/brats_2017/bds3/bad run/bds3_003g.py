@@ -1,4 +1,3 @@
-from collections import OrderedDict
 import torch
 from torch import nn
 from torch.functional import F
@@ -85,7 +84,7 @@ def build_model():
         'block_type'          : conv_block,
         'num_resblocks'       : 4,
         'num_channels_list'   : [N, N//2, N//4, N//8, N//16, N//32],
-        'num_classes'         : 4,
+        'num_classes'         : 1,
         'mlp_dim'             : 256, 
         'skip'                : False,
         'dropout'             : 0.,
@@ -132,17 +131,17 @@ def build_model():
     model = segmentation_model(**submodel,
                                shape_sample=z_shape,
                                loss_gan='hinge',
-                               loss_seg=multi_class_dice_loss([1,2,4]),
+                               #loss_rec=dist_ratio_mse_abs,
+                               num_disc_updates=2,
+                               loss_seg=dice_loss([1,2,4]),
                                relativistic=False,
                                rng=np.random.RandomState(1234),
                                **lambdas)
     
-    return OrderedDict((
-        ('G', model),
-        ('D', nn.ModuleList([model.separate_networks['disc_A'],
-                             model.separate_networks['disc_B']])),
-        ('E', model.separate_networks['mi_estimator'])
-        ))
+    return {'G' : model,
+            'D' : nn.ModuleList([model.separate_networks['disc_A'],
+                                 model.separate_networks['disc_B']]),
+            'E' : model.separate_networks['mi_estimator']}
 
 
 class encoder(nn.Module):
@@ -553,26 +552,3 @@ class mi_estimation_network(nn.Module):
         out = self.model(torch.cat([x.view(x.size(0), -1),
                                     z.view(z.size(0), -1)], dim=-1))
         return out
-
-
-class multi_class_dice_loss(object):
-    def __init__(self, target_class=1, mask_class=None):
-        if not hasattr(target_class, '__len__'):
-            target_class = [target_class]
-        self.target_class = target_class
-        self.mask_class = mask_class
-        self._losses_single = []
-        for c in [0]+target_class:
-            # Dice loss for each class individually.
-            self._losses_single.append(dice_loss(target_class=c,
-                                                 mask_class=mask_class))
-        # Dice loss for all classes, combined.
-        self._loss_all = dice_loss(target_class=target_class, 
-                                   mask_class=mask_class)
-    
-    def __call__(self, y_pred, y_true):
-        loss = self._loss_all(1.-y_pred[:,0:1], y_true)
-        for i, l in enumerate(self._losses_single):
-            loss += l(y_pred[:,i:i+1].contiguous(), y_true)
-        loss /= len(self._losses_single)+1
-        return loss

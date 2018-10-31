@@ -1,3 +1,4 @@
+from collections import OrderedDict
 import torch
 from torch import nn
 from torch.functional import F
@@ -9,6 +10,7 @@ from model.common.network.basic import (AdaptiveInstanceNorm2d,
                                         adjust_to_size,
                                         batch_normalization,
                                         basic_block,
+                                        bottleneck_block,
                                         convolution,
                                         conv_block,
                                         do_upsample,
@@ -42,7 +44,7 @@ def build_model():
     encoder_kwargs = {
         'input_shape'         : image_size,
         'num_conv_blocks'     : 6,
-        'block_type'          : conv_block,
+        'block_type'          : bottleneck_block,
         'num_resblocks'       : 4,
         'num_channels_list'   : [N//32, N//16, N//8, N//4, N//2, N],
         'skip'                : True,
@@ -62,7 +64,7 @@ def build_model():
         'input_shape'         : (N-n,)+enc_out_shape[1:],
         'output_shape'        : image_size,
         'num_conv_blocks'     : 5,
-        'block_type'          : conv_block,
+        'block_type'          : bottleneck_block,
         'num_resblocks'       : 4,
         'num_channels_list'   : [N, N//2, N//4, N//8, N//16, N//32],
         'skip'                : True,
@@ -81,10 +83,10 @@ def build_model():
         'input_shape'         : enc_out_shape,
         'output_shape'        : image_size,
         'num_conv_blocks'     : 5,
-        'block_type'          : conv_block,
+        'block_type'          : bottleneck_block,
         'num_resblocks'       : 4,
         'num_channels_list'   : [N, N//2, N//4, N//8, N//16, N//32],
-        'num_classes'         : 1,
+        'num_classes'         : 4,
         'mlp_dim'             : 256, 
         'skip'                : False,
         'dropout'             : 0.,
@@ -109,13 +111,18 @@ def build_model():
         'padding_mode'        : 'reflect',
         'init'                : 'kaiming_normal_'}
     
-    shape_sample = (n,)+tuple(enc_out_shape[1:])
-    print("DEBUG: sample_shape={}".format(shape_sample))
+    x_shape = (N-n,)+tuple(enc_out_shape[1:])
+    z_shape = (n,)+tuple(enc_out_shape[1:])
+    print("DEBUG: sample_shape={}".format(z_shape))
     submodel = {
         'encoder'           : encoder_instance,
         'decoder_common'    : decoder(**decoder_common_kwargs),
         'decoder_residual'  : decoder(**decoder_residual_kwargs),
         'segmenter'         : None,
+        'mutual_information': mi_estimation_network(
+                                            x_size=np.product(x_shape),
+                                            z_size=np.product(z_shape),
+                                            n_hidden=1000),
         'disc_A'            : munit_discriminator(**discriminator_kwargs),
         'disc_B'            : munit_discriminator(**discriminator_kwargs)}
     for m in submodel.values():
@@ -124,18 +131,19 @@ def build_model():
         recursive_spectral_norm(m)
     
     model = segmentation_model(**submodel,
-                               shape_sample=shape_sample,
+                               shape_sample=z_shape,
                                loss_gan='hinge',
-                               #loss_rec=dist_ratio_mse_abs,
-                               num_disc_updates=2,
-                               loss_seg=dice_loss([1,2,4]),
+                               loss_seg=multi_class_dice_loss([1,2,4]),
                                relativistic=False,
                                rng=np.random.RandomState(1234),
                                **lambdas)
     
-    return {'G' : model,
-            'D' : nn.ModuleList([model.separate_networks['disc_A'],
-                                 model.separate_networks['disc_B']])}
+    return OrderedDict((
+        ('G', model),
+        ('D', nn.ModuleList([model.separate_networks['disc_A'],
+                             model.separate_networks['disc_B']])),
+        ('E', model.separate_networks['mi_estimator'])
+        ))
 
 
 class encoder(nn.Module):
@@ -525,3 +533,47 @@ class decoder(nn.Module):
             return out
         else:
             AssertionError()
+
+
+class mi_estimation_network(nn.Module):
+    def __init__(self, x_size, z_size, n_hidden):
+        super(mi_estimation_network, self).__init__()
+        self.x_size = x_size
+        self.z_size = z_size
+        self.n_hidden = n_hidden
+        modules = []
+        modules.append(nn.Linear(x_size+z_size, self.n_hidden))
+        modules.append(nn.ReLU())
+        for i in range(2):
+            modules.append(nn.Linear(self.n_hidden, self.n_hidden))
+            modules.append(nn.ReLU())
+        modules.append(nn.Linear(self.n_hidden, 1))
+        self.model = nn.Sequential(*tuple(modules))
+    
+    def forward(self, x, z):
+        out = self.model(torch.cat([x.view(x.size(0), -1),
+                                    z.view(z.size(0), -1)], dim=-1))
+        return out
+
+
+class multi_class_dice_loss(object):
+    def __init__(self, target_class=1, mask_class=None):
+        if not hasattr(target_class, '__len__'):
+            target_class = [target_class]
+        self.target_class = target_class
+        self.mask_class = mask_class
+        self._losses_single = []
+        for c in [0]+target_class:
+            # Dice loss for each class individually.
+            self._losses_single.append(dice_loss(target_class=c,
+                                                 mask_class=mask_class))
+        # Dice loss for all classes, combined.
+        self._loss_all = dice_loss(target_class=target_class, 
+                                   mask_class=mask_class)
+    
+    def __call__(self, y_pred, y_true):
+        loss = self._loss_all(1.-y_pred[:,0:1], y_true)
+        for i, l in enumerate(self._losses_single):
+            loss += l(y_pred[:,i:i+1].contiguous(), y_true)
+        loss /= len(self._losses_single)+1
+        return loss

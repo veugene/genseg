@@ -263,27 +263,6 @@ class encoder(nn.Module):
                 else:
                     skips.append(out_prev)
         return out, skips
-
-
-# In translation mode, normalization is as specified; in segmentation 
-# mode, `AdaptiveInstanceNorm2d`, conditioned on the translation, is used
-# instead.
-class switching_normalization(nn.Module):
-    def __init__(self, normalization, num_features, ndim,
-                    **norm_kwargs):
-        super(switching_normalization, self).__init__()
-        self.mode = 0
-        self.norm_t = normalization(
-            num_features=num_features,
-            ndim=ndim,
-            **norm_kwargs)
-        self.norm_s = AdaptiveInstanceNorm2d(
-            num_features=num_features)  # TODO momentum
-    def forward(self, x):
-        if self.mode==0:
-            return self.norm_t(x)
-        if self.mode==1:
-            return self.norm_s(x)
     
 
 class decoder(nn.Module):
@@ -336,12 +315,6 @@ class decoder(nn.Module):
         self.in_channels  = self.input_shape[0]
         self.out_channels = self.output_shape[0]
         
-        # Normalization switch (translation, segmentation modes).
-        def normalization_switch(*args, **kwargs):
-            return switching_normalization(*args,
-                                           normalization=self.normalization,
-                                           **kwargs)
-        
         # Compute all intermediate conv shapes by working backward from the 
         # output shape.
         self._shapes = [self.output_shape,
@@ -373,7 +346,7 @@ class decoder(nn.Module):
             subsample=False,
             upsample=False,
             upsample_mode='repeat',
-            normalization=normalization_switch,
+            normalization=AdaptiveInstanceNorm2d,
             norm_kwargs=self.norm_kwargs,
             padding_mode=self.padding_mode,
             kernel_size=3,
@@ -393,7 +366,7 @@ class decoder(nn.Module):
                 upsample_mode=self.upsample_mode,
                 skip=_select(self.skip, False),
                 dropout=self.dropout,
-                normalization=_select(normalization_switch),
+                normalization=_select(AdaptiveInstanceNorm2d),
                 padding_mode=self.padding_mode,
                 kernel_size=self.kernel_size,
                 init=self.init,
@@ -425,7 +398,7 @@ class decoder(nn.Module):
                                        out_channels=last_channels,  # NOTE
                                        kernel_size=self.kernel_size,
                                        init=self.init,              # NOTE
-                                       normalization=normalization_switch,
+                                       normalization=AdaptiveInstanceNorm2d,
                                        norm_kwargs=self.norm_kwargs,
                                        nonlinearity=self.nonlinearity,
                                        padding_mode=self.padding_mode)
@@ -458,31 +431,35 @@ class decoder(nn.Module):
                 num_adain_params += 2*m.num_features
         
         # MLP to predict AdaIN parameters.
-        self.mlp = mlp(n_layers=4,
-                       n_input=np.product(self.input_shape),
-                       n_output=num_adain_params,
-                       n_hidden=mlp_dim,
-                       init=self.init)
+        self.mlp_self = mlp(n_layers=4,
+                            n_input=np.product(self.input_shape),
+                            n_output=num_adain_params,
+                            n_hidden=mlp_dim,
+                            init=self.init)
+        self.mlp_skip = mlp(n_layers=4,
+                            n_input=np.product(self.input_shape),
+                            n_output=num_adain_params,
+                            n_hidden=mlp_dim,
+                            init=self.init)
         
         
     def forward(self, z, skip_info=None, mode=0):
-        # Set mode (0: trans, 1: seg).
+        # Mode (0: trans, 1: seg).
         assert mode in [0, 1]
-        for m in self.modules():
-            if isinstance(m, switching_normalization):
-                m.mode = mode
         
-        # In segmentation mode, assign AdaIN parameters.
+        # Assign AdaIN parameters.
+        if mode==0:
+            adain_params = self.mlp_self(z.view(z.size(0), -1))
         if mode==1:
             skip_info, adain_params = skip_info
-            for m in self.modules():
-                if m.__class__.__name__ == "AdaptiveInstanceNorm2d":
-                    mean = adain_params[:, :m.num_features]
-                    std = adain_params[:, m.num_features:2*m.num_features]
-                    m.bias = mean.contiguous().view(-1)
-                    m.weight = std.contiguous().view(-1)
-                    if adain_params.size(1) > 2*m.num_features:
-                        adain_params = adain_params[:, 2*m.num_features:]
+        for m in self.modules():
+            if m.__class__.__name__ == "AdaptiveInstanceNorm2d":
+                mean = adain_params[:, :m.num_features]
+                std = adain_params[:, m.num_features:2*m.num_features]
+                m.bias = mean.contiguous().view(-1)
+                m.weight = std.contiguous().view(-1)
+                if adain_params.size(1) > 2*m.num_features:
+                    adain_params = adain_params[:, 2*m.num_features:]
         
         # Compute output.
         out_list = []
@@ -524,7 +501,7 @@ class decoder(nn.Module):
             out = out_list
         if mode==0:
             out = torch.tanh(out)
-            adain_params = self.mlp(z.view(z.size(0), -1))
+            adain_params = self.mlp_skip(z.view(z.size(0), -1))
             return out, (skip_info, adain_params)
         elif mode==1:
             out = self.classifier(out)

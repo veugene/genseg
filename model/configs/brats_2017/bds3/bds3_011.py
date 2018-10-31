@@ -132,6 +132,7 @@ def build_model():
     model = segmentation_model(**submodel,
                                shape_sample=z_shape,
                                loss_gan='hinge',
+                               num_disc_updates=2,
                                loss_seg=multi_class_dice_loss([1,2,4]),
                                relativistic=False,
                                rng=np.random.RandomState(1234),

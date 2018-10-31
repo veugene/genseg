@@ -104,7 +104,7 @@ def build_model():
         'num_scales'          : 3,
         'normalization'       : layer_normalization,
         'norm_kwargs'         : None,
-        'kernel_size'         : 4,
+        'kernel_size'         : 3,
         'nonlinearity'        : lambda : nn.LeakyReLU(0.2, inplace=True),
         'padding_mode'        : 'reflect',
         'init'                : 'kaiming_normal_'}
