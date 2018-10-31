@@ -27,13 +27,12 @@ from utils.trackers import(image_logger,
                            scoring_function,
                            summary_tracker)
 from utils.metrics import (batchwise_loss_accumulator,
-                           dice_loss)
+                           dice_global)
 from utils.data.cluttered_mnist import (setup_mnist_data,
                                         mnist_data_train,
                                         mnist_data_valid,
                                         mnist_data_test)
 from model import configs
-from model.bidomain_segmentation import segmentation_model as model_gan
 from model.ae_segmentation import segmentation_model as model_ae
 
 import itertools
@@ -66,8 +65,7 @@ def get_parser():
     g_exp.add_argument('--epochs', type=int, default=200)
     g_exp.add_argument('--learning_rate', type=json.loads, default=0.001)
     g_exp.add_argument('--opt_kwargs', type=json.loads, default=None)
-    g_exp.add_argument('--optimizer', type=str, default='amsgrad',
-                       choices=['adam', 'amsgrad', 'rmsprop', 'sgd'])
+    g_exp.add_argument('--optimizer', type=str, default='amsgrad')
     g_exp.add_argument('--n_clutter', type=int, default=8)
     g_exp.add_argument('--size_clutter', type=int, default=10)
     g_exp.add_argument('--size_output', type=int, default=100)
@@ -76,6 +74,8 @@ def get_parser():
     g_exp.add_argument('--n_vis', type=int, default=20)
     g_exp.add_argument('--nb_io_workers', type=int, default=1)
     g_exp.add_argument('--nb_proc_workers', type=int, default=1)
+    g_exp.add_argument('--save_image_events', action='store_true',
+                       help="Save images into tensorboard event files.")
     g_exp.add_argument('--rseed', type=int, default=1234)
     g_clu = parser.add_argument_group('Cluster')
     g_clu.add_argument('--dispatch', default=False, action='store_true')
@@ -121,7 +121,7 @@ def dispatch():
                     "-c", cmd])
 
 
-def run()
+def run():
     # Disable buggy profiler.
     torch.backends.cudnn.benchmark = True
     
@@ -161,11 +161,11 @@ def run()
     
     # Function to convert data to pytorch usable form.
     def prepare_batch(batch):
-        s, h, m = batch
+        h, s, m = batch
         # Prepare for pytorch.
-        s = Variable(torch.from_numpy(s)).cuda()
         h = Variable(torch.from_numpy(h)).cuda()
-        return s, h, m
+        s = Variable(torch.from_numpy(s)).cuda()
+        return h, s, m
     
     # Prepare data.
     data = setup_mnist_data(
@@ -215,7 +215,7 @@ def run()
     def training_function(engine, batch):
         for model in experiment_state.model.values():
             model.train()
-        A, B, M = prepare_batch(batch)
+        B, A, M = prepare_batch(batch)
         outputs = experiment_state.model['G'](A, B, M,
                                          optimizer=experiment_state.optimizer)
         outputs = detach(outputs)
@@ -225,7 +225,7 @@ def run()
     def validation_function(engine, batch):
         for model in experiment_state.model.values():
             model.eval()
-        A, B, M = prepare_batch(batch)
+        B, A, M = prepare_batch(batch)
         outputs = OrderedDict(zip(['x_A', 'x_B'], [A, B]))
         with torch.no_grad():
             _outputs = experiment_state.model['G'](A, B, M, rng=engine.rng)
@@ -260,14 +260,14 @@ def run()
     metrics = {}
     for key in engines:
         metrics[key] = {}
-        metrics[key]['dice'] = dice_loss(target_class=1,
+        metrics[key]['dice'] = dice_global(target_class=1,
                         output_transform=lambda x: (x['x_AM'], x['x_M']))
+        metrics[key]['rec']  = batchwise_loss_accumulator(
+                            output_transform=lambda x: x['l_rec'])
         if isinstance(experiment_state.model, model_ae):
             metrics[key]['loss'] = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_all'])
-            metrics[key]['rec']  = batchwise_loss_accumulator(
-                            output_transform=lambda x: x['l_rec'])
-        if isinstance(experiment_state.model, model_gan):
+        else:
             metrics[key]['G']    = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_G'])
             metrics[key]['DA']   = batchwise_loss_accumulator(
@@ -312,13 +312,14 @@ def run()
     save_image = image_logger(
         initial_epoch=experiment_state.get_epoch(),
         directory=os.path.join(experiment_state.experiment_path, "images"),
-        summary_tracker=tracker,
+        summary_tracker=tracker if args.save_image_events else None,
         num_vis=min(args.n_vis, args.n_valid),
         output_transform=lambda x: OrderedDict([(k.replace('x_',''), _p(v))
                                                 for k, v in x.items()
                                                 if k.startswith('x_')
-                                                and v is not None]))
-    save_image.attach(engines['valid'], name='save_image')
+                                                and v is not None]),
+        fontsize=12)
+    save_image.attach(engines['valid'])
     
     '''
     Train.
