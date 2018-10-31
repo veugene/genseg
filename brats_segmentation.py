@@ -293,7 +293,7 @@ def run():
                                              for k, v in x.items()
                                              if k.startswith('l_')
                                              or k.startswith('prob')]),
-            metric_keys=['dice'])
+            metric_keys=['dice']+['dice{}'.format(c) for c in target_class])
     
     # Set up image logging.
     for channel, sequence_name in enumerate(['flair', 't1', 't1c', 't2']):
@@ -312,7 +312,8 @@ def run():
                             v_new = np.argmax(v_new, axis=1)
                             v_new = sum([(v_new==i+1)*c
                                          for i, c in enumerate(target_class)])
-                        if output['x_AM'].shape[1]!=1:
+                        if output['x_AM'] is not None and \
+                                                    output['x_AM'].shape[1]!=1:
                             # HACK (min and max values for correct vis)
                             v_new[:,0,0]  = max(target_class)
                             v_new[:,0,-1] = 0
