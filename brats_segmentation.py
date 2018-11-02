@@ -81,6 +81,9 @@ def get_parser():
     g_dgx.add_argument('--gpu', type=int, default=1)
     g_dgx.add_argument('--cpu', type=int, default=2)
     g_dgx.add_argument('--mem', type=int, default=12)
+    g_dgx.add_argument('--nfs_host', type=str, default="dcg-zfs-03.nvidia.com")
+    g_dgx.add_argument('--nfs_path', type=str,
+                       default="/export/ganloc.cosmos253/")
     g_ngc = parser.add_argument_group('NGC cluster')
     g_ngc.add_argument('--ace', type=str, default='nv-us-west-2')
     g_ngc.add_argument('--instance', type=str, default='ngcv1',
@@ -114,8 +117,6 @@ def dispatch_dgx():
     cmd = subprocess.list2cmdline(sys.argv)       # Shell executable.
     cmd = cmd.replace(" --dispatch_dgx", "")          # Remove recursion.
     cmd = "bash -c '{} python3 {};'".format(pre_cmd, cmd)  # Combine.
-    share_path = "/export/ganloc.cosmos253/"
-    share_host = "dcg-zfs-03.nvidia.com"
     mount_point = "/scratch"
     subprocess.run(["dgx", "job", "submit",
                     "-n", name,
@@ -124,8 +125,8 @@ def dispatch_dgx():
                     "--cpu", str(args.cpu),
                     "--mem", str(args.mem),
                     "--clusterid", str(args.cluster_id),
-                    "--volume", "{}@{}:{}".format(share_path,
-                                                  share_host,
+                    "--volume", "{}@{}:{}".format(args.nfs_path,
+                                                  args.nfs_host,
                                                   mount_point),
                     "-c", cmd])
 
