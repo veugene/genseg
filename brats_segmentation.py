@@ -110,7 +110,7 @@ def dispatch_dgx():
     pre_cmd = ("export HOME=/tmp; "
                "export ROOT=/scratch/; "
                "cd /scratch/ssl-seg-eugene; "
-               "source link_submodules.sh;")
+               "source register_submodules.sh;")
     cmd = subprocess.list2cmdline(sys.argv)       # Shell executable.
     cmd = cmd.replace(" --dispatch_dgx", "")          # Remove recursion.
     cmd = "bash -c '{} python3 {};'".format(pre_cmd, cmd)  # Combine.
