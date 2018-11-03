@@ -8,6 +8,7 @@ import multiprocessing
 import os
 import shutil
 import subprocess
+import sys
 import time
 
 
@@ -65,14 +66,15 @@ def is_equal(dir1, dir2):
 def get_deepest_dir(root_dir):
     n_directories = 0
     n_files = 0
+    _dir = None
     for fn in os.listdir(root_dir):
         if os.path.isdir(os.path.join(root_dir, fn)):
             n_directories += 1
+            _dir = os.path.join(root_dir, fn)
         elif fn!='joblog.log':  # Ignore NGC job log.
             n_files += 1
     if n_directories==1 and n_files==0:
-        sub_dir = get_deepest_dir(os.path.join(root_dir,
-                                               os.listdir(root_dir)[0]))
+        sub_dir = get_deepest_dir(_dir)
         sub_dir = sub_dir.replace(root_dir+'/', '')
         return os.path.join(root_dir, sub_dir)
     return root_dir
@@ -203,5 +205,11 @@ if __name__=='__main__':
         update(args.working_dir, args.target_dir,
                local=args.local, n_workers=args.n_workers,
                max_download_attempts=args.max_download_attempts)
-        time.sleep(args.poll_every*60)
+        print("====")
+        for second in range(args.poll_every*60+1):
+            now = time.strftime('%H:%M:%S', time.localtime(time.time()))
+            sys.stdout.write("\r[{}] NEXT UPDATE IN {} MINUTES. "
+                             "".format(now, args.poll_every-second//60))
+            time.sleep(1)
+        sys.stdout.write("\n")
     
