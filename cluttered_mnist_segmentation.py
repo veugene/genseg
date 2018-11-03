@@ -331,7 +331,9 @@ def run():
     '''
     print("\nTESTING\n")
     engines['test'].run(loader['test'])
-
+    print("\nTESTING ON BEST CHECKPOINT\n")
+    experiment_state.load_best_state()
+    engines['test'].run(loader['test'])
 
 if __name__ == '__main__':
     args = get_parser().parse_args()
