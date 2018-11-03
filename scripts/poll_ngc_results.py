@@ -136,6 +136,8 @@ def update(working_dir, target_dir, local=False, n_workers=32,
     # Download all jobs that have not ended.
     jobs_to_get = [job_id for job_id, status in jobs.items()
                           if  job_id not in jobs_ended]
+    print("FETCHING")
+    print("\n".join(["  {}".format(job_id) for job_id in jobs_to_get]))
     remaining_jobs_to_get = [j for j in jobs_to_get]
     for attempt in range(max_download_attempts):
         # Batch download.
@@ -152,7 +154,7 @@ def update(working_dir, target_dir, local=False, n_workers=32,
         for job_id in jobs_to_get:
             if not os.path.exists(os.path.join(working_dir, "jobs", job_id)):
                 print("WARNING: no files downloaded for {} (attempt {}/{})"
-                      "".format(job_id, attempt, max_download_attempts))
+                      "".format(job_id, attempt+1, max_download_attempts))
                 remaining_jobs_to_get.append(job_id)
     
     # Check every download to see if it differs from the results in the
@@ -174,8 +176,14 @@ def update(working_dir, target_dir, local=False, n_workers=32,
             # is merged with the target tree.
             job_dir_root = os.path.join(job_dir_root,
                                         os.path.split(job_dir_rel)[0])
+            target_dir_deep = os.path.join(target_dir,
+                                           *os.path.split(job_dir_rel))
+        else:
+            # The root directory is the job_id directory itself - copy it
+            # directly.
+            target_dir_deep = os.path.join(target_dir,
+                                           os.path.basename(job_dir_root))
         # Compare download to previously downloaded results.
-        target_dir_deep = os.path.join(target_dir, *os.path.split(job_dir_rel))
         if not os.path.exists(target_dir_deep):
             # Make target first, if it doesn't exist yet.
             os.makedirs(target_dir_deep)
