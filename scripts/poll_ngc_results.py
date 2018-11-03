@@ -100,9 +100,16 @@ def move_merge(src, dst):
 
 def download(job_id, working_dir, target_dir):
     # Silent.
-    subprocess.check_output(["cd {}; "
-                             "ngc result download {}"
-                             "".format(working_dir, job_id)], shell=True)
+    try:
+        job_dir = os.path.join(working_dir, "jobs")
+        subprocess.check_output(["cd {}; "
+                                 "ngc result download {}"
+                                 "".format(job_dir, job_id)], 
+                                shell=True)
+    except:
+        # Failed. Delete files.
+        if os.path.exists(os.path.join(working_dir, "jobs", job_id)):
+            shutil.rmtree(os.path.join(working_dir, "jobs", job_id))
 
 
 def update(working_dir, target_dir, local=False, n_workers=32,
@@ -112,8 +119,8 @@ def update(working_dir, target_dir, local=False, n_workers=32,
     jobs = scrub(output.decode('utf-8'))
     
     # Create working or target directories, if necessary.
-    if not os.path.exists(working_dir):
-        os.makedirs(working_dir)
+    if not os.path.exists(os.path.join(working_dir, "jobs")):
+        os.makedirs(os.path.join(working_dir, "jobs"))
     if not os.path.exists(target_dir):
         os.makedirs(target_dir)
     
@@ -141,9 +148,9 @@ def update(working_dir, target_dir, local=False, n_workers=32,
         # whether some jobs did not download and attempt again.
         remaining_jobs_to_get = []
         for job_id in jobs_to_get:
-            if not os.path.exists(os.path.join(working_dir, job_id)):
-                print("NO FILES DOWNLOADED FOR {} (attempt {}/{})"
-                      "".format(job_id, a, 5))
+            if not os.path.exists(os.path.join(working_dir, "jobs", job_id)):
+                print("WARNING: no files downloaded for {} (attempt {}/{})"
+                      "".format(job_id, attempt, max_download_attempts))
                 remaining_jobs_to_get.append(job_id)
     
     # Check every download to see if it differs from the results in the
@@ -151,11 +158,11 @@ def update(working_dir, target_dir, local=False, n_workers=32,
     # directory. Mark each job whose results did not change as ended, to
     # avoid future downloads.
     for job_id in jobs_to_get:
-        if not os.path.exists(os.path.join(working_dir, job_id)):
+        if not os.path.exists(os.path.join(working_dir, "jobs", job_id)):
             print("NO FILES DOWNLOADED FOR {}".format(job_id))
             continue
         # Identify deepest directory containing all files.
-        job_dir_root = os.path.join(working_dir, job_id)
+        job_dir_root = os.path.join(working_dir, "jobs", job_id)
         job_dir_deep = get_deepest_dir(job_dir_root)
         job_dir_rel  = os.path.relpath(job_dir_deep, job_dir_root)
         if job_dir_root!=job_dir_deep:
@@ -182,7 +189,7 @@ def update(working_dir, target_dir, local=False, n_workers=32,
                 copy_tree(job_dir_deep, target_dir_deep)
             print("UPDATED RESULTS FOR {}".format(job_id))
         # Delete downloaded results in working directory.
-        shutil.rmtree(os.path.join(working_dir, job_id))
+        shutil.rmtree(os.path.join(working_dir, "jobs", job_id))
     
     # Update list of ended jobs.
     with open(jobs_file_path, 'w') as f:
