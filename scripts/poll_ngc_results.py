@@ -58,7 +58,7 @@ def is_equal(dir1, dir2):
     for common_dir in dirs_cmp.common_dirs:
         new_dir1 = os.path.join(dir1, common_dir)
         new_dir2 = os.path.join(dir2, common_dir)
-        if not are_dir_trees_equal(new_dir1, new_dir2):
+        if not is_equal(new_dir1, new_dir2):
             return False
     return True
 
@@ -131,7 +131,7 @@ def update(working_dir, target_dir, local=False, n_workers=32,
     jobs_ended = []
     if os.path.exists(jobs_file_path):
         with open(jobs_file_path, 'r') as f:
-            jobs_ended = [line for line in f]
+            jobs_ended = [line.strip() for line in f]
     
     # Download all jobs that have not ended.
     jobs_to_get = [job_id for job_id, status in jobs.items()
@@ -204,7 +204,7 @@ def update(working_dir, target_dir, local=False, n_workers=32,
     # Update list of ended jobs.
     with open(jobs_file_path, 'w') as f:
         for line in jobs_ended:
-            f.write(line)
+            f.write("{}\n".format(line))
 
 
 if __name__=='__main__':
