@@ -47,6 +47,7 @@ def get_parser():
                        choices=['brats13s', 'brats17'])
     g_exp.add_argument('--data_dir', type=str, default='./data/brats/2013')
     g_exp.add_argument('--orientation', type=int, default=None)
+    g_exp.add_argument('--slice_conditional', action='store_true')
     g_exp.add_argument('--save_path', type=str, default='./experiments')
     mutex_from = g_exp.add_mutually_exclusive_group()
     mutex_from.add_argument('--model_from', type=str, default=None)
@@ -199,8 +200,10 @@ def run():
                               masked_fraction=1.-args.labeled_fraction,
                               drop_masked=args.yield_only_labeled,
                               rng=np.random.RandomState(args.rseed))
-    data_train = [data['train']['h'], data['train']['s'], data['train']['m']]
-    data_valid = [data['valid']['h'], data['valid']['s'], data['valid']['m']]
+    data_train = [data['train']['h'], data['train']['s'], data['train']['m'],
+                  data['train']['hi'], data['train']['si']]
+    data_valid = [data['valid']['h'], data['valid']['s'], data['valid']['m'],
+                  data['valid']['hi'], data['valid']['si']]
     loader = {
         'train': data_flow_sampler(data_train,
                                    sample_random=True,
@@ -220,12 +223,15 @@ def run():
                                    rng=np.random.RandomState(args.rseed))}
     
     # Function to convert data to pytorch usable form.
-    def prepare_batch(batch):
-        h, s, m = batch
+    def prepare_batch(batch, slice_conditional=False):
+        h, s, m, h_indices, s_indices = batch
         # Prepare for pytorch.
         h = Variable(torch.from_numpy(np.array(h))).cuda()
         s = Variable(torch.from_numpy(np.array(s))).cuda()
-        return h, s, m
+        # Provide slice index tuple if slice_conditional.
+        if not slice_conditional:
+            h_indices = s_indices = None
+        return h, s, m, h_indices, s_indices
     
     # Helper for training/validation loops : detach variables from graph.
     def detach(x):
@@ -239,9 +245,10 @@ def run():
     def training_function(engine, batch):
         for model in experiment_state.model.values():
             model.train()
-        B, A, M = prepare_batch(batch)
+        B, A, M, I_A, I_B = prepare_batch(batch, args.slice_conditional)
         outputs = experiment_state.model['G'](A, B, M,
-                                         optimizer=experiment_state.optimizer)
+                                         optimizer=experiment_state.optimizer,
+                                         class_A=I_A, class_B=I_B)
         outputs = detach(outputs)
         
         # Drop images without labels, for visualization.
@@ -258,9 +265,10 @@ def run():
     def validation_function(engine, batch):
         for model in experiment_state.model.values():
             model.eval()
-        B, A, M = prepare_batch(batch)
+        B, A, M, I_A, I_B = prepare_batch(batch, args.slice_conditional)
         with torch.no_grad():
-            outputs = experiment_state.model['G'](A, B, M, rng=engine.rng)
+            outputs = experiment_state.model['G'](A, B, M, rng=engine.rng,
+                                                  class_A=I_A, class_B=I_B)
         outputs = detach(outputs)
         return outputs
     

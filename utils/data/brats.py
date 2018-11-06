@@ -124,25 +124,36 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
         # Assemble volumes and corresponding segmentations.
         volumes_h = []
         volumes_s = []
-        segmentations = []
+        volumes_m = []
+        indices_h = []
+        indices_s = []
         for _key in h5py_file.keys():   # Per patient.
             group_p = h5py_file[_key]
             volumes_h.append(group_p['healthy/axis_{}'.format(str(axis))])
             volumes_s.append(group_p['sick/axis_{}'.format(str(axis))])
-            segmentations.append(\
-                        group_p['segmentation/axis_{}'.format(str(axis))])
+            volumes_m.append(group_p['segmentation/axis_{}'.format(str(axis))])
+            indices_h.append(group_p['h_indices/axis_{}'.format(str(axis))])
+            indices_s.append(group_p['s_indices/axis_{}'.format(str(axis))])
         
         # Split data into training and validation.
         h_train = [volumes_h[i] for i in training_indices[key]]
         h_valid = [volumes_h[i] for i in validation_indices[key]]
         s_train = [volumes_s[i] for i in training_indices[key]]
         s_valid = [volumes_s[i] for i in validation_indices[key]]
-        m_train = [segmentations[i] if i not in masked_indices[key]
-                   else np.array([None]*len(segmentations[i]))
+        m_train = [volumes_m[i] if i not in masked_indices[key]
+                   else np.array([None]*len(volumes_m[i]))
                    for i in training_indices[key]]
-        m_valid = [segmentations[i] for i in validation_indices[key]]
+        m_valid = [volumes_m[i] for i in validation_indices[key]]
+        hi_train = [indices_h[i] for i in training_indices[key]]
+        hi_valid = [indices_h[i] for i in validation_indices[key]]
+        si_train = [indices_s[i] for i in training_indices[key]]
+        si_valid = [indices_s[i] for i in validation_indices[key]]
         
-        return h_train, h_valid, s_train, s_valid, m_train, m_valid
+        return (h_train,  h_valid,
+                s_train,  s_valid,
+                m_train,  m_valid,
+                hi_train, hi_valid,
+                si_train, si_valid)
     
     def _extend(target, source):
         for i in range(len(source)):
@@ -161,12 +172,16 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
     data = OrderedDict([('train', OrderedDict()),
                         ('valid', OrderedDict())])
     msa = multi_source_array
-    train_h = data_hgg[0]+data_lgg[0]
-    valid_h = data_hgg[1]+data_lgg[1]
-    train_s = data_hgg[2]+data_lgg[2]
-    valid_s = data_hgg[3]+data_lgg[3]
-    train_m = data_hgg[4]+data_lgg[4]
-    valid_m = data_hgg[5]+data_lgg[5]
+    train_h  = data_hgg[0]+data_lgg[0]
+    valid_h  = data_hgg[1]+data_lgg[1]
+    train_s  = data_hgg[2]+data_lgg[2]
+    valid_s  = data_hgg[3]+data_lgg[3]
+    train_m  = data_hgg[4]+data_lgg[4]
+    valid_m  = data_hgg[5]+data_lgg[5]
+    train_hi = data_hgg[6]+data_lgg[6]
+    valid_hi = data_hgg[7]+data_lgg[7]
+    train_si = data_hgg[8]+data_lgg[8]
+    valid_si = data_hgg[9]+data_lgg[9]
 
     # HACK: we may have a situation where the number of sick examples
     # is greater than the number of healthy. In that case, we should
@@ -177,30 +192,30 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
     len_s = sum([ len(elem) for elem in train_s])
     if len_h < len_s:
         m = int(np.ceil(len_s / len_h))
-    data['train']['h'] = msa(train_h*m, no_shape=True)
-    data['valid']['h'] = msa(valid_h*m, no_shape=True)
-    data['train']['s'] = msa(train_s, no_shape=True)
-    data['valid']['s'] = msa(valid_s, no_shape=True)
-    data['train']['m'] = msa(train_m, no_shape=True)
-    data['valid']['m'] = msa(valid_m, no_shape=True)
+    data['train']['h']  = msa(train_h*m, no_shape=True)
+    data['valid']['h']  = msa(valid_h*m, no_shape=True)
+    data['train']['s']  = msa(train_s, no_shape=True)
+    data['valid']['s']  = msa(valid_s, no_shape=True)
+    data['train']['m']  = msa(train_m, no_shape=True)
+    data['valid']['m']  = msa(valid_m, no_shape=True)
+    data['train']['hi'] = msa(train_hi, no_shape=True)
+    data['valid']['hi'] = msa(valid_hi, no_shape=True)
+    data['train']['si'] = msa(train_si, no_shape=True)
+    data['valid']['si'] = msa(valid_si, no_shape=True)
         
     return data
 
 
-def preprocessor_brats(data_augmentation_kwargs=None,
-                       h_idx=0, s_idx=1, m_idx=2):
+def preprocessor_brats(data_augmentation_kwargs=None):
     """
     Preprocessor function to pass to a data_flow, for BRATS data.
     
     data_augmentation_kwargs : Dictionary of keyword arguments to pass to
         the data augmentation code (image_stack_random_transform).
-    h_idx : The batch index for the healthy slices (None if not in batch).
-    s_idx : The batch index for the sick slices (None if not in batch).
-    m_idx : The batch index for the segmentation masks (None if not in batch).
     """
         
-    def process_element(h, s, m, max_shape):
-        inputs = [h, s, m]
+    def process_element(inputs, max_shape):
+        h, s, m, hi, si = inputs
         
         # Center slices onto empty buffers with a size equal to the largest.
         elem = []
@@ -234,7 +249,7 @@ def preprocessor_brats(data_augmentation_kwargs=None,
                 s = _
                         
         # Set background intensity.
-        for im, im_orig in zip([h, s, m], inputs):
+        for im, im_orig in zip([h, s, m], inputs[:-2]):
             if im is None:
                 continue
             # HACK: Assuming corner pixel is always outside of the brain.
@@ -253,19 +268,22 @@ def preprocessor_brats(data_augmentation_kwargs=None,
         
         # Set dtype (all output buffers are float32 to support inf).
         elem = []
-        for im, im_orig in zip([h, s, m], inputs):
+        for im, im_orig in zip([h, s, m], inputs[:-2]):
             if im is None:
                 elem.append(None)
                 continue
             im = im.astype(im_orig.dtype)
             elem.append(im)
+        
+        # Append indices.
+        elem.extend(inputs[-2:])
             
         return elem
         
     def process_batch(batch):        
         # Find the largest slice.
         max_shape = (0,0)
-        for b in batch:
+        for b in batch[:-2]:
             for im in b:
                 if im is None:
                     continue
@@ -276,17 +294,9 @@ def preprocessor_brats(data_augmentation_kwargs=None,
         # Process every element.
         elements = []
         for i in range(len(batch[0])):
-            h = None if h_idx is None else batch[h_idx][i]
-            s = None if s_idx is None else batch[s_idx][i]
-            m = None if m_idx is None else batch[m_idx][i]
-            elem = process_element(h=h, s=s, m=m, max_shape=max_shape)
+            elem = process_element([b[i] for b in batch], max_shape=max_shape)
             elements.append(elem)
         out_batch = list(zip(*elements))
-        
-        # Drop batch indices that are passed as `None`.
-        out_batch = [out_batch[i] \
-                     for i, elem_idx in enumerate([h_idx, s_idx, m_idx]) \
-                     if elem_idx is not None]
         
         return out_batch
     

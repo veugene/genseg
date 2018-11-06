@@ -65,27 +65,39 @@ class gan_objective(object):
         else:
             raise ValueError("Unknown objective: {}".format(objective))
     
-    def G(self, disc, fake, real=None):
+    def G(self, disc, fake, real=None, kwargs_fake=None, kwargs_real=None):
+        if kwargs_fake is None: kwargs_fake = {}
+        if kwargs_real is None: kwargs_real = {}
         if self.relativistic:
             return self._foreach(lambda x: self._G(x[0]-x[1]),
-                                 [disc(fake), disc(real)])
-        return self._foreach(self._G, disc(fake))
+                                 [disc(fake, **kwargs_fake),
+                                  disc(real, **kwargs_real)])
+        return self._foreach(self._G, disc(fake, **kwargs_fake))
     
-    def D(self, disc, fake, real):
+    def D(self, disc, fake, real, kwargs_fake=None, kwargs_real=None):
+        if kwargs_fake is None: kwargs_fake = {}
+        if kwargs_real is None: kwargs_real = {}
         if self.relativistic:
             loss_real = self._D_relativistic(real, fake, disc, self._D1,
                                              self.grad_penalty_real,
-                                             self.grad_penalty_fake)
+                                             self.grad_penalty_fake,
+                                             kwargs_a=kwargs_real,
+                                             kwargs_b=kwargs_fake)
             loss_fake = self._D_relativistic(fake, real, disc, self._D0,
                                              self.grad_penalty_fake,
-                                             self.grad_penalty_real)
+                                             self.grad_penalty_real,
+                                             kwargs_a=kwargs_fake,
+                                             kwargs_b=kwargs_real)
         else:
-            loss_real = self._D(real, disc, self._D1, self.grad_penalty_real)
-            loss_fake = self._D(fake, disc, self._D0, self.grad_penalty_fake)
+            loss_real = self._D(real, disc, self._D1, self.grad_penalty_real,
+                                kwargs_disc=kwargs_real)
+            loss_fake = self._D(fake, disc, self._D0, self.grad_penalty_fake,
+                                kwargs_disc=kwargs_fake)
         return loss_real+loss_fake
     
-    def _D(self, x, disc, objective, grad_penalty):
-        disc_out = disc(x)
+    def _D(self, x, disc, objective, grad_penalty, kwargs_disc=None):
+        if kwargs_disc is None: kwargs_disc = {}
+        disc_out = disc(x, **kwargs_disc)
         loss = self._foreach(objective, disc_out)
         if grad_penalty is not None:
             if isinstance(disc_out, torch.Tensor):
@@ -105,12 +117,15 @@ class gan_objective(object):
         return loss
     
     def _D_relativistic(self, a, b, disc, objective,
-                        grad_penalty_a, grad_penalty_b):
+                        grad_penalty_a, grad_penalty_b,
+                        kwargs_a=None, kwargs_b=None):
+        if kwargs_a is None: kwargs_a = {}
+        if kwargs_b is None: kwargs_b = {}
         if torch.is_grad_enabled():
             a.requires_grad = True
             b.requires_grad = True
-        disc_a = disc(a)
-        disc_b = disc(b)
+        disc_a = disc(a, **kwargs_a)
+        disc_b = disc(b, **kwargs_b)
         loss = self._foreach(lambda x: objective(x[0]-x[1]), [disc_a, disc_b])
         if torch.is_grad_enabled():
             if grad_penalty_a is not None or grad_penalty_b is not None:

@@ -99,7 +99,7 @@ def data_loader(data_dir, crop=True):
         yield volume, segmentation, dn
         
         
-def get_slices(volume, segmentation, brain_mask,
+def get_slices(volume, segmentation, brain_mask, indices,
                min_tumor_fraction, min_brain_fraction):
     
     assert min_tumor_fraction>=0 and min_tumor_fraction<=1
@@ -133,6 +133,8 @@ def get_slices(volume, segmentation, brain_mask,
     slices_dict['healthy'] = volume[indices_healthy]
     slices_dict['sick'] = volume[indices_anomaly]
     slices_dict['segmentation'] = segmentation[indices_anomaly]
+    slices_dict['h_indices'] = indices[indices_healthy]
+    slices_dict['s_indices'] = indices[indices_anomaly]
     
     return slices_dict
 
@@ -156,6 +158,16 @@ def preprocess(volume, segmentation, skip_bias_correction=False):
     brain_mask = volume_out!=0
     volume_out[brain_mask] -= volume_out[brain_mask].mean()
     volume_out[brain_mask] /= volume_out[brain_mask].std()*5
+    
+    # Get slice indices, with 0 at the center.
+    #brain_mask_ax1 = brain_mask.sum(axis=(0,2,3))>0
+    #idx_min = np.argmax(brain_mask_ax1)
+    #idx_max = len(brain_mask_ax1)-1-np.argmax(np.flipud(brain_mask_ax1))
+    #idx_mid = (idx_max-idx_min)//2
+    #a = idx_mid-len(brain_mask_ax1)
+    #b = len(brain_mask_ax1)+a-1
+    #indices = np.arange(a, b)
+    indices = np.arange(brain_mask.shape[1])
         
     # Split volume along hemispheres.
     mid0 = volume.shape[-1]//2
@@ -168,8 +180,9 @@ def preprocess(volume, segmentation, skip_bias_correction=False):
                                        segmentation[:,:,:,mid1:]], axis=1)
     brain_mask = np.concatenate([brain_mask[:,:,:,:mid0],
                                  brain_mask[:,:,:,mid1:]], axis=1)
+    indices = np.concatenate([indices, indices])
     
-    return volume_out, segmentation_out, brain_mask
+    return volume_out, segmentation_out, brain_mask, indices
 
 
 def process_case(case_num, h5py_file, volume, segmentation, fn,
@@ -178,8 +191,10 @@ def process_case(case_num, h5py_file, volume, segmentation, fn,
     print("Processing case {}: {}".format(case_num, fn))
     group_p = h5py_file.create_group(str(case_num))
     # TODO: set attribute containing fn.
-    vol, seg, m = preprocess(volume, segmentation, skip_bias_correction)
-    slices = get_slices(vol, seg, m, min_tumor_fraction, min_brain_fraction)
+    vol, seg, m, indices = preprocess(volume, segmentation,
+                                      skip_bias_correction)
+    slices = get_slices(vol, seg, m, indices,
+                        min_tumor_fraction, min_brain_fraction)
     for key in slices.keys():
         if len(slices[key])==0:
             kwargs = {}

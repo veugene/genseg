@@ -110,14 +110,17 @@ class segmentation_model(nn.Module):
         if torch.cuda.device_count()>1:
             self._loss_G = nn.DataParallel(self._loss_G, output_device=-1)
         
-    def forward(self, x_A, x_B, mask=None, optimizer=None, disc=None,
-                rng=None):
+    def forward(self, x_A, x_B, mask=None, class_A=None, class_B=None,
+                optimizer=None, disc=None, rng=None):
         # Compute gradients and update?
         do_updates_bool = True if optimizer is not None else False
         
         # Compute all outputs.
         with torch.set_grad_enabled(do_updates_bool):
-            visible, hidden, intermediates = self._forward(x_A, x_B, rng=rng)
+            visible, hidden, intermediates = self._forward(x_A, x_B,
+                                                           class_A=class_A,
+                                                           class_B=class_B,
+                                                           rng=rng)
         
         # Evaluate discriminator loss and update.
         loss_disc = defaultdict(int)
@@ -128,6 +131,8 @@ class segmentation_model(nn.Module):
                 with torch.set_grad_enabled(do_updates_bool):
                     loss_disc, loss_mi_est = self._loss_D(x_A=x_A,
                                                           x_B=x_B,
+                                                          class_A=class_A,
+                                                          class_B=class_B,
                                                           x_BA=visible['x_BA'],
                                                           x_AB=visible['x_AB'],
                                                           c_A=hidden['c_A'],
@@ -161,9 +166,11 @@ class segmentation_model(nn.Module):
         with torch.set_grad_enabled(do_updates_bool):
             losses_G = self._loss_G(x_AM=visible['x_AM'],
                                     x_A=x_A,
+                                    class_A=class_A,
                                     x_AB=visible['x_AB'],
                                     x_AA=visible['x_AA'],
                                     x_B=x_B,
+                                    class_B=class_B,
                                     x_BA=visible['x_BA'],
                                     x_BB=visible['x_BB'],
                                     x_BAB=visible['x_BAB'],
@@ -249,7 +256,7 @@ class _forward(nn.Module):
         ret = ret.to(torch.cuda.current_device())
         return ret
     
-    def forward(self, x_A, x_B, rng=None):
+    def forward(self, x_A, x_B, class_A=None, class_B=None, rng=None):
         assert len(x_A)==len(x_B)
         batch_size = len(x_A)
         
@@ -280,14 +287,16 @@ class _forward(nn.Module):
         
         # A->(B, dA)->A
         x_AB = x_AB_residual = X_AA = x_AA_list = c_A = u_A = None
+        info_AB = {'skip_info': skip_A}
+        if class_A is not None:
+            info_AB['class_info'] = class_A
         if (self.lambda_seg
          or self.lambda_disc or self.lambda_x_id or self.lambda_z_id):
-            x_AB_residual, skip_AM = self.decoder_residual(s_A,
-                                                           skip_info=skip_A)
+            x_AB_residual, skip_AM = self.decoder_residual(s_A, **info_AB)
         if self.lambda_disc or self.lambda_x_id or self.lambda_z_id:
             c_A, u_A = torch.split(s_A, [s_A.size(1)-self.shape_sample[0],
                                          self.shape_sample[0]], dim=1)
-            x_AB, _ = self.decoder_common(c_A, skip_info=skip_A)
+            x_AB, _ = self.decoder_common(c_A, **info_AB)
             x_AA = add(x_AB, x_AB_residual)
             
             # Unpack.
@@ -297,12 +306,15 @@ class _forward(nn.Module):
         
         # B->(B, dA)->A
         x_BA = x_BA_residual = x_BB = z_BA = x_BB_list = None
+        info_BA = {'skip_info': skip_B}
+        if class_A is not None:
+            info_BA['class_info'] = class_B
         if self.lambda_disc or self.lambda_x_id or self.lambda_z_id:
             u_BA = self._z_sample(batch_size, rng=rng)
             c_B  = s_B[:,:s_B.size(1)-self.shape_sample[0]]
             z_BA = torch.cat([c_B, u_BA], dim=1)
-            x_BB, _ = self.decoder_common(c_B, skip_info=skip_B)
-            x_BA_residual, _ = self.decoder_residual(z_BA, skip_info=skip_B)
+            x_BB, _ = self.decoder_common(c_B, **info_BA)
+            x_BA_residual, _ = self.decoder_residual(z_BA, **info_BA)
             x_BA = add(x_BB, x_BA_residual)
             
             # Unpack.
@@ -317,7 +329,10 @@ class _forward(nn.Module):
                 x_AM = self.segmenter[0](s_A, skip_info=skip_AM)
             else:
                 # Re-use residual decoder in mode 1.
-                x_AM = self.decoder_residual(s_A, skip_info=skip_AM, mode=1)
+                info_AM = {'skip_info': skip_AM}
+                if class_A is not None:
+                    info_AM['class_info'] = class_A
+                x_AM = self.decoder_residual(s_A, **info_AM, mode=1)
                 x_AM, _ = unpack(x_AM)
         
         # Reconstruct latent codes.
@@ -332,10 +347,13 @@ class _forward(nn.Module):
         
         # Cycle.
         x_BAB = c_BA = u_BA = None
+        info_BAB = {'skip_info': skip_BA}
+        if class_A is not None:
+            info_BAB['class_info'] = class_B
         if self.lambda_cyc:
             c_BA, u_BA = torch.split(s_BA, [s_BA.size(1)-self.shape_sample[0],
                                             self.shape_sample[0]], dim=1)
-            x_BAB, _ = self.decoder_common(c_BA, skip_info=skip_BA)
+            x_BAB, _ = self.decoder_common(c_BA, **info_BAB)
             x_BAB, _ = unpack(x_BAB)
         
         # Compile outputs and return.
@@ -390,7 +408,8 @@ class _loss_D(nn.Module):
                     'disc_B'    : disc_B,
                     'mi'        : mi_estimator}  # Separate params.
     
-    def forward(self, x_A, x_B, x_BA, x_AB, c_A, u_A, c_BA, u_BA):
+    def forward(self, x_A, x_B, x_BA, x_AB, c_A, u_A, c_BA, u_BA,
+                class_A=None, class_B=None):
         # If outputs are lists, get the last item (image).
         if not isinstance(x_BA, torch.Tensor):
             x_BA = x_BA[-1]
@@ -398,11 +417,17 @@ class _loss_D(nn.Module):
             x_AB = x_AB[-1]
         
         # Discriminators.
+        kwargs_real = None if class_A is None else {'class_info': class_A}
+        kwargs_fake = None if class_B is None else {'class_info': class_B}
         loss_disc = OrderedDict()
         loss_disc_A = self._gan.D(self.net['disc_A'],
-                                  fake=x_BA.detach(), real=x_A)
+                                  fake=x_BA.detach(), real=x_A,
+                                  kwargs_real=kwargs_real,
+                                  kwargs_fake=kwargs_fake)
         loss_disc_B = self._gan.D(self.net['disc_B'],
-                                  fake=x_AB.detach(), real=x_B)
+                                  fake=x_AB.detach(), real=x_B,
+                                  kwargs_real=kwargs_real,
+                                  kwargs_fake=kwargs_fake)
         loss_disc['A'] = self.lambda_disc*loss_disc_A
         loss_disc['B'] = self.lambda_disc*loss_disc_B
         
@@ -437,7 +462,8 @@ class _loss_G(nn.Module):
     
     def forward(self, x_AM, x_A, x_AB, x_AA, x_B, x_BA, x_BB, x_BAB,
                 s_BA, s_AA, c_AB, c_BB, z_BA, s_A, c_A, u_A, c_B, c_BA, u_BA,
-                x_AA_list, x_BB_list, skip_A, skip_B):
+                x_AA_list, x_BB_list, skip_A, skip_B,
+                class_A=None, class_B=None):
         # Mutual information loss for generator.
         loss_mi_gen = defaultdict(int)
         if self.net['mi'] is not None:
@@ -445,12 +471,20 @@ class _loss_G(nn.Module):
             loss_mi_gen['BA'] = -self.lambda_mi*self.net['mi'](c_BA, u_BA)
         
         # Generator loss.
+        kwargs_real = None if class_A is None else {'class_info': class_A}
+        kwargs_fake = None if class_B is None else {'class_info': class_B}
         loss_gen = defaultdict(int)
         if self.lambda_disc:
-            loss_gen['AB'] = self.lambda_disc*self._gan.G(self.net['disc_B'],
-                                                          fake=x_AB, real=x_B)
-            loss_gen['BA'] = self.lambda_disc*self._gan.G(self.net['disc_A'],
-                                                          fake=x_BA, real=x_A)
+            loss_gen['AB'] = self.lambda_disc*self._gan.G(
+                                    self.net['disc_B'],
+                                    fake=x_AB, real=x_B,
+                                    kwargs_real=kwargs_real,
+                                    kwargs_fake=kwargs_fake)
+            loss_gen['BA'] = self.lambda_disc*self._gan.G(
+                                    self.net['disc_A'],
+                                    fake=x_BA, real=x_A,
+                                    kwargs_real=kwargs_real,
+                                    kwargs_fake=kwargs_fake)
         
         # Reconstruction loss.
         loss_rec = defaultdict(int)

@@ -951,18 +951,20 @@ def grad_norm(module):
     return norm
 
 
-def recursive_spectral_norm(module):
+def recursive_spectral_norm(module, types=None):
     """
     Recursively traverse submodules in a module and apply spectral norm to
     all convolutional layers.
     """
+    if types is None:
+        types = tuple()
     for m in module.modules():
         if isinstance(m, (nn.Conv1d,
                           nn.Conv2d,
                           nn.Conv3d,
                           nn.ConvTranspose1d,
                           nn.ConvTranspose2d,
-                          nn.ConvTranspose3d)):
+                          nn.ConvTranspose3d)+types):
             if not hasattr(m, '_has_spectral_norm'):
                 spectral_norm(m)
             setattr(m, '_has_spectral_norm', True)
