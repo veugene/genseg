@@ -47,9 +47,9 @@ def get_parser():
     g_exp.add_argument('--name', type=str, default="")
     g_exp.add_argument('--data_dir', type=str, default='./data/mnist')
     g_exp.add_argument('--save_path', type=str, default='./experiments')
-    mutex_parser = g_exp.add_mutually_exclusive_group()
-    mutex_parser.add_argument('--model_from', type=str, default=None)
-    mutex_parser.add_argument('--resume_from', type=str, default=None)
+    mutex_from = g_exp.add_mutually_exclusive_group()
+    mutex_from.add_argument('--model_from', type=str, default=None)
+    mutex_from.add_argument('--resume_from', type=str, default=None)
     g_exp.add_argument('--weight_decay', type=float, default=1e-4)
     g_exp.add_argument('--labeled_fraction', type=float, default=0.1)
     g_exp.add_argument('--unlabeled_digits', type=int, default=None,
@@ -77,18 +77,40 @@ def get_parser():
     g_exp.add_argument('--save_image_events', action='store_true',
                        help="Save images into tensorboard event files.")
     g_exp.add_argument('--rseed', type=int, default=1234)
-    g_clu = parser.add_argument_group('Cluster')
-    g_clu.add_argument('--dispatch', default=False, action='store_true')
-    g_clu.add_argument('--cluster_id', type=int, default=425)
-    g_clu.add_argument('--docker_id', type=str, default="nvidian_general/"
-                       "9.0-cudnn7-devel-ubuntu16.04_genseg:v2")
-    g_clu.add_argument('--gpu', type=int, default=1)
-    g_clu.add_argument('--cpu', type=int, default=2)
-    g_clu.add_argument('--mem', type=int, default=12)
+    g_sel = parser.add_argument_group('Cluster select.')
+    mutex_cluster = g_sel.add_mutually_exclusive_group()
+    mutex_cluster.add_argument('--dispatch_dgx', default=False,
+                               action='store_true')
+    mutex_cluster.add_argument('--dispatch_ngc', default=False,
+                               action='store_true')
+    g_dgx = parser.add_argument_group('DGX cluster')
+    g_dgx.add_argument('--cluster_id', type=int, default=425)
+    g_dgx.add_argument('--docker_id', type=str,
+                       default="nvidian_general/"
+                               "9.0-cudnn7-devel-ubuntu16.04_genseg:v2")
+    g_dgx.add_argument('--gpu', type=int, default=1)
+    g_dgx.add_argument('--cpu', type=int, default=2)
+    g_dgx.add_argument('--mem', type=int, default=12)
+    g_dgx.add_argument('--nfs_host', type=str, default="dcg-zfs-03.nvidia.com")
+    g_dgx.add_argument('--nfs_path', type=str,
+                       default="/export/ganloc.cosmos253/")
+    g_ngc = parser.add_argument_group('NGC cluster')
+    g_ngc.add_argument('--ace', type=str, default='nv-us-west-2')
+    g_ngc.add_argument('--instance', type=str, default='ngcv1',
+                       choices=['ngcv1', 'ngcv2', 'ngcv4', 'ngcv8'],
+                       help="Number of GPUs.")
+    g_ngc.add_argument('--image', type=str,
+                       default="nvidian/lpr/"
+                               "9.0-cudnn7-devel-ubuntu16.04_genseg:v2")
+    g_ngc.add_argument('--source_id', type=str, default=None)
+    g_ngc.add_argument('--dataset_id', type=str, default=None)
+    g_ngc.add_argument('--workspace', type=str,
+                       default='8CfEU-RDR_eu5BDfnMypNQ:/workspace')
+    g_ngc.add_argument('--result', type=str, default="/results")
     return parser
 
 
-def dispatch():
+def dispatch_dgx():
     parser = get_parser()
     args = parser.parse_args()
     if args.resume_from is not None:
@@ -101,12 +123,10 @@ def dispatch():
     pre_cmd = ("export HOME=/tmp; "
                "export ROOT=/scratch/; "
                "cd /scratch/ssl-seg-eugene; "
-               "source link_submodules.sh;")
+               "source register_submodules.sh;")
     cmd = subprocess.list2cmdline(sys.argv)       # Shell executable.
-    cmd = cmd.replace(" --dispatch", "")          # Remove recursion.
+    cmd = cmd.replace(" --dispatch_dgx", "")          # Remove recursion.
     cmd = "bash -c '{} python3 {};'".format(pre_cmd, cmd)  # Combine.
-    share_path = "/export/ganloc.cosmos253/"
-    share_host = "dcg-zfs-03.nvidia.com"
     mount_point = "/scratch"
     subprocess.run(["dgx", "job", "submit",
                     "-n", name,
@@ -115,10 +135,40 @@ def dispatch():
                     "--cpu", str(args.cpu),
                     "--mem", str(args.mem),
                     "--clusterid", str(args.cluster_id),
-                    "--volume", "{}@{}:{}".format(share_path,
-                                                  share_host,
+                    "--volume", "{}@{}:{}".format(args.nfs_path,
+                                                  args.nfs_host,
                                                   mount_point),
                     "-c", cmd])
+
+
+def dispatch_ngc():
+    parser = get_parser()
+    args = parser.parse_args()
+    if args.resume_from is not None:
+        with open(os.path.join(args.resume_from, "args.txt"), 'r') as f:
+            saved_args = f.read().split('\n')[1:]
+            name = parser.parse_args(saved_args).name
+    else:
+        name = args.name
+    name = re.sub('[\W]', '_', name)         # Strip non-alphanumeric.
+    pre_cmd = ("cd /repo; "
+               "source register_submodules.sh;")
+    cmd = subprocess.list2cmdline(sys.argv)       # Shell executable.
+    cmd = cmd.replace(" --dispatch_ngc", "")          # Remove recursion.
+    cmd = "bash -c '{} python3 {};'".format(pre_cmd, cmd)  # Combine.
+    share_path = "/export/ganloc.cosmos253/"
+    share_host = "dcg-zfs-03.nvidia.com"
+    mount_point = "/scratch"
+    subprocess.run(["ngc", "batch", "run",
+                    "--name", name,
+                    "--image", args.image,
+                    "--ace", args.ace,
+                    "--instance", args.instance,
+                    "--commandline", cmd,
+                    "--datasetid", args.dataset_id,
+                    "--datasetid", args.source_id,
+                    "--workspace", args.workspace,
+                    "--result", args.result])
 
 
 def run():
@@ -336,8 +386,13 @@ def run():
     engines['test'].run(loader['test'])
 
 if __name__ == '__main__':
-    args = get_parser().parse_args()
-    if args.dispatch:
-        dispatch()
+    parser = get_parser()
+    args = parser.parse_args()
+    if args.dispatch_dgx:
+        dispatch_dgx()
+    elif args.dispatch_ngc:
+        dispatch_ngc()
+    elif args.model_from is None and args.resume_from is None:
+        parser.print_help()
     else:
         run()
