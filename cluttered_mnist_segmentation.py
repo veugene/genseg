@@ -264,7 +264,7 @@ def run():
                         output_transform=lambda x: (x['x_AM'], x['x_M']))
         metrics[key]['rec']  = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_rec'])
-        if isinstance(experiment_state.model, model_ae):
+        if isinstance(experiment_state.model['G'], model_ae):
             metrics[key]['loss'] = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_all'])
         else:
