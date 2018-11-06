@@ -21,7 +21,8 @@ from model.common.network.basic import (AdaptiveInstanceNorm2d,
                                         norm_nlin_conv,
                                         pool_block,
                                         recursive_spectral_norm,
-                                        repeat_block)
+                                        repeat_block,
+                                        tiny_block)
 from model.common.losses import dist_ratio_mse_abs
 from model.bd_segmentation import segmentation_model
 
@@ -113,6 +114,20 @@ def build_model():
         'padding_mode'        : 'reflect',
         'init'                : 'kaiming_normal_'}
     
+    fcn_kwargs = {
+        'in_channels'         : 8,
+        'num_classes'         : 4,
+        'num_init_blocks'     : 2,
+        'num_main_blocks'     : 3,
+        'main_block_depth'    : 1,
+        'init_num_filters'    : 4,
+        'dropout'             : 0.,
+        'main_block'          : basic_block,
+        'init_block'          : tiny_block,
+        'norm_kwargs'         : {'momentum': 0.1},
+        'nonlinearity'        : lambda : nn.LeakyReLU(inplace=True),
+        'ndim'                : 2}
+    
     x_shape = (N-n,)+tuple(enc_out_shape[1:])
     z_shape = (n,)+tuple(enc_out_shape[1:])
     print("DEBUG: sample_shape={}".format(z_shape))
@@ -120,7 +135,7 @@ def build_model():
         'encoder'           : encoder_instance,
         'decoder_common'    : decoder(**decoder_common_kwargs),
         'decoder_residual'  : decoder(**decoder_residual_kwargs),
-        'segmenter'         : None,
+        'segmenter'         : segmenter(**fcn_kwargs),
         'mutual_information': mi_estimation_network(
                                             x_size=np.product(x_shape),
                                             z_size=np.product(z_shape),
@@ -146,7 +161,8 @@ def build_model():
         ('G', model),
         ('D', nn.ModuleList([model.separate_networks['disc_A'],
                              model.separate_networks['disc_B']])),
-        ('E', model.separate_networks['mi_estimator'])
+        ('E', model.separate_networks['mi_estimator']),
+        ('S', model.separate_networks['segmenter'])
         ))
 
 
@@ -250,7 +266,7 @@ class encoder(nn.Module):
         self.output_shape = shape
             
     def forward(self, input):
-        skips = []
+        skips = [input]
         size = input.size()
         out = input
         for m in self.blocks:
@@ -304,7 +320,6 @@ class decoder(nn.Module):
         self.num_resblocks = num_resblocks
         self.num_channels_list = num_channels_list
         self.num_cond_classes = num_cond_classes
-        self.num_classes = num_classes
         self.mlp_dim = mlp_dim
         self.embedding_dim = embedding_dim
         self.skip = skip
@@ -317,7 +332,6 @@ class decoder(nn.Module):
         self.init = init
         self.nonlinearity = nonlinearity
         self.long_skip_merge_mode = long_skip_merge_mode
-        self.output_list = output_list
         self.ndim = ndim
         
         self.in_channels  = self.input_shape[0]
@@ -418,17 +432,8 @@ class decoder(nn.Module):
             'padding_mode': self.padding_mode,
             'init': self.init,
             'ndim': self.ndim}
-        self.out_conv = [norm_nlin_conv(**kwargs_out_conv),
-                         norm_nlin_conv(**kwargs_out_conv)]     # 1 per mode.
-        self.out_conv = nn.ModuleList(self.out_conv)
+        self.out_conv = norm_nlin_conv(**kwargs_out_conv)
         
-        # Classifier for segmentation (mode 1).
-        if self.num_classes is not None:
-            self.classifier = convolution(
-                in_channels=self.out_channels,
-                out_channels=self.num_classes,
-                kernel_size=1,
-                ndim=self.ndim)
         
         # Count number of AdaIN parameters required.
         num_adain_params = 0
@@ -443,29 +448,18 @@ class decoder(nn.Module):
                             n_output=num_adain_params,
                             n_hidden=mlp_dim,
                             init=self.init)
-        self.mlp_skip = mlp(n_layers=4,
-                            n_input=mlp_input_size,
-                            n_output=num_adain_params,
-                            n_hidden=mlp_dim,
-                            init=self.init)
         
         # Class-specific embedding.
         self.embedding = nn.Embedding(self.num_cond_classes,
                                       self.embedding_dim)
         
         
-    def forward(self, z, class_info, skip_info=None, mode=0):
-        # Mode is one of (0: trans, 1: seg).
-        assert mode in [0, 1]
-        
+    def forward(self, z, class_info, skip_info=None):
         # Assign AdaIN parameters.
         class_info = torch.Tensor(class_info).long().cuda()
         z_embedding = self.embedding(class_info)
-        if mode==0:
-            adain_params = self.mlp_self(torch.cat([z.view(z.size(0), -1),
-                                                    z_embedding], dim=1))
-        if mode==1:
-            skip_info, adain_params = skip_info
+        adain_params = self.mlp_self(torch.cat([z.view(z.size(0), -1),
+                                                z_embedding], dim=1))
         for m in self.modules():
             if m.__class__.__name__ == "AdaptiveInstanceNorm2d":
                 mean = adain_params[:, :m.num_features]
@@ -476,20 +470,19 @@ class decoder(nn.Module):
                     adain_params = adain_params[:, 2*m.num_features:]
         
         # Compute output.
-        out_list = []
         out = z
-        if skip_info is not None and mode==0:
+        if skip_info is not None:
             skip_info = skip_info[::-1]
         for n, block in enumerate(self.blocks):
             if (self.long_skip_merge_mode=='pool' and skip_info is not None
-                                                  and n<len(skip_info)+1
+                                                  and n<len(skip_info)
                                                   and n>0):
                 skip = skip_info[n-1]
                 out = adjust_to_size(out, skip.size()[2:])
                 out = block(out, unpool_indices=skip)
             elif (self.long_skip_merge_mode is not None
                                                   and skip_info is not None
-                                                  and n<len(skip_info)+1
+                                                  and n<len(skip_info)
                                                   and n>0):
                 skip = skip_info[n-1]
                 out = block(out)
@@ -507,23 +500,20 @@ class decoder(nn.Module):
                 out = block(out)
             if not out.is_contiguous():
                 out = out.contiguous()
-            out_list.append(out)
         out = self.pre_conv(out)
-        out = self.out_conv[mode](out)
-        out_list.append(out)
-        if self.output_list:
-            out = out_list
-        if mode==0:
-            out = torch.tanh(out)
-            adain_params = self.mlp_skip(torch.cat([z.view(z.size(0), -1),
-                                                    z_embedding], dim=1))
-            return out, (skip_info, adain_params)
-        elif mode==1:
-            out = self.classifier(out)
-            out = torch.sigmoid(out)
-            return out
-        else:
-            AssertionError()
+        out = self.out_conv(out)
+        skip_info.append(out)
+        out = torch.tanh(out)
+        return out, skip_info
+
+
+class segmenter(nn.Module):
+    def __init__(self, *args, **kwargs):
+        super(segmenter, self).__init__()
+        self.fcn = assemble_resunet(*args, **kwargs)
+    def forward(self, x, skip_info=None):
+        return self.fcn(torch.cat([skip_info[-1].detach(),
+                                   skip_info[-2].detach()], dim=1))
 
 
 class mi_estimation_network(nn.Module):

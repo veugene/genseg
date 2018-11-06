@@ -1,4 +1,3 @@
-from collections import OrderedDict
 import torch
 from torch import nn
 from torch.functional import F
@@ -18,16 +17,18 @@ from model.common.network.basic import (AdaptiveInstanceNorm2d,
                                         get_output_shape,
                                         instance_normalization,
                                         layer_normalization,
+                                        mlp,
+                                        munit_discriminator,
                                         norm_nlin_conv,
                                         pool_block,
                                         recursive_spectral_norm,
-                                        repeat_block)
+                                        repeat_block,
+                                        tiny_block)
 from model.common.losses import dist_ratio_mse_abs
 from model.bd_segmentation import segmentation_model
 
 
 def build_model():
-    NUM_COND_CLASSES = 155 # BRATS has 155 slices per brain.
     N = 512 # Number of features at the bottleneck.
     n = 128 # Number of features to sample at the bottleneck.
     image_size = (4, 240, 120)
@@ -65,7 +66,6 @@ def build_model():
         'block_type'          : conv_block,
         'num_resblocks'       : 4,
         'num_channels_list'   : [N, N//2, N//4, N//8, N//16, N//32],
-        'num_cond_classes'    : NUM_COND_CLASSES,
         'skip'                : True,
         'dropout'             : 0.,
         'normalization'       : layer_normalization,
@@ -85,10 +85,7 @@ def build_model():
         'block_type'          : conv_block,
         'num_resblocks'       : 4,
         'num_channels_list'   : [N, N//2, N//4, N//8, N//16, N//32],
-        'num_classes'         : 4,
-        'num_cond_classes'    : NUM_COND_CLASSES,
         'mlp_dim'             : 256, 
-        'embedding_dim'       : 32,
         'skip'                : False,
         'dropout'             : 0.,
         'normalization'       : layer_normalization,
@@ -104,7 +101,6 @@ def build_model():
     discriminator_kwargs = {
         'input_dim'           : image_size[0],
         'num_channels_list'   : [N//8, N//4, N//2, N],
-        'num_cond_classes'    : NUM_COND_CLASSES,
         'num_scales'          : 3,
         'normalization'       : layer_normalization,
         'norm_kwargs'         : None,
@@ -113,41 +109,47 @@ def build_model():
         'padding_mode'        : 'reflect',
         'init'                : 'kaiming_normal_'}
     
-    x_shape = (N-n,)+tuple(enc_out_shape[1:])
-    z_shape = (n,)+tuple(enc_out_shape[1:])
-    print("DEBUG: sample_shape={}".format(z_shape))
+    fcn_kwargs = {
+        'in_channels'         : 8,
+        'num_classes'         : 1,
+        'num_init_blocks'     : 2,
+        'num_main_blocks'     : 3,
+        'main_block_depth'    : 1,
+        'init_num_filters'    : 4,
+        'dropout'             : 0.,
+        'main_block'          : basic_block,
+        'init_block'          : tiny_block,
+        'norm_kwargs'         : {'momentum': 0.1},
+        'nonlinearity'        : lambda : nn.LeakyReLU(inplace=True),
+        'ndim'                : 2}
+    
+    shape_sample = (n,)+tuple(enc_out_shape[1:])
+    print("DEBUG: sample_shape={}".format(shape_sample))
     submodel = {
         'encoder'           : encoder_instance,
         'decoder_common'    : decoder(**decoder_common_kwargs),
-        'decoder_residual'  : decoder(**decoder_residual_kwargs),
+        'decoder_residual'  : decoder(**decoder_residual_kwargs,
+                                      fcn_kwargs=fcn_kwargs),
         'segmenter'         : None,
-        'mutual_information': mi_estimation_network(
-                                            x_size=np.product(x_shape),
-                                            z_size=np.product(z_shape),
-                                            n_hidden=1000),
-        'disc_A'            : multiscale_projection_discriminator(
-                                                    **discriminator_kwargs),
-        'disc_B'            : multiscale_projection_discriminator(
-                                                    **discriminator_kwargs)}
+        'disc_A'            : munit_discriminator(**discriminator_kwargs),
+        'disc_B'            : munit_discriminator(**discriminator_kwargs)}
     for m in submodel.values():
         if m is None:
             continue
-        recursive_spectral_norm(m, types=(nn.Embedding,))
+        recursive_spectral_norm(m)
     
     model = segmentation_model(**submodel,
-                               shape_sample=z_shape,
+                               shape_sample=shape_sample,
                                loss_gan='hinge',
-                               loss_seg=multi_class_dice_loss([1,2,4]),
+                               #loss_rec=dist_ratio_mse_abs,
+                               loss_seg=dice_loss([1,2,4]),
                                relativistic=False,
                                rng=np.random.RandomState(1234),
                                **lambdas)
     
-    return OrderedDict((
-        ('G', model),
-        ('D', nn.ModuleList([model.separate_networks['disc_A'],
-                             model.separate_networks['disc_B']])),
-        ('E', model.separate_networks['mi_estimator'])
-        ))
+    return {'G' : model,
+            'D' : nn.ModuleList([model.separate_networks['disc_A'],
+                                 model.separate_networks['disc_B']])}
 
 
 class encoder(nn.Module):
@@ -268,17 +270,37 @@ class encoder(nn.Module):
                 else:
                     skips.append(out_prev)
         return out, skips
+
+
+# In translation mode, normalization is as specified; in segmentation 
+# mode, `AdaptiveInstanceNorm2d`, conditioned on the translation, is used
+# instead.
+class switching_normalization(nn.Module):
+    def __init__(self, normalization, num_features, ndim,
+                    **norm_kwargs):
+        super(switching_normalization, self).__init__()
+        self.mode = 0
+        self.norm_t = normalization(
+            num_features=num_features,
+            ndim=ndim,
+            **norm_kwargs)
+        self.norm_s = AdaptiveInstanceNorm2d(
+            num_features=num_features)  # TODO momentum
+    def forward(self, x):
+        if self.mode==0:
+            return self.norm_t(x)
+        if self.mode==1:
+            return self.norm_s(x)
     
 
 class decoder(nn.Module):
     def __init__(self, input_shape, output_shape, num_conv_blocks, block_type,
-                 num_resblocks, num_channels_list, num_cond_classes,
-                 num_classes=None, mlp_dim=256, embedding_dim=32, skip=True,
-                 dropout=0., normalization=layer_normalization,
-                 norm_kwargs=None, padding_mode='constant', kernel_size=3,
-                 upsample_mode='conv', init='kaiming_normal_',
-                 nonlinearity='ReLU', long_skip_merge_mode=None,
-                 output_list=False, ndim=2):
+                 num_resblocks, num_channels_list, fcn_kwargs=None,
+                 mlp_dim=256, skip=True, dropout=0.,
+                 normalization=layer_normalization, norm_kwargs=None,
+                 padding_mode='constant', kernel_size=3, upsample_mode='conv',
+                 init='kaiming_normal_', nonlinearity='ReLU',
+                 long_skip_merge_mode=None, output_list=False, ndim=2):
         super(decoder, self).__init__()
         
         # ndim must be only 2 or 3.
@@ -303,10 +325,8 @@ class decoder(nn.Module):
         self.block_type = block_type
         self.num_resblocks = num_resblocks
         self.num_channels_list = num_channels_list
-        self.num_cond_classes = num_cond_classes
-        self.num_classes = num_classes
+        self.fcn_kwargs = fcn_kwargs
         self.mlp_dim = mlp_dim
-        self.embedding_dim = embedding_dim
         self.skip = skip
         self.dropout = dropout
         self.normalization = normalization
@@ -322,6 +342,12 @@ class decoder(nn.Module):
         
         self.in_channels  = self.input_shape[0]
         self.out_channels = self.output_shape[0]
+        
+        # Normalization switch (translation, segmentation modes).
+        def normalization_switch(*args, **kwargs):
+            return switching_normalization(*args,
+                                           normalization=self.normalization,
+                                           **kwargs)
         
         # Compute all intermediate conv shapes by working backward from the 
         # output shape.
@@ -354,7 +380,8 @@ class decoder(nn.Module):
             subsample=False,
             upsample=False,
             upsample_mode='repeat',
-            normalization=AdaptiveInstanceNorm2d,
+            normalization=normalization_switch,
+            norm_kwargs=self.norm_kwargs,
             padding_mode=self.padding_mode,
             kernel_size=3,
             init=self.init,
@@ -373,7 +400,7 @@ class decoder(nn.Module):
                 upsample_mode=self.upsample_mode,
                 skip=_select(self.skip, False),
                 dropout=self.dropout,
-                normalization=AdaptiveInstanceNorm2d,
+                normalization=_select(normalization_switch),
                 padding_mode=self.padding_mode,
                 kernel_size=self.kernel_size,
                 init=self.init,
@@ -386,7 +413,7 @@ class decoder(nn.Module):
                 cat = conv_block(in_channels=self.num_channels_list[n],
                                  num_filters=1,
                                  skip=False,
-                                 normalization=AdaptiveInstanceNorm2d,
+                                 normalization=instance_normalization,
                                  nonlinearity=None,
                                  kernel_size=1,
                                  init=self.init,
@@ -405,14 +432,15 @@ class decoder(nn.Module):
                                        out_channels=last_channels,  # NOTE
                                        kernel_size=self.kernel_size,
                                        init=self.init,              # NOTE
-                                       normalization=AdaptiveInstanceNorm2d,
+                                       normalization=normalization_switch,
+                                       norm_kwargs=self.norm_kwargs,
                                        nonlinearity=self.nonlinearity,
                                        padding_mode=self.padding_mode)
         kwargs_out_conv = {
             'in_channels': last_channels,
             'out_channels': output_shape[0],
             'kernel_size': 7,
-            'normalization': self.normalization,    # NOTE: not AdaIN.
+            'normalization': self.normalization,
             'norm_kwargs': self.norm_kwargs,
             'nonlinearity': self.nonlinearity,
             'padding_mode': self.padding_mode,
@@ -422,13 +450,9 @@ class decoder(nn.Module):
                          norm_nlin_conv(**kwargs_out_conv)]     # 1 per mode.
         self.out_conv = nn.ModuleList(self.out_conv)
         
-        # Classifier for segmentation (mode 1).
-        if self.num_classes is not None:
-            self.classifier = convolution(
-                in_channels=self.out_channels,
-                out_channels=self.num_classes,
-                kernel_size=1,
-                ndim=self.ndim)
+        # Segmentation.
+        if self.fcn_kwargs is not None:
+            self.fcn = assemble_resunet(**fcn_kwargs)
         
         # Count number of AdaIN parameters required.
         num_adain_params = 0
@@ -437,43 +461,31 @@ class decoder(nn.Module):
                 num_adain_params += 2*m.num_features
         
         # MLP to predict AdaIN parameters.
-        mlp_input_size = np.product(self.input_shape)+self.embedding_dim
-        self.mlp_self = mlp(n_layers=4,
-                            n_input=mlp_input_size,
-                            n_output=num_adain_params,
-                            n_hidden=mlp_dim,
-                            init=self.init)
-        self.mlp_skip = mlp(n_layers=4,
-                            n_input=mlp_input_size,
-                            n_output=num_adain_params,
-                            n_hidden=mlp_dim,
-                            init=self.init)
-        
-        # Class-specific embedding.
-        self.embedding = nn.Embedding(self.num_cond_classes,
-                                      self.embedding_dim)
+        self.mlp = mlp(n_layers=4,
+                       n_input=np.product(self.input_shape),
+                       n_output=num_adain_params,
+                       n_hidden=mlp_dim,
+                       init=self.init)
         
         
-    def forward(self, z, class_info, skip_info=None, mode=0):
-        # Mode is one of (0: trans, 1: seg).
+    def forward(self, z, skip_info=None, mode=0):
+        # Set mode (0: trans, 1: seg).
         assert mode in [0, 1]
+        for m in self.modules():
+            if isinstance(m, switching_normalization):
+                m.mode = mode
         
-        # Assign AdaIN parameters.
-        class_info = torch.Tensor(class_info).long().cuda()
-        z_embedding = self.embedding(class_info)
-        if mode==0:
-            adain_params = self.mlp_self(torch.cat([z.view(z.size(0), -1),
-                                                    z_embedding], dim=1))
+        # In segmentation mode, assign AdaIN parameters.
         if mode==1:
             skip_info, adain_params = skip_info
-        for m in self.modules():
-            if m.__class__.__name__ == "AdaptiveInstanceNorm2d":
-                mean = adain_params[:, :m.num_features]
-                std = adain_params[:, m.num_features:2*m.num_features]
-                m.bias = mean.contiguous().view(-1)
-                m.weight = std.contiguous().view(-1)
-                if adain_params.size(1) > 2*m.num_features:
-                    adain_params = adain_params[:, 2*m.num_features:]
+            for m in self.modules():
+                if m.__class__.__name__ == "AdaptiveInstanceNorm2d":
+                    mean = adain_params[:, :m.num_features]
+                    std = adain_params[:, m.num_features:2*m.num_features]
+                    m.bias = mean.contiguous().view(-1)
+                    m.weight = std.contiguous().view(-1)
+                    if adain_params.size(1) > 2*m.num_features:
+                        adain_params = adain_params[:, 2*m.num_features:]
         
         # Compute output.
         out_list = []
@@ -515,187 +527,11 @@ class decoder(nn.Module):
             out = out_list
         if mode==0:
             out = torch.tanh(out)
-            adain_params = self.mlp_skip(torch.cat([z.view(z.size(0), -1),
-                                                    z_embedding], dim=1))
+            adain_params = self.mlp(z.view(z.size(0), -1))
             return out, (skip_info, adain_params)
         elif mode==1:
-            out = self.classifier(out)
-            out = torch.sigmoid(out)
+            if self.fcn_kwargs is not None:
+                out = self.fcn(out.detach())
             return out
         else:
             AssertionError()
-
-
-class mi_estimation_network(nn.Module):
-    def __init__(self, x_size, z_size, n_hidden):
-        super(mi_estimation_network, self).__init__()
-        self.x_size = x_size
-        self.z_size = z_size
-        self.n_hidden = n_hidden
-        modules = []
-        modules.append(nn.Linear(x_size+z_size, self.n_hidden))
-        modules.append(nn.ReLU())
-        for i in range(2):
-            modules.append(nn.Linear(self.n_hidden, self.n_hidden))
-            modules.append(nn.ReLU())
-        modules.append(nn.Linear(self.n_hidden, 1))
-        self.model = nn.Sequential(*tuple(modules))
-    
-    def forward(self, x, z):
-        out = self.model(torch.cat([x.view(x.size(0), -1),
-                                    z.view(z.size(0), -1)], dim=-1))
-        return out
-
-
-class multi_class_dice_loss(object):
-    def __init__(self, target_class=1, mask_class=None):
-        if not hasattr(target_class, '__len__'):
-            target_class = [target_class]
-        self.target_class = target_class
-        self.mask_class = mask_class
-        self._losses_single = []
-        for c in [0]+target_class:
-            # Dice loss for each class individually.
-            self._losses_single.append(dice_loss(target_class=c,
-                                                 mask_class=mask_class))
-        # Dice loss for all classes, combined.
-        self._loss_all = dice_loss(target_class=target_class, 
-                                   mask_class=mask_class)
-    
-    def __call__(self, y_pred, y_true):
-        loss = self._loss_all(1.-y_pred[:,0:1], y_true)
-        for i, l in enumerate(self._losses_single):
-            loss += l(y_pred[:,i:i+1].contiguous(), y_true)
-        loss /= len(self._losses_single)+1
-        return loss
-
-
-class multiscale_projection_discriminator(nn.Module):
-    def __init__(self, input_dim, num_channels_list, num_cond_classes,
-                 num_scales=3, normalization=None, norm_kwargs=None,
-                 kernel_size=5,
-                 nonlinearity=lambda:nn.LeakyReLU(0.2, inplace=True),
-                 padding_mode='reflect', init='kaiming_normal_'):
-        super(multiscale_projection_discriminator, self).__init__()
-        self.input_dim = input_dim
-        self.num_channels_list = num_channels_list
-        self.num_cond_classes = num_cond_classes
-        self.num_scales = num_scales
-        self.normalization = normalization
-        self.norm_kwargs = norm_kwargs
-        self.kernel_size = kernel_size
-        self.nonlinearity = nonlinearity
-        self.padding_mode = padding_mode
-        self.init = init
-        self.downsample = nn.AvgPool2d(3,
-                                       stride=2,
-                                       padding=[1, 1],
-                                       count_include_pad=False)
-        cnn_kwargs = {'input_dim': input_dim,
-                      'num_channels_list': num_channels_list,
-                      'num_cond_classes': num_cond_classes,
-                      'normalization': normalization,
-                      'norm_kwargs': norm_kwargs,
-                      'kernel_size': kernel_size,
-                      'nonlinearity': nonlinearity,
-                      'padding_mode': padding_mode,
-                      'init': init}
-        self.cnns = nn.ModuleList()
-        for _ in range(self.num_scales):
-            self.cnns.append(projection_cnn_discriminator(**cnn_kwargs))
-
-    def forward(self, x, class_info):
-        outputs = []
-        for model in self.cnns:
-            outputs.append(model(x, class_info))
-            x = self.downsample(x)
-        return outputs
-
-
-class projection_cnn_discriminator(nn.Module):
-    def __init__(self, input_dim, num_channels_list, num_cond_classes,
-                 normalization=None, norm_kwargs=None, kernel_size=5,
-                 nonlinearity=lambda:nn.LeakyReLU(0.2, inplace=True),
-                 padding_mode='reflect', init='kaiming_normal_'):
-        super(projection_cnn_discriminator, self).__init__()
-        self.input_dim = input_dim
-        self.num_channels_list = num_channels_list
-        self.num_cond_classes = num_cond_classes
-        self.normalization = normalization
-        self.norm_kwargs = norm_kwargs
-        self.kernel_size = kernel_size
-        self.nonlinearity = nonlinearity
-        self.padding_mode = padding_mode
-        self.init = init
-        
-        # CNN
-        cnn = []
-        layer = convolution(in_channels=self.input_dim,
-                            out_channels=self.num_channels_list[0],
-                            kernel_size=self.kernel_size,
-                            stride=2,
-                            padding=(self.kernel_size-1)//2,
-                            padding_mode=self.padding_mode,
-                            init=self.init)
-        cnn.append(layer)
-        for i, (ch0, ch1) in enumerate(zip(self.num_channels_list[:-1],
-                                           self.num_channels_list[1:])):
-            normalization = self.normalization if i>0 else None
-            layer = norm_nlin_conv(in_channels=ch0,
-                                   out_channels=ch1,
-                                   kernel_size=self.kernel_size,
-                                   subsample=True,
-                                   conv_padding=True,
-                                   padding_mode=self.padding_mode,
-                                   init=self.init,
-                                   nonlinearity=self.nonlinearity,
-                                   normalization=normalization,
-                                   norm_kwargs=self.norm_kwargs)
-            cnn.append(layer)
-        self.cnn = nn.Sequential(*cnn)
-        
-        # Embedding projection.
-        self.embedding = nn.Embedding(self.num_cond_classes,
-                                      self.num_channels_list[-1])
-        self.linear = nn.Linear(in_features=self.num_channels_list[-1],
-                                out_features=1)
-        
-    def forward(self, x, class_info):
-        class_info = torch.Tensor(class_info).long().cuda()
-        out = self.cnn(x)
-        out = torch.sum(out, dim=(2,3))     # Global sum pooling.
-        out = self.linear(out)
-        out = torch.sum(self.embedding(class_info)*out, dim=1, keepdim=True)
-        return out
-
-
-class mlp(nn.Module):
-    def __init__(self, n_layers, n_input, n_output, n_hidden=None,
-                 nonlinearity='ReLU', init='kaiming_normal_'):
-        super(mlp, self).__init__()
-        assert(n_layers > 0)
-        self.n_layers = n_layers
-        self.n_input  = n_input
-        self.n_output = n_output
-        self.n_hidden = n_hidden
-        self.nonlinearity = nonlinearity
-        self.init = init
-        if n_hidden is None:
-            self.n_hidden = n_output
-        layers = []
-        if n_layers > 1:
-            layers =  [nn.Linear(in_features=n_input, out_features=n_hidden),
-                       get_nonlinearity(self.nonlinearity)]
-            layers += [nn.Linear(in_features=n_hidden, out_features=n_hidden),
-                       get_nonlinearity(self.nonlinearity)]*max(0, n_layers-2)
-            layers += [nn.Linear(in_features=n_hidden, out_features=n_output),
-                       get_nonlinearity(self.nonlinearity)]
-        else:
-            layers = [nn.Linear(in_features=n_input, out_features=n_output),
-                      get_nonlinearity(self.nonlinearity)]
-        self.model = nn.Sequential(*tuple(layers))
-        for layer in self.model:
-            if isinstance(layer, nn.Linear) and init is not None:
-                layer.weight.data = get_initializer(init)(layer.weight.data)
-    def forward(self, x):
-        return self.model(x)

@@ -47,7 +47,7 @@ def build_model():
         'num_channels_list'   : [N//32, N//16, N//8, N//4, N//2, N],
         'skip'                : True,
         'dropout'             : 0.,
-        'normalization'       : instance_normalization,
+        'normalization'       : layer_normalization,
         'norm_kwargs'         : None,
         'padding_mode'        : 'reflect',
         'kernel_size'         : 3,

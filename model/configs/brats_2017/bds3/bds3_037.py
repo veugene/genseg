@@ -139,6 +139,7 @@ def build_model():
                                loss_gan='hinge',
                                loss_seg=multi_class_dice_loss([1,2,4]),
                                relativistic=False,
+                               num_disc_updates=3,
                                rng=np.random.RandomState(1234),
                                **lambdas)
     

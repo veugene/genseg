@@ -43,7 +43,6 @@ def build_model():
         'input_shape'         : image_size,
         'num_conv_blocks'     : 6,
         'block_type'          : conv_block,
-        'num_resblocks'       : 4,
         'num_channels_list'   : [N//32, N//16, N//8, N//4, N//2, N],
         'skip'                : True,
         'dropout'             : 0.,
@@ -63,8 +62,7 @@ def build_model():
         'output_shape'        : image_size,
         'num_conv_blocks'     : 5,
         'block_type'          : conv_block,
-        'num_resblocks'       : 4,
-        'num_channels_list'   : [N, N//2, N//4, N//8, N//16, N//32],
+        'num_channels_list'   : [N//2, N//4, N//8, N//16, N//32],
         'num_cond_classes'    : NUM_COND_CLASSES,
         'skip'                : True,
         'dropout'             : 0.,
@@ -83,8 +81,7 @@ def build_model():
         'output_shape'        : image_size,
         'num_conv_blocks'     : 5,
         'block_type'          : conv_block,
-        'num_resblocks'       : 4,
-        'num_channels_list'   : [N, N//2, N//4, N//8, N//16, N//32],
+        'num_channels_list'   : [N//2, N//4, N//8, N//16, N//32],
         'num_classes'         : 4,
         'num_cond_classes'    : NUM_COND_CLASSES,
         'mlp_dim'             : 256, 
@@ -152,7 +149,7 @@ def build_model():
 
 class encoder(nn.Module):
     def __init__(self, input_shape, num_conv_blocks, block_type,
-                 num_resblocks, num_channels_list, skip=True, dropout=0.,
+                 num_channels_list, skip=True, dropout=0.,
                  normalization=instance_normalization, norm_kwargs=None,
                  padding_mode='constant', kernel_size=3,
                  init='kaiming_normal_', nonlinearity='ReLU',
@@ -171,7 +168,6 @@ class encoder(nn.Module):
         self.input_shape = input_shape
         self.num_conv_blocks = num_conv_blocks
         self.block_type = block_type
-        self.num_resblocks = num_resblocks
         self.num_channels_list = num_channels_list
         self.skip = skip
         self.dropout = dropout
@@ -219,28 +215,6 @@ class encoder(nn.Module):
             self.blocks.append(block)
             shape = get_output_shape(block, shape)
             last_channels = self.num_channels_list[i]
-        assert(num_resblocks>0)
-        resblock_shape = (self.num_channels_list[-1],)+shape[1:]
-        resblocks = repeat_block(
-            basic_block,
-            in_channels=last_channels,
-            num_filters=resblock_shape[0],
-            repetitions=self.num_resblocks,
-            skip=self.skip,
-            dropout=self.dropout,
-            subsample=False,
-            upsample=False,
-            upsample_mode='repeat',
-            normalization=self.normalization,
-            norm_kwargs=self.norm_kwargs,
-            padding_mode=self.padding_mode,
-            kernel_size=3,
-            init=self.init,
-            nonlinearity=self.nonlinearity,
-            ndim=self.ndim)
-        self.blocks.append(resblocks)
-        shape = resblock_shape
-        last_channels = resblock_shape[0]
         if normalization is not None:
             block = normalization(ndim=self.ndim,
                                   num_features=last_channels,
@@ -272,13 +246,12 @@ class encoder(nn.Module):
 
 class decoder(nn.Module):
     def __init__(self, input_shape, output_shape, num_conv_blocks, block_type,
-                 num_resblocks, num_channels_list, num_cond_classes,
-                 num_classes=None, mlp_dim=256, embedding_dim=32, skip=True,
-                 dropout=0., normalization=layer_normalization,
-                 norm_kwargs=None, padding_mode='constant', kernel_size=3,
-                 upsample_mode='conv', init='kaiming_normal_',
-                 nonlinearity='ReLU', long_skip_merge_mode=None,
-                 output_list=False, ndim=2):
+                 num_channels_list, num_cond_classes, num_classes=None,
+                 mlp_dim=256, embedding_dim=32, skip=True, dropout=0.,
+                 normalization=layer_normalization, norm_kwargs=None,
+                 padding_mode='constant', kernel_size=3, upsample_mode='conv',
+                 init='kaiming_normal_', nonlinearity='ReLU',
+                 long_skip_merge_mode=None, output_list=False, ndim=2):
         super(decoder, self).__init__()
         
         # ndim must be only 2 or 3.
@@ -286,9 +259,9 @@ class decoder(nn.Module):
             raise ValueError("`ndim` must be either 2 or 3")
         
         # num_channels should be specified once for every block.
-        if len(num_channels_list)!=num_conv_blocks+1:
+        if len(num_channels_list)!=num_conv_blocks:
             raise ValueError("`num_channels_list` must have the same number "
-                             "of entries as there are blocks+1.")
+                             "of entries as there are blocks.")
         
         # long_skip_merge_mode settings.
         valid_modes = [None, 'skinny_cat', 'cat', 'pool']
@@ -301,7 +274,6 @@ class decoder(nn.Module):
         self.output_shape = output_shape
         self.num_conv_blocks = num_conv_blocks
         self.block_type = block_type
-        self.num_resblocks = num_resblocks
         self.num_channels_list = num_channels_list
         self.num_cond_classes = num_cond_classes
         self.num_classes = num_classes
@@ -323,19 +295,6 @@ class decoder(nn.Module):
         self.in_channels  = self.input_shape[0]
         self.out_channels = self.output_shape[0]
         
-        # Compute all intermediate conv shapes by working backward from the 
-        # output shape.
-        self._shapes = [self.output_shape,
-                        (self.num_channels_list[-1],)+self.output_shape[1:]]
-        for i in range(1, self.num_conv_blocks+1):
-            shape_spatial = np.array(self._shapes[-1][1:])//2
-            shape = (self.num_channels_list[-i],)+tuple(shape_spatial)
-            self._shapes.append(shape)
-        resblock_shape = (self.num_channels_list[0],)+self.input_shape[1:]
-        self._shapes.append(resblock_shape)
-        self._shapes.append(self.input_shape)
-        self._shapes = self._shapes[::-1]
-        
         '''
         Set up blocks.
         '''
@@ -343,27 +302,7 @@ class decoder(nn.Module):
         self.blocks = nn.ModuleList()
         shape = self.input_shape
         last_channels = shape[0]
-        assert(num_resblocks>0)
-        resblocks = repeat_block(
-            basic_block,
-            in_channels=last_channels,
-            num_filters=resblock_shape[0],
-            repetitions=self.num_resblocks,
-            skip=self.skip,
-            dropout=self.dropout,
-            subsample=False,
-            upsample=False,
-            upsample_mode='repeat',
-            normalization=AdaptiveInstanceNorm2d,
-            padding_mode=self.padding_mode,
-            kernel_size=3,
-            init=self.init,
-            nonlinearity=self.nonlinearity,
-            ndim=self.ndim)
-        self.blocks.append(resblocks)
-        shape = resblock_shape
-        last_channels = resblock_shape[0]
-        for n in range(1, self.num_conv_blocks+1):
+        for n in range(self.num_conv_blocks):
             def _select(a, b=None):
                 return a if n>0 else b
             block = self.block_type(
@@ -482,20 +421,18 @@ class decoder(nn.Module):
             skip_info = skip_info[::-1]
         for n, block in enumerate(self.blocks):
             if (self.long_skip_merge_mode=='pool' and skip_info is not None
-                                                  and n<len(skip_info)+1
-                                                  and n>0):
-                skip = skip_info[n-1]
+                                                  and n<len(skip_info)):
+                skip = skip_info[n]
                 out = adjust_to_size(out, skip.size()[2:])
                 out = block(out, unpool_indices=skip)
             elif (self.long_skip_merge_mode is not None
                                                   and skip_info is not None
-                                                  and n<len(skip_info)+1
-                                                  and n>0):
-                skip = skip_info[n-1]
+                                                  and n<len(skip_info)):
+                skip = skip_info[n]
                 out = block(out)
                 out = adjust_to_size(out, skip.size()[2:])
                 if   self.long_skip_merge_mode=='skinny_cat':
-                    cat = self.cats[n-1]
+                    cat = self.cats[n]
                     out = torch.cat([out, cat(skip)], dim=1)
                 elif self.long_skip_merge_mode=='cat':
                     out = torch.cat([out, skip], dim=1)
