@@ -192,16 +192,16 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
     len_s = sum([ len(elem) for elem in train_s])
     if len_h < len_s:
         m = int(np.ceil(len_s / len_h))
-    data['train']['h']  = msa(train_h*m, no_shape=True)
-    data['valid']['h']  = msa(valid_h*m, no_shape=True)
-    data['train']['s']  = msa(train_s, no_shape=True)
-    data['valid']['s']  = msa(valid_s, no_shape=True)
-    data['train']['m']  = msa(train_m, no_shape=True)
-    data['valid']['m']  = msa(valid_m, no_shape=True)
-    data['train']['hi'] = msa(train_hi, no_shape=True)
-    data['valid']['hi'] = msa(valid_hi, no_shape=True)
-    data['train']['si'] = msa(train_si, no_shape=True)
-    data['valid']['si'] = msa(valid_si, no_shape=True)
+    data['train']['h']  = msa(train_h*m,  no_shape=True)
+    data['valid']['h']  = msa(valid_h*m,  no_shape=True)
+    data['train']['s']  = msa(train_s,    no_shape=True)
+    data['valid']['s']  = msa(valid_s,    no_shape=True)
+    data['train']['m']  = msa(train_m,    no_shape=True)
+    data['valid']['m']  = msa(valid_m,    no_shape=True)
+    data['train']['hi'] = msa(train_hi*m, no_shape=True)
+    data['valid']['hi'] = msa(valid_hi*m, no_shape=True)
+    data['train']['si'] = msa(train_si,   no_shape=True)
+    data['valid']['si'] = msa(valid_si,   no_shape=True)
         
     return data
 
