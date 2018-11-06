@@ -94,7 +94,7 @@ def get_parser():
                        default="nvidian/lpr/"
                                "9.0-cudnn7-devel-ubuntu16.04_genseg:v2")
     g_ngc.add_argument('--source_id', type=str, default=None)
-    g_ngc.add_argument('--dataset_id', type=str, default='15991:/data')
+    g_ngc.add_argument('--dataset_id', type=str, default=None)
     g_ngc.add_argument('--workspace', type=str,
                        default='8CfEU-RDR_eu5BDfnMypNQ:/workspace')
     g_ngc.add_argument('--result', type=str, default="/results")
