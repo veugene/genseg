@@ -424,11 +424,13 @@ class _loss_D(nn.Module):
                                   fake=x_BA.detach(), real=x_A,
                                   kwargs_real=kwargs_real,
                                   kwargs_fake=kwargs_fake)
+        loss_disc['A'] = self.lambda_disc*loss_disc_A
+        kwargs_real = None if class_A is None else {'class_info': class_B}
+        kwargs_fake = None if class_B is None else {'class_info': class_A}
         loss_disc_B = self._gan.D(self.net['disc_B'],
                                   fake=x_AB.detach(), real=x_B,
                                   kwargs_real=kwargs_real,
                                   kwargs_fake=kwargs_fake)
-        loss_disc['A'] = self.lambda_disc*loss_disc_A
         loss_disc['B'] = self.lambda_disc*loss_disc_B
         
         # Mutual information estimate.
@@ -471,15 +473,17 @@ class _loss_G(nn.Module):
             loss_mi_gen['BA'] = -self.lambda_mi*self.net['mi'](c_BA, u_BA)
         
         # Generator loss.
-        kwargs_real = None if class_A is None else {'class_info': class_A}
-        kwargs_fake = None if class_B is None else {'class_info': class_B}
         loss_gen = defaultdict(int)
         if self.lambda_disc:
+            kwargs_real = None if class_A is None else {'class_info': class_B}
+            kwargs_fake = None if class_B is None else {'class_info': class_A}
             loss_gen['AB'] = self.lambda_disc*self._gan.G(
                                     self.net['disc_B'],
                                     fake=x_AB, real=x_B,
                                     kwargs_real=kwargs_real,
                                     kwargs_fake=kwargs_fake)
+            kwargs_real = None if class_A is None else {'class_info': class_A}
+            kwargs_fake = None if class_B is None else {'class_info': class_B}
             loss_gen['BA'] = self.lambda_disc*self._gan.G(
                                     self.net['disc_A'],
                                     fake=x_BA, real=x_A,
