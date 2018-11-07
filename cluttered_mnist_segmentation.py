@@ -255,10 +255,10 @@ def run():
     
     # Helper for training/validation loops : detach variables from graph.
     def detach(x):
-        detached = dict([(k, v.detach())
-                         if isinstance(v, Variable)
-                         else (k, v)
-                         for k, v in x.items()])
+        detached = OrderedDict([(k, v.detach())
+                                if isinstance(v, Variable)
+                                else (k, v)
+                                for k, v in x.items()])
         return detached
     
     # Training loop.
