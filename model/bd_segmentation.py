@@ -7,6 +7,7 @@ from torch.autograd import Variable
 from fcn_maker.loss import dice_loss
 from .common.network.basic import grad_norm
 from .common.losses import (bce,
+                            cce,
                             dist_ratio_mse_abs,
                             gan_objective,
                             mae,
@@ -21,7 +22,21 @@ def _reduce(loss):
         else:
             return x.view(x.size(0), -1).mean(1)
     if not hasattr(loss, '__len__'): loss = [loss]
+    if len(loss)==0: return 0
     return sum([_mean(v) for v in loss])
+
+
+def _foreach(func, x):
+    # If x is a list, process every element (and reduce to batch dim).
+    # Each tensor is reduced by `mean` and reduced tensors are averaged
+    # together.
+    # (For multi-scale discriminators. Each scale is given equal weight.)
+    if not isinstance(x, torch.Tensor):
+        return sum([_foreach(func, elem) for elem in x])/float(len(x))
+    out = func(x)
+    if out.dim()<=1:
+        return out
+    return out.view(out.size(0), -1).mean(1)    # Reduce to batch dim.
 
 
 class segmentation_model(nn.Module):
@@ -30,11 +45,12 @@ class segmentation_model(nn.Module):
     """
     def __init__(self, encoder, decoder_common, decoder_residual, segmenter,
                  disc_A, disc_B, shape_sample, mutual_information=None,
-                 loss_rec=mae, loss_seg=None, loss_gan='hinge',
-                 num_disc_updates=1, relativistic=False, grad_penalty=None,
-                 disc_clip_norm=None, lambda_disc=1, lambda_x_id=10,
-                 lambda_z_id=1, lambda_f_id=1, lambda_seg=1, lambda_cyc=0,
-                 lambda_mi=1, rng=None):
+                 classifier_A=None, classifier_B=None, loss_rec=mae,
+                 loss_seg=None, loss_gan='hinge', num_disc_updates=1,
+                 relativistic=False, grad_penalty=None, disc_clip_norm=None,
+                 lambda_disc=1, lambda_x_id=10, lambda_z_id=1, lambda_f_id=1,
+                 lambda_seg=1, lambda_cyc=0, lambda_mi=1, lambda_slice=0.,
+                 rng=None):
         super(segmentation_model, self).__init__()
         lambdas = OrderedDict((
             ('lambda_disc',       lambda_disc),
@@ -43,7 +59,8 @@ class segmentation_model(nn.Module):
             ('lambda_f_id',       lambda_f_id),
             ('lambda_seg',        lambda_seg),
             ('lambda_cyc',        lambda_cyc),
-            ('lambda_mi',         lambda_mi)
+            ('lambda_mi',         lambda_mi),
+            ('lambda_slice',      lambda_slice)
             ))
         kwargs = OrderedDict((
             ('rng',               rng if rng else np.random.RandomState()),
@@ -68,7 +85,9 @@ class segmentation_model(nn.Module):
             ('segmenter',         segmenter),
             ('mi_estimator',      None),
             ('disc_A',            disc_A),
-            ('disc_B',            disc_B)
+            ('disc_B',            disc_B),
+            ('classifier_A',      classifier_A),
+            ('classifier_B',      classifier_B)
             ))
         kwargs.update(lambdas)
         for key, val in kwargs.items():
@@ -93,17 +112,18 @@ class segmentation_model(nn.Module):
         
         # Module to compute discriminator losses on GPU.
         # Outputs are placed on CPU when there are multiple GPUs.
-        keys_D = ['gan_objective', 'disc_A', 'disc_B', 'mi_estimator']
+        keys_D = ['gan_objective', 'disc_A', 'disc_B', 'mi_estimator',
+                  'classifier_A', 'classifier_B']
         kwargs_D = dict([(key, val) for key, val in kwargs.items()
                          if key in keys_D])
-        self._loss_D =_loss_D(**kwargs_D, **lambdas)
+        self._loss_D = _loss_D(**kwargs_D, **lambdas)
         if torch.cuda.device_count()>1:
             self._loss_D = nn.DataParallel(self._loss_D, output_device=-1)
         
         # Module to compute generator updates on GPU.
         # Outputs are placed on CPU when there are multiple GPUs.
         keys_G = ['gan_objective', 'disc_A', 'disc_B', 'mi_estimator',
-                  'loss_rec']
+                  'classifier_A', 'classifier_B', 'loss_rec']
         kwargs_G = dict([(key, val) for key, val in kwargs.items()
                          if key in keys_G])
         self._loss_G = _loss_G(**kwargs_G, **lambdas)
@@ -129,23 +149,26 @@ class segmentation_model(nn.Module):
             for i in range(self.num_disc_updates):
                 # Evaluate.
                 with torch.set_grad_enabled(do_updates_bool):
-                    loss_disc, loss_mi_est = self._loss_D(x_A=x_A,
-                                                          x_B=x_B,
-                                                          class_A=class_A,
-                                                          class_B=class_B,
-                                                          x_BA=visible['x_BA'],
-                                                          x_AB=visible['x_AB'],
-                                                          c_A=hidden['c_A'],
-                                                          u_A=hidden['u_A'],
-                                                          c_BA=hidden['c_BA'],
-                                                          u_BA=hidden['u_BA'])
+                    loss_disc, loss_slice_est, loss_mi_est = self._loss_D(
+                        x_A=x_A,
+                        x_B=x_B,
+                        class_A=class_A,
+                        class_B=class_B,
+                        x_BA=visible['x_BA'],
+                        x_AB=visible['x_AB'],
+                        c_A=hidden['c_A'],
+                        u_A=hidden['u_A'],
+                        c_BA=hidden['c_BA'],
+                        u_BA=hidden['u_BA'])
                     loss_D = _reduce(loss_disc.values())
-                # Update discriminator.
+                # Update discriminator (and slice classifiers).
                 disc_A = self.separate_networks['disc_A']
                 disc_B = self.separate_networks['disc_B']
                 if do_updates_bool:
                     optimizer['D'].zero_grad()
                     loss_D.mean().backward()
+                    if self.lambda_slice:
+                        _reduce(loss_slice_est.values()).mean().backward()
                     if self.disc_clip_norm:
                         nn.utils.clip_grad_norm_(disc_A.parameters(),
                                                  max_norm=self.disc_clip_norm)
@@ -232,7 +255,7 @@ class _forward(nn.Module):
     def __init__(self, encoder, decoder_common, decoder_residual, segmenter,
                  shape_sample, lambda_disc=1, lambda_x_id=10, lambda_z_id=1,
                  lambda_f_id=1, lambda_seg=1, lambda_cyc=0, lambda_mi=1,
-                 rng=None):
+                 lambda_slice=0, rng=None):
         super(_forward, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.encoder            = encoder
@@ -247,6 +270,7 @@ class _forward(nn.Module):
         self.lambda_seg         = lambda_seg
         self.lambda_cyc         = lambda_cyc
         self.lambda_mi          = lambda_mi
+        self.lambda_slice       = lambda_slice
     
     def _z_sample(self, batch_size, rng=None):
         if rng is None:
@@ -392,9 +416,10 @@ class _forward(nn.Module):
 
 
 class _loss_D(nn.Module):
-    def __init__(self, gan_objective, disc_A, disc_B, mi_estimator=None,
-                 lambda_disc=1, lambda_x_id=10, lambda_z_id=1, lambda_f_id=1,
-                 lambda_seg=1, lambda_cyc=0, lambda_mi=1):
+    def __init__(self, gan_objective, disc_A, disc_B, classifier_A=None, 
+                 classifier_B=None, mi_estimator=None, lambda_disc=1,
+                 lambda_x_id=10, lambda_z_id=1, lambda_f_id=1, lambda_seg=1,
+                 lambda_cyc=0, lambda_mi=1, lambda_slice=0):
         super(_loss_D, self).__init__()
         self._gan               = gan_objective
         self.lambda_disc        = lambda_disc
@@ -404,8 +429,11 @@ class _loss_D(nn.Module):
         self.lambda_seg         = lambda_seg
         self.lambda_cyc         = lambda_cyc
         self.lambda_mi          = lambda_mi
+        self.lambda_slice       = lambda_slice
         self.net = {'disc_A'    : disc_A,
                     'disc_B'    : disc_B,
+                    'class_A'   : classifier_A,
+                    'class_B'   : classifier_B,
                     'mi'        : mi_estimator}  # Separate params.
     
     def forward(self, x_A, x_B, x_BA, x_AB, c_A, u_A, c_BA, u_BA,
@@ -433,21 +461,31 @@ class _loss_D(nn.Module):
                                   kwargs_fake=kwargs_fake)
         loss_disc['B'] = self.lambda_disc*loss_disc_B
         
+        # Slice number classification.
+        loss_slice_est = defaultdict(int)
+        if self.lambda_slice and class_A is not None:
+            loss_slice_est['A'] = _foreach(lambda args: cce(*args),
+                                           (self.net['class_A'](x_A), class_A))
+        if self.lambda_slice and class_B is not None:
+            loss_slice_est['B'] = _foreach(lambda args: cce(*args),
+                                           (self.net['class_B'](x_B), class_B))
+        
         # Mutual information estimate.
-        loss_mi_est = defaultdict()
+        loss_mi_est = defaultdict(int)
         if self.net['mi'] is not None:
             loss_mi_est['A'] = self.net['mi'](c_A.detach(), u_A.detach())
             if self.lambda_cyc:
                 loss_mi_est['BA'] = self.net['mi'](c_BA.detach(),
                                                    u_BA.detach())
         
-        return loss_disc, loss_mi_est
+        return loss_disc, loss_slice_est, loss_mi_est
 
 
 class _loss_G(nn.Module):
-    def __init__(self, gan_objective, disc_A, disc_B, mi_estimator=None,
-                 loss_rec=mae, lambda_disc=1, lambda_x_id=10, lambda_z_id=1,
-                 lambda_f_id=1, lambda_seg=1, lambda_cyc=0, lambda_mi=1):
+    def __init__(self, gan_objective, disc_A, disc_B, classifier_A=None, 
+                 classifier_B=None, mi_estimator=None, loss_rec=mae,
+                 lambda_disc=1, lambda_x_id=10, lambda_z_id=1, lambda_f_id=1,
+                 lambda_seg=1, lambda_cyc=0, lambda_mi=1, lambda_slice=0):
         super(_loss_G, self).__init__()
         self._gan               = gan_objective
         self.loss_rec           = loss_rec
@@ -458,8 +496,11 @@ class _loss_G(nn.Module):
         self.lambda_seg         = lambda_seg
         self.lambda_cyc         = lambda_cyc
         self.lambda_mi          = lambda_mi
+        self.lambda_slice       = lambda_slice
         self.net = {'disc_A'    : disc_A,
                     'disc_B'    : disc_B,
+                    'class_A'   : classifier_A,
+                    'class_B'   : classifier_B,
                     'mi'        : mi_estimator}  # Separate params.
     
     def forward(self, x_AM, x_A, x_AB, x_AA, x_B, x_BA, x_BB, x_BAB,
@@ -471,6 +512,15 @@ class _loss_G(nn.Module):
         if self.net['mi'] is not None:
             loss_mi_gen['A']  = -self.lambda_mi*self.net['mi'](c_A, u_A)
             loss_mi_gen['BA'] = -self.lambda_mi*self.net['mi'](c_BA, u_BA)
+        
+        # Slice number classification.
+        loss_slice_gen = defaultdict(int)
+        if self.lambda_slice and class_A is not None:
+            loss_slice_gen['BA'] =_foreach(lambda args: cce(*args),
+                                           (self.net['class_A'](x_BA),class_A))
+        if self.lambda_slice and class_B is not None:
+            loss_slice_gen['AB'] =_foreach(lambda args: cce(*args),
+                                           (self.net['class_A'](x_AB),class_A))
         
         # Generator loss.
         loss_gen = defaultdict(int)
@@ -517,7 +567,8 @@ class _loss_G(nn.Module):
         # All generator losses combined.
         loss_G = ( _reduce(loss_gen.values())
                   +_reduce(loss_rec.values())
-                  +_reduce(loss_mi_gen.values()))
+                  +_reduce(loss_mi_gen.values())
+                  +_reduce(loss_slice_gen.values()))
         
         # Compile outputs and return.
         losses = OrderedDict((
@@ -535,6 +586,10 @@ class _loss_G(nn.Module):
             ('l_rec_z_BB',    _reduce([loss_rec['z_BB']])),
             ('l_mi',          _reduce([loss_mi_gen['A'], loss_mi_gen['BA']])),
             ('l_mi_A',        _reduce([loss_mi_gen['A']])),
-            ('l_mi_BA',       _reduce([loss_mi_gen['BA']]))
+            ('l_mi_BA',       _reduce([loss_mi_gen['BA']])),
+            ('l_slice',       _reduce([loss_slice_gen['BA'],
+                                       loss_slice_gen['AB']])),
+            ('l_slice_BA',    _reduce([loss_slice_gen['BA']])),
+            ('l_slice_AB',    _reduce([loss_slice_gen['AB']]))
             ))
         return losses

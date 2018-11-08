@@ -18,6 +18,14 @@ def bce(prediction, target, reduce=False):
     return F.binary_cross_entropy(prediction, target, reduce=reduce)
 
 
+def cce(prediction, target, reduce=False):
+    if not hasattr(target, '__len__'):
+        target = torch.ones(prediction.size()[:2])*target
+        if prediction.is_cuda:
+            target = target.to(prediction.device)
+    return F.cross_entropy(prediction, target, reduce=reduce)
+
+
 def mse(prediction, target, reduce=False):
     if not hasattr(target, '__len__'):
         target = torch.ones_like(prediction)*target
