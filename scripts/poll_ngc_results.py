@@ -17,7 +17,6 @@ def get_args():
     parser.add_argument('--working_dir', type=str, default='./.ngc_meta')
     parser.add_argument('--target_dir', type=str, default='./experiments')
     parser.add_argument('--poll_every', type=int, default=240, help="minutes")
-    parser.add_argument('--local', action='store_true')
     parser.add_argument('--n_workers', type=int, default=32)
     parser.add_argument('--max_download_attempts', type=int, default=5)
     args = parser.parse_args()
@@ -78,26 +77,6 @@ def get_deepest_dir(root_dir):
         sub_dir = sub_dir.replace(root_dir+'/', '')
         return os.path.join(root_dir, sub_dir)
     return root_dir
-
-
-def move_merge(src, dst):
-    """
-    Move a tree from `src` to `dst`, recursively merging all files.
-    """
-    if dst.endswith('/'):
-        dst = dst+os.path.basename(src)
-    if not os.path.exists(dst):
-        os.makedirs(dst)
-    for path, dirs, files in os.walk(src):
-        rel_path = os.path.relpath(path, src)
-        dst_path = os.path.join(dst, rel_path)
-        if not os.path.exists(dst_path):
-            os.rename(path, dst_path)
-        else:
-            for fn in files:
-                dst_fn = os.path.join(dst_path, fn)
-                src_fn = os.path.join(path, fn)
-                os.rename(src_fn, dst_fn)
 
 
 def download(job_id, working_dir, target_dir):
@@ -193,10 +172,8 @@ def update(working_dir, target_dir, local=False, n_workers=32,
             print("NO CHANGE TO {} - REGISTERING JOB AS ENDED".format(job_id))
         else:
             # Changed. Move downloaded results into target directory.
-            if local:
-                move_merge(job_dir_deep, target_dir_deep)
-            else:
-                copy_tree(job_dir_deep, target_dir_deep)
+            subprocess.run(['rsync', '-rvz', '--delete',
+                            job_dir_deep, target_dir_deep])
             print("UPDATED RESULTS FOR {}".format(job_id))
         # Delete downloaded results in working directory.
         shutil.rmtree(os.path.join(working_dir, "jobs", job_id))
@@ -210,8 +187,7 @@ def update(working_dir, target_dir, local=False, n_workers=32,
 if __name__=='__main__':
     args = get_args()
     while True:
-        update(args.working_dir, args.target_dir,
-               local=args.local, n_workers=args.n_workers,
+        update(args.working_dir, args.target_dir, n_workers=args.n_workers,
                max_download_attempts=args.max_download_attempts)
         print("====")
         for second in range(args.poll_every*60+1):
