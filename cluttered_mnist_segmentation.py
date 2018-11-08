@@ -219,7 +219,7 @@ def run():
     
     # Prepare data.
     data = setup_mnist_data(
-        data_dir='./data/mnist',
+        data_dir=args.data_dir,
         n_valid=args.n_valid,
         n_clutter=args.n_clutter,
         size_clutter=args.size_clutter,
