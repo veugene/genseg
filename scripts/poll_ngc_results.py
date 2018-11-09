@@ -173,7 +173,7 @@ def update(working_dir, target_dir, local=False, n_workers=32,
         else:
             # Changed. Move downloaded results into target directory.
             subprocess.run(['rsync', '-rvz', '--delete',
-                            job_dir_deep, target_dir_deep])
+                            job_dir_deep+'/', target_dir_deep+'/'])
             print("UPDATED RESULTS FOR {}".format(job_id))
         # Delete downloaded results in working directory.
         shutil.rmtree(os.path.join(working_dir, "jobs", job_id))
