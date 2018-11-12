@@ -7,8 +7,7 @@ from torch.nn.utils import spectral_norm
 import numpy as np
 from fcn_maker.model import assemble_resunet
 from fcn_maker.loss import dice_loss
-from model.common.network.basic import (AdaptiveInstanceNorm2d,
-                                        adjust_to_size,
+from model.common.network.basic import (adjust_to_size,
                                         batch_normalization,
                                         basic_block,
                                         convolution,
@@ -19,7 +18,6 @@ from model.common.network.basic import (AdaptiveInstanceNorm2d,
                                         get_output_shape,
                                         instance_normalization,
                                         layer_normalization,
-                                        mlp,
                                         munit_discriminator,
                                         norm_nlin_conv,
                                         pool_block,
@@ -84,7 +82,6 @@ def build_model():
         'block_type'          : conv_block,
         'num_channels_list'   : [N//2, N//4, N//8, N//16],
         'num_classes'         : 1,
-        'mlp_dim'             : 256, 
         'skip'                : False,
         'dropout'             : 0.,
         'normalization'       : layer_normalization,
@@ -242,35 +239,29 @@ class encoder(nn.Module):
         return out, skips
 
 
-# In translation mode, normalization is as specified; in segmentation 
-# mode, `AdaptiveInstanceNorm2d`, conditioned on the translation, is used
-# instead.
 class switching_normalization(nn.Module):
-    def __init__(self, normalization, num_features, ndim,
-                    **norm_kwargs):
+    def __init__(self, normalization, *args, **kwargs):
         super(switching_normalization, self).__init__()
+        self.norm0 = normalization(*args, **kwargs)
+        self.norm1 = normalization(*args, **kwargs)
         self.mode = 0
-        self.norm_t = normalization(
-            num_features=num_features,
-            ndim=ndim,
-            **norm_kwargs)
-        self.norm_s = AdaptiveInstanceNorm2d(
-            num_features=num_features)  # TODO momentum
+    def set_mode(self, mode):
+        assert mode in [0, 1]
+        self.mode = mode
     def forward(self, x):
         if self.mode==0:
-            return self.norm_t(x)
-        if self.mode==1:
-            return self.norm_s(x)
+            return self.norm0(x)
+        else:
+            return self.norm1(x)
     
 
 class decoder(nn.Module):
     def __init__(self, input_shape, output_shape, num_conv_blocks, block_type,
-                 num_channels_list, num_classes=None, mlp_dim=256, skip=True,
-                 dropout=0., normalization=layer_normalization,
-                 norm_kwargs=None, padding_mode='constant', kernel_size=3,
-                 upsample_mode='conv', init='kaiming_normal_',
-                 nonlinearity='ReLU', long_skip_merge_mode=None,
-                 output_list=False, ndim=2):
+                 num_channels_list, num_classes=None, skip=True, dropout=0.,
+                 normalization=instance_normalization, norm_kwargs=None,
+                 padding_mode='constant', kernel_size=3, upsample_mode='conv',
+                 init='kaiming_normal_', nonlinearity='ReLU',
+                 long_skip_merge_mode=None, ndim=2):
         super(decoder, self).__init__()
         
         # ndim must be only 2 or 3.
@@ -295,7 +286,6 @@ class decoder(nn.Module):
         self.block_type = block_type
         self.num_channels_list = num_channels_list
         self.num_classes = num_classes
-        self.mlp_dim = mlp_dim
         self.skip = skip
         self.dropout = dropout
         self.normalization = normalization
@@ -306,7 +296,6 @@ class decoder(nn.Module):
         self.init = init
         self.nonlinearity = nonlinearity
         self.long_skip_merge_mode = long_skip_merge_mode
-        self.output_list = output_list
         self.ndim = ndim
         
         self.in_channels  = self.input_shape[0]
@@ -393,41 +382,15 @@ class decoder(nn.Module):
                 kernel_size=1,
                 ndim=self.ndim)
         
-        # Count number of AdaIN parameters required.
-        num_adain_params = 0
-        for m in self.modules():
-            if m.__class__.__name__ == "AdaptiveInstanceNorm2d":
-                num_adain_params += 2*m.num_features
-        
-        # MLP to predict AdaIN parameters.
-        self.mlp = mlp(n_layers=4,
-                       n_input=np.product(self.input_shape),
-                       n_output=num_adain_params,
-                       n_hidden=mlp_dim,
-                       init=self.init)
-        
         
     def forward(self, z, skip_info=None, mode=0):
         # Set mode (0: trans, 1: seg).
         assert mode in [0, 1]
         for m in self.modules():
             if isinstance(m, switching_normalization):
-                m.mode = mode
-        
-        # In segmentation mode, assign AdaIN parameters.
-        if mode==1:
-            skip_info, adain_params = skip_info
-            for m in self.modules():
-                if m.__class__.__name__ == "AdaptiveInstanceNorm2d":
-                    mean = adain_params[:, :m.num_features]
-                    std = adain_params[:, m.num_features:2*m.num_features]
-                    m.bias = mean.contiguous().view(-1)
-                    m.weight = std.contiguous().view(-1)
-                    if adain_params.size(1) > 2*m.num_features:
-                        adain_params = adain_params[:, 2*m.num_features:]
+                m.set_mode(mode)
         
         # Compute output.
-        out_list = []
         out = z
         if skip_info is not None and mode==0:
             skip_info = skip_info[::-1]
@@ -456,16 +419,11 @@ class decoder(nn.Module):
                 out = block(out)
             if not out.is_contiguous():
                 out = out.contiguous()
-            out_list.append(out)
         out = self.pre_conv(out)
         out = self.out_conv[mode](out)
-        out_list.append(out)
-        if self.output_list:
-            out = out_list
         if mode==0:
             out = torch.tanh(out)
-            adain_params = self.mlp(z.view(z.size(0), -1))
-            return out, (skip_info, adain_params)
+            return out, skip_info
         elif mode==1:
             out = self.classifier(out)
             out = torch.sigmoid(out)

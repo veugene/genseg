@@ -32,7 +32,7 @@ from model.bd_segmentation import segmentation_model
 def build_model():
     N = 512 # Number of features at the bottleneck.
     n = 128 # Number of features to sample at the bottleneck.
-    image_size = (1, 48, 48)
+    image_size = (1, 128, 128)
     lambdas = {
         'lambda_disc'       : 3,
         'lambda_x_id'       : 50,
@@ -43,9 +43,9 @@ def build_model():
     
     encoder_kwargs = {
         'input_shape'         : image_size,
-        'num_conv_blocks'     : 5,
+        'num_conv_blocks'     : 6,
         'block_type'          : conv_block,
-        'num_channels_list'   : [N//16, N//8, N//4, N//2, N],
+        'num_channels_list'   : [N//32, N//16, N//8, N//4, N//2, N],
         'skip'                : True,
         'dropout'             : 0.,
         'normalization'       : instance_normalization,
@@ -62,9 +62,9 @@ def build_model():
     decoder_common_kwargs = {
         'input_shape'         : (N-n,)+enc_out_shape[1:],
         'output_shape'        : image_size,
-        'num_conv_blocks'     : 4,
+        'num_conv_blocks'     : 5,
         'block_type'          : conv_block,
-        'num_channels_list'   : [N//2, N//4, N//8, N//16],
+        'num_channels_list'   : [N//2, N//4, N//8, N//16, N//32],
         'skip'                : True,
         'dropout'             : 0.,
         'normalization'       : layer_normalization,
@@ -80,9 +80,9 @@ def build_model():
     decoder_residual_kwargs = {
         'input_shape'         : enc_out_shape,
         'output_shape'        : image_size,
-        'num_conv_blocks'     : 4,
+        'num_conv_blocks'     : 5,
         'block_type'          : conv_block,
-        'num_channels_list'   : [N//2, N//4, N//8, N//16],
+        'num_channels_list'   : [N//2, N//4, N//8, N//16, N//32],
         'num_classes'         : 1,
         'mlp_dim'             : 256, 
         'skip'                : False,
@@ -134,6 +134,7 @@ def build_model():
                                loss_gan='hinge',
                                loss_seg=dice_loss(),
                                relativistic=False,
+                               gen_clip_norm=10,
                                rng=np.random.RandomState(1234),
                                **lambdas)
     

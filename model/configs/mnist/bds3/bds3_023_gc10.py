@@ -83,6 +83,7 @@ def build_model():
         'num_conv_blocks'     : 4,
         'block_type'          : conv_block,
         'num_channels_list'   : [N//2, N//4, N//8, N//16],
+        'num_channels_seg'    : 16,
         'num_classes'         : 1,
         'mlp_dim'             : 256, 
         'skip'                : False,
@@ -134,6 +135,7 @@ def build_model():
                                loss_gan='hinge',
                                loss_seg=dice_loss(),
                                relativistic=False,
+                               gen_clip_norm=10,
                                rng=np.random.RandomState(1234),
                                **lambdas)
     
@@ -265,12 +267,12 @@ class switching_normalization(nn.Module):
 
 class decoder(nn.Module):
     def __init__(self, input_shape, output_shape, num_conv_blocks, block_type,
-                 num_channels_list, num_classes=None, mlp_dim=256, skip=True,
-                 dropout=0., normalization=layer_normalization,
-                 norm_kwargs=None, padding_mode='constant', kernel_size=3,
-                 upsample_mode='conv', init='kaiming_normal_',
-                 nonlinearity='ReLU', long_skip_merge_mode=None,
-                 output_list=False, ndim=2):
+                 num_channels_list, num_channels_seg=None, num_classes=None,
+                 mlp_dim=256, skip=True, dropout=0., 
+                 normalization=layer_normalization, norm_kwargs=None,
+                 padding_mode='constant', kernel_size=3, upsample_mode='conv',
+                 init='kaiming_normal_', nonlinearity='ReLU',
+                 long_skip_merge_mode=None, ndim=2):
         super(decoder, self).__init__()
         
         # ndim must be only 2 or 3.
@@ -294,6 +296,7 @@ class decoder(nn.Module):
         self.num_conv_blocks = num_conv_blocks
         self.block_type = block_type
         self.num_channels_list = num_channels_list
+        self.num_channels_seg = num_channels_seg
         self.num_classes = num_classes
         self.mlp_dim = mlp_dim
         self.skip = skip
@@ -304,9 +307,9 @@ class decoder(nn.Module):
         self.kernel_size = kernel_size
         self.upsample_mode = upsample_mode
         self.init = init
+        self.init_seg = 'zeros_' if num_channels_seg is None else init
         self.nonlinearity = nonlinearity
         self.long_skip_merge_mode = long_skip_merge_mode
-        self.output_list = output_list
         self.ndim = ndim
         
         self.in_channels  = self.input_shape[0]
@@ -323,11 +326,41 @@ class decoder(nn.Module):
         '''
         self.cats   = nn.ModuleList()
         self.blocks = nn.ModuleList()
+        self.stacks = nn.ModuleList()
         shape = self.input_shape
         last_channels = shape[0]
         for n in range(self.num_conv_blocks):
             def _select(a, b=None):
                 return a if n>0 else b
+            # Stack blocks for segmentation only.
+            if self.num_classes is not None:
+                if self.num_channels_seg is None:         # SUM mode.
+                    out_channels_stack = self.num_channels_list[n]
+                    if self.long_skip_merge_mode=='skinny_cat':
+                        out_channels_stack += 1
+                    elif self.long_skip_merge_mode=='cat':
+                        out_channels_stack *= 2
+                    in_channels_stack  = last_channels
+                else:                                     # CAT mode.
+                    out_channels_stack = self.num_channels_seg
+                    in_channels_stack  = last_channels
+                    if n>0:
+                        in_channels_stack += self.num_channels_seg
+                stack = self.block_type(
+                    in_channels=in_channels_stack,
+                    num_filters=out_channels_stack,
+                    upsample=True,
+                    upsample_mode=self.upsample_mode,
+                    skip=_select(self.skip, False),
+                    dropout=self.dropout,
+                    normalization=_select(self.normalization),
+                    padding_mode=self.padding_mode,
+                    kernel_size=self.kernel_size,
+                    init=self.init_seg,
+                    nonlinearity=_select(self.nonlinearity),
+                    ndim=self.ndim)
+                self.stacks.append(stack)
+            # Regular block.
             block = self.block_type(
                 in_channels=last_channels,
                 num_filters=self.num_channels_list[n],
@@ -344,6 +377,7 @@ class decoder(nn.Module):
             self.blocks.append(block)
             shape = get_output_shape(block, shape)
             last_channels = self.num_channels_list[n]
+            # Layers for merging in long skip connections (non-seg mode).
             if   self.long_skip_merge_mode=='skinny_cat':
                 cat = conv_block(in_channels=self.num_channels_list[n],
                                  num_filters=1,
@@ -371,8 +405,23 @@ class decoder(nn.Module):
                                        norm_kwargs=self.norm_kwargs,
                                        nonlinearity=self.nonlinearity,
                                        padding_mode=self.padding_mode)
+        # Segmentation mode only.
+        if self.num_classes is not None:
+            if self.num_channels_seg is None:         # SUM mode.
+                in_channels_seg  = last_channels
+                out_channels_seg = last_channels
+            else:                                     # CAT mode.
+                in_channels_seg  = self.num_channels_seg+last_channels
+                out_channels_seg = self.num_channels_seg
+            self.seg_conv = norm_nlin_conv(in_channels=in_channels_seg,
+                                           out_channels=out_channels_seg,
+                                           kernel_size=self.kernel_size,
+                                           init=self.init_seg,
+                                           normalization=normalization_switch,
+                                           norm_kwargs=self.norm_kwargs,
+                                           nonlinearity=self.nonlinearity,
+                                           padding_mode=self.padding_mode)
         kwargs_out_conv = {
-            'in_channels': last_channels,
             'out_channels': output_shape[0],
             'kernel_size': 7,
             'normalization': self.normalization,
@@ -381,35 +430,44 @@ class decoder(nn.Module):
             'padding_mode': self.padding_mode,
             'init': self.init,
             'ndim': self.ndim}
-        self.out_conv = [norm_nlin_conv(**kwargs_out_conv),
-                         norm_nlin_conv(**kwargs_out_conv)]     # 1 per mode.
+        self.out_conv = [norm_nlin_conv(**kwargs_out_conv,
+                                        in_channels=last_channels)]
+        if self.num_classes is not None:
+            if self.num_channels_seg is None:         # SUM mode.
+                in_channels_seg  = last_channels
+            else:                                     # CAT mode.
+                in_channels_seg  = self.num_channels_seg+last_channels
+            self.out_conv += [norm_nlin_conv(**kwargs_out_conv,
+                                             in_channels=in_channels_seg)]
         self.out_conv = nn.ModuleList(self.out_conv)
         
-        # Classifier for segmentation (mode 1).
         if self.num_classes is not None:
-            self.classifier = convolution(
-                in_channels=self.out_channels,
-                out_channels=self.num_classes,
-                kernel_size=1,
-                ndim=self.ndim)
-        
-        # Count number of AdaIN parameters required.
-        num_adain_params = 0
-        for m in self.modules():
-            if m.__class__.__name__ == "AdaptiveInstanceNorm2d":
-                num_adain_params += 2*m.num_features
-        
-        # MLP to predict AdaIN parameters.
-        self.mlp = mlp(n_layers=4,
-                       n_input=np.product(self.input_shape),
-                       n_output=num_adain_params,
-                       n_hidden=mlp_dim,
-                       init=self.init)
+            # Classifier for segmentation (mode 1).
+            if self.num_classes is not None:
+                self.classifier = convolution(
+                    in_channels=self.out_channels,
+                    out_channels=self.num_classes,
+                    kernel_size=1,
+                    ndim=self.ndim)
+            
+            # Count number of AdaIN parameters required.
+            num_adain_params = 0
+            for m in self.modules():
+                if m.__class__.__name__ == "AdaptiveInstanceNorm2d":
+                    num_adain_params += 2*m.num_features
+            
+            # MLP to predict AdaIN parameters.
+            self.mlp = mlp(n_layers=4,
+                           n_input=np.product(self.input_shape),
+                           n_output=num_adain_params,
+                           n_hidden=mlp_dim,
+                           init=self.init)
         
         
     def forward(self, z, skip_info=None, mode=0):
         # Set mode (0: trans, 1: seg).
         assert mode in [0, 1]
+        if self.num_classes is None: assert mode==0
         for m in self.modules():
             if isinstance(m, switching_normalization):
                 m.mode = mode
@@ -427,8 +485,7 @@ class decoder(nn.Module):
                         adain_params = adain_params[:, 2*m.num_features:]
         
         # Compute output.
-        out_list = []
-        out = z
+        out = seg = z
         if skip_info is not None and mode==0:
             skip_info = skip_info[::-1]
         for n, block in enumerate(self.blocks):
@@ -456,20 +513,31 @@ class decoder(nn.Module):
                 out = block(out)
             if not out.is_contiguous():
                 out = out.contiguous()
-            out_list.append(out)
+            if mode==1:
+                seg = self.stacks[n](seg)
+                if self.num_channels_seg is None:   # SUM mode.
+                    seg = seg+out
+                else:                               # CAT mode.
+                    seg = torch.cat([seg, out], dim=1)
         out = self.pre_conv(out)
-        out = self.out_conv[mode](out)
-        out_list.append(out)
-        if self.output_list:
-            out = out_list
         if mode==0:
+            out = self.out_conv[0](out)
             out = torch.tanh(out)
-            adain_params = self.mlp(z.view(z.size(0), -1))
+            if self.num_classes is not None:
+                adain_params = self.mlp(z.view(z.size(0), -1))
+            else:
+                adain_params = None
             return out, (skip_info, adain_params)
         elif mode==1:
-            out = self.classifier(out)
-            out = torch.sigmoid(out)
-            return out
+            seg = self.seg_conv(seg)
+            if self.num_channels_seg is None:   # SUM mode.
+                seg = seg+out
+            else:                               # CAT mode.
+                seg = torch.cat([seg, out], dim=1)
+            seg = self.out_conv[1](seg)
+            seg = self.classifier(seg)
+            seg = torch.sigmoid(seg)
+            return seg
         else:
             AssertionError()
 
