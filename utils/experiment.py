@@ -26,7 +26,6 @@ class experiment(object):
         
         # Set up model, and optimizers.
         args = parser.parse_args()
-        self._epoch = [0]
         if args.resume_from is None:
             model, optimizer = self._init_state(
                                      model_from=args.model_from,
@@ -34,11 +33,18 @@ class experiment(object):
                                      learning_rate=args.learning_rate,
                                      opt_kwargs=args.opt_kwargs,
                                      weight_decay=args.weight_decay)
+            if not args.model_from.endswith(".py"):
+                # Load weights if model defined from checkpoint.
+                model, optimizer = self._load_state(
+                                     load_from=args.model_from,
+                                     model=model,
+                                     optimizer=optimizer)
             experiment_path, experiment_id = self._setup_experiment_directory(
                 name="{}__{}".format(name, args.name),
                 save_path=args.save_path)
             self.experiment_path = experiment_path
             self.experiment_id = experiment_id
+            self._epoch = [0]
         else:
             args = self._load_and_merge_args(parser)
             state_file = natsorted([fn for fn in os.listdir(args.resume_from)
