@@ -15,6 +15,14 @@ from .common.losses import (bce,
 from .common.mine import mine
 
 
+def clear_grad(optimizer):
+    # Sets `grad` to None instead of zeroing it.
+    for group in optimizer.param_groups:
+        for p in group['params']:
+            if p.grad is not None:
+                p.grad = None
+
+
 def _reduce(loss):
     def _mean(x):
         if not isinstance(x, torch.Tensor) or x.dim()<=1:
@@ -166,7 +174,7 @@ class segmentation_model(nn.Module):
                 disc_A = self.separate_networks['disc_A']
                 disc_B = self.separate_networks['disc_B']
                 if do_updates_bool:
-                    optimizer['D'].zero_grad()
+                    clear_grad(optimizer['D'])
                     loss_D.mean().backward()
                     if self.lambda_slice:
                         _reduce(loss_slice_est.values()).mean().backward()
@@ -180,7 +188,7 @@ class segmentation_model(nn.Module):
                 # Update MI estimator.
                 mi_estimator = self.separate_networks['mi_estimator']
                 if do_updates_bool and mi_estimator is not None:
-                    optimizer['E'].zero_grad()
+                    clear_grad(optimizer['E'])
                     _reduce([loss_mi_est['A'],
                              loss_mi_est['BA']]).mean().backward()
                     optimizer['E'].step()
@@ -229,8 +237,8 @@ class segmentation_model(nn.Module):
         loss_G = losses_G['l_G']
         if do_updates_bool and isinstance(loss_G, torch.Tensor):
             if 'S' in optimizer:
-                optimizer['S'].zero_grad()
-            optimizer['G'].zero_grad()
+                clear_grad(optimizer['S'])
+            clear_grad(optimizer['G'])
             loss_G.mean().backward()
             if self.gen_clip_norm is not None:
                 nn.utils.clip_grad_norm_(self.parameters(),
