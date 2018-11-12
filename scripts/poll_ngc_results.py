@@ -169,12 +169,14 @@ def update(working_dir, target_dir, local=False, n_workers=32,
         if is_equal(job_dir_deep, target_dir_deep):
             # No change. Stop tracking this task.
             jobs_ended.append(job_id)
-            print("NO CHANGE TO {} - REGISTERING JOB AS ENDED".format(job_id))
+            print("NO CHANGE TO {} : {} - REGISTERING JOB AS ENDED"
+                  "".format(job_id, target_dir_deep))
         else:
             # Changed. Move downloaded results into target directory.
             subprocess.run(['rsync', '-rvz', '--delete',
                             job_dir_deep+'/', target_dir_deep+'/'])
-            print("UPDATED RESULTS FOR {}".format(job_id))
+            print("UPDATED RESULTS FOR {} : {}"
+                  "".format(job_id, target_dir_deep))
         # Delete downloaded results in working directory.
         shutil.rmtree(os.path.join(working_dir, "jobs", job_id))
     
