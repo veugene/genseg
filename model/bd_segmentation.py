@@ -48,9 +48,9 @@ class segmentation_model(nn.Module):
                  classifier_A=None, classifier_B=None, loss_rec=mae,
                  loss_seg=None, loss_gan='hinge', num_disc_updates=1,
                  relativistic=False, grad_penalty=None, disc_clip_norm=None,
-                 lambda_disc=1, lambda_x_id=10, lambda_z_id=1, lambda_f_id=1,
-                 lambda_seg=1, lambda_cyc=0, lambda_mi=1, lambda_slice=0.,
-                 rng=None):
+                 gen_clip_norm=None,  lambda_disc=1, lambda_x_id=10,
+                 lambda_z_id=1, lambda_f_id=1, lambda_seg=1, lambda_cyc=0,
+                 lambda_mi=1, lambda_slice=0., rng=None):
         super(segmentation_model, self).__init__()
         lambdas = OrderedDict((
             ('lambda_disc',       lambda_disc),
@@ -74,6 +74,7 @@ class segmentation_model(nn.Module):
             ('num_disc_updates',  num_disc_updates),
             ('relativistic',      relativistic),
             ('grad_penalty',      grad_penalty),
+            ('gen_clip_norm',     gen_clip_norm),
             ('disc_clip_norm',    disc_clip_norm),
             ('gan_objective',     gan_objective(loss_gan,
                                                 relativistic=relativistic,
@@ -231,6 +232,9 @@ class segmentation_model(nn.Module):
                 optimizer['S'].zero_grad()
             optimizer['G'].zero_grad()
             loss_G.mean().backward()
+            if self.gen_clip_norm is not None:
+                nn.utils.clip_grad_norm_(self.parameters(),
+                                         max_norm=self.gen_clip_norm)
             optimizer['G'].step()
             if 'S' in optimizer:
                 optimizer['S'].step()
