@@ -143,7 +143,7 @@ def build_model():
         if m is None:
             continue
         recursive_spectral_norm(m)
-    remove_spectral_norm(submodel['decoder_residual'].out_conv[1].conv.op)
+    remove_spectral_norm(submodel['decoder_residual'].out_conv.conv.op)
     remove_spectral_norm(submodel['decoder_residual'].classifier.op)
     
     model = segmentation_model(**submodel,
