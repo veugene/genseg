@@ -139,12 +139,13 @@ def build_model():
                                             n_hidden=1000),
         'disc_A'            : munit_discriminator(**discriminator_kwargs),
         'disc_B'            : munit_discriminator(**discriminator_kwargs)}
-    for m in submodel.values():
+    for key, m in submodel.items():
+        if key=='segmenter':
+            continue    # Don't apply SN to segmentation module.
         if m is None:
             continue
         recursive_spectral_norm(m)
     remove_spectral_norm(submodel['decoder_residual'].out_conv.conv.op)
-    remove_spectral_norm(submodel['decoder_residual'].classifier.op)
     
     model = segmentation_model(**submodel,
                                shape_sample=z_shape,
