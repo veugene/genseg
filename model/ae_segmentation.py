@@ -34,7 +34,8 @@ class segmentation_model(nn.Module):
     def segment(self, x):
         return self.segmentation(*self.encoder(x))
     
-    def forward(self, x_A, x_B=None, mask=None, optimizer=None, rng=None):
+    def forward(self, x_A, x_B=None, mask=None, optimizer=None, rng=None,
+                class_A=None, class_B=None):
         compute_grad = True if optimizer is not None else False
         if compute_grad:
             if isinstance(optimizer, dict):

@@ -18,7 +18,6 @@ from model.common.network.basic import (adjust_to_size,
                                         get_output_shape,
                                         instance_normalization,
                                         layer_normalization,
-                                        munit_discriminator,
                                         norm_nlin_conv,
                                         pool_block,
                                         recursive_spectral_norm,
@@ -28,16 +27,17 @@ from model.bd_segmentation import segmentation_model
 
 
 def build_model():
+    NUM_COND_CLASSES = 155 # BRATS has 155 slices per brain.
     N = 512 # Number of features at the bottleneck.
     n = 128 # Number of features to sample at the bottleneck.
-    image_size = (1, 128, 128)
+    image_size = (4, 240, 120)
     lambdas = {
         'lambda_disc'       : 3,
         'lambda_x_id'       : 50,
         'lambda_z_id'       : 1,
         'lambda_f_id'       : 0,
         'lambda_cyc'        : 50,
-        'lambda_seg'        : 0}
+        'lambda_seg'        : 0.01}
     
     encoder_kwargs = {
         'input_shape'         : image_size,
@@ -81,7 +81,7 @@ def build_model():
         'num_conv_blocks'     : 5,
         'block_type'          : conv_block,
         'num_channels_list'   : [N//2, N//4, N//8, N//16, N//32],
-        'num_classes'         : 1,
+        'num_classes'         : 4,
         'skip'                : False,
         'dropout'             : 0.,
         'normalization'       : layer_normalization,
@@ -96,7 +96,8 @@ def build_model():
     
     discriminator_kwargs = {
         'input_dim'           : image_size[0],
-        'num_channels_list'   : [N//4, N//2, N],
+        'num_channels_list'   : [N//8, N//4, N//2, N],
+        'num_cond_classes'    : NUM_COND_CLASSES,
         'num_scales'          : 3,
         'normalization'       : layer_normalization,
         'norm_kwargs'         : None,
@@ -118,7 +119,9 @@ def build_model():
                                             z_size=np.product(z_shape),
                                             n_hidden=1000),
         'disc_A'            : munit_discriminator(**discriminator_kwargs),
-        'disc_B'            : munit_discriminator(**discriminator_kwargs)}
+        'disc_B'            : munit_discriminator(**discriminator_kwargs),
+        'classifier_A'      : slice_classifier(**discriminator_kwargs),
+        'classifier_B'      : slice_classifier(**discriminator_kwargs)}
     for m in submodel.values():
         if m is None:
             continue
@@ -129,7 +132,7 @@ def build_model():
     model = segmentation_model(**submodel,
                                shape_sample=z_shape,
                                loss_gan='hinge',
-                               loss_seg=dice_loss(),
+                               loss_seg=multi_class_dice_loss([1,2,4]),
                                relativistic=False,
                                rng=np.random.RandomState(1234),
                                **lambdas)
@@ -325,6 +328,7 @@ class decoder(nn.Module):
                 skip=_select(self.skip, False),
                 dropout=self.dropout,
                 normalization=_select(normalization_switch),
+                norm_kwargs=self.norm_kwargs,
                 padding_mode=self.padding_mode,
                 kernel_size=self.kernel_size,
                 init=self.init,
@@ -383,7 +387,7 @@ class decoder(nn.Module):
                 ndim=self.ndim)
         
         
-    def forward(self, z, skip_info=None, mode=0):
+    def forward(self, z, skip_info=None, class_info=None, mode=0):
         # Set mode (0: trans, 1: seg).
         assert mode in [0, 1]
         for m in self.modules():
@@ -426,7 +430,10 @@ class decoder(nn.Module):
             return out, skip_info
         elif mode==1:
             out = self.classifier(out)
-            out = torch.sigmoid(out)
+            if self.num_classes==1:
+                out = torch.sigmoid(out)
+            else:
+                out = torch.softmax(out, dim=1)
             return out
         else:
             AssertionError()
@@ -451,3 +458,107 @@ class mi_estimation_network(nn.Module):
         out = self.model(torch.cat([x.view(x.size(0), -1),
                                     z.view(z.size(0), -1)], dim=-1))
         return out
+
+
+class multi_class_dice_loss(object):
+    def __init__(self, target_class=1, mask_class=None):
+        if not hasattr(target_class, '__len__'):
+            target_class = [target_class]
+        self.target_class = target_class
+        self.mask_class = mask_class
+        self._losses_single = []
+        for c in [0]+target_class:
+            # Dice loss for each class individually.
+            self._losses_single.append(dice_loss(target_class=c,
+                                                 mask_class=mask_class))
+        # Dice loss for all classes, combined.
+        self._loss_all = dice_loss(target_class=target_class, 
+                                   mask_class=mask_class)
+    
+    def __call__(self, y_pred, y_true):
+        loss = self._loss_all(1.-y_pred[:,0:1], y_true)
+        for i, l in enumerate(self._losses_single):
+            loss += l(y_pred[:,i:i+1].contiguous(), y_true)
+        loss /= len(self._losses_single)+1
+        return loss
+
+
+class munit_discriminator(nn.Module):
+    def __init__(self, input_dim, num_channels_list, num_cond_classes,
+                 num_scales=3, normalization=None, norm_kwargs=None,
+                 kernel_size=5,
+                 nonlinearity=lambda:nn.LeakyReLU(0.2, inplace=True),
+                 padding_mode='reflect', init='kaiming_normal_'):
+        super(munit_discriminator, self).__init__()
+        self.input_dim = input_dim
+        self.num_channels_list = num_channels_list
+        self.num_cond_classes = num_cond_classes
+        self.num_scales = num_scales
+        self.normalization = normalization
+        self.norm_kwargs = norm_kwargs
+        self.kernel_size = kernel_size
+        self.nonlinearity = nonlinearity
+        self.padding_mode = padding_mode
+        self.init = init
+        self.downsample = nn.AvgPool2d(3,
+                                       stride=2,
+                                       padding=[1, 1],
+                                       count_include_pad=False)
+        self.cnns = nn.ModuleList()
+        for _ in range(self.num_scales):
+            self.cnns.append(self._make_net())
+
+    def _make_net(self):
+        cnn = []
+        layer = convolution(in_channels=self.input_dim,
+                            out_channels=self.num_channels_list[0],
+                            kernel_size=self.kernel_size,
+                            stride=2,
+                            padding=(self.kernel_size-1)//2,
+                            padding_mode=self.padding_mode,
+                            init=self.init)
+        cnn.append(layer)
+        for i, (ch0, ch1) in enumerate(zip(self.num_channels_list[:-1],
+                                           self.num_channels_list[1:])):
+            normalization = self.normalization if i>0 else None
+            layer = norm_nlin_conv(in_channels=ch0,
+                                   out_channels=ch1,
+                                   kernel_size=self.kernel_size,
+                                   subsample=True,
+                                   conv_padding=True,
+                                   padding_mode=self.padding_mode,
+                                   init=self.init,
+                                   nonlinearity=self.nonlinearity,
+                                   normalization=normalization,
+                                   norm_kwargs=self.norm_kwargs)
+            cnn.append(layer)
+        layer = norm_nlin_conv(in_channels=self.num_channels_list[-1],
+                               out_channels=1+self.num_cond_classes,
+                               kernel_size=1,
+                               nonlinearity=self.nonlinearity,
+                               normalization=self.normalization,
+                               norm_kwargs=self.norm_kwargs)
+        cnn.append(layer)
+        cnn = nn.Sequential(*cnn)
+        return cnn
+
+    def forward(self, x, classifier=False, class_info=None):
+        outputs = []
+        for model in self.cnns:
+            out = model(x)
+            if classifier:
+                out = torch.softmax(out[:,1:], dim=1)
+            else:
+                out = out[:,0]
+            outputs.append(out)
+            x = self.downsample(x)
+        return outputs
+
+
+class slice_classifier(nn.Module):
+    def __init__(self, *args, **kwargs):
+        super(slice_classifier, self).__init__()
+        self._disc = munit_discriminator(*args, **kwargs)
+    def forward(self, x):
+        return self._disc(x, classifier=True)
+

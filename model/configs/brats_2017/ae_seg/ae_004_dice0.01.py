@@ -1,9 +1,7 @@
 import torch
 from torch import nn
 from torch.functional import F
-from torch.nn.utils import spectral_norm
 import numpy as np
-from fcn_maker.model import assemble_resunet
 from fcn_maker.loss import dice_loss
 from model.common.network.basic import (adjust_to_size,
                                         batch_normalization,
@@ -18,7 +16,9 @@ from model.common.network.basic import (adjust_to_size,
                                         layer_normalization,
                                         norm_nlin_conv,
                                         pool_block)
-from model.common.losses import dist_ratio_mse_abs
+from model.common.losses import (dist_ratio_mse_abs,
+                                 mae,
+                                 mse)
 from model.ae_segmentation import segmentation_model
 
 
@@ -61,30 +61,29 @@ def build_model():
         'nonlinearity'        : lambda : nn.ReLU(inplace=True),
         'ndim'                : 2}
     
-    submodel = {
-        'encoder'           : encoder_instance,
-        'decoder_rec'       : decoder(**decoder_kwargs,
-                                      output_transform=torch.tanh,
-                                      long_skip_merge_mode=None),
-        'decoder_seg'       : decoder(**decoder_kwargs,
-                                      output_transform=lambda x: \
-                                                torch.softmax(x, dim=1),
-                                      long_skip_merge_mode='skinny_cat',
-                                      num_classes=4)}
-    
-    model = segmentation_model(**submodel,
-                               #loss_rec=dist_ratio_mse_abs,
+    print("DEBUG: sample_shape={}".format(enc_out_shape))
+
+    model = segmentation_model(encoder=encoder_instance,
+                               decoder_rec=decoder(
+                                   long_skip_merge_mode=None,
+                                   num_classes=None,
+                                   **decoder_kwargs),
+                               decoder_seg=decoder(
+                                   long_skip_merge_mode='skinny_cat',
+                                   num_classes=4,
+                                   **decoder_kwargs),
+                               loss_rec=mae,
                                loss_seg=multi_class_dice_loss([1,2,4]),
                                lambda_rec=1.,
                                lambda_seg=0.01,
                                rng=np.random.RandomState(1234))
     
-    return {'G' : model}
+    return {'G': model}
 
 
 class encoder(nn.Module):
     def __init__(self, input_shape, num_conv_blocks, block_type,
-                 num_channels_list, skip=True, dropout=0., 
+                 num_channels_list, skip=True, dropout=0.,
                  normalization=instance_normalization, norm_kwargs=None,
                  padding_mode='constant', kernel_size=3,
                  init='kaiming_normal_', nonlinearity='ReLU',
@@ -181,11 +180,11 @@ class encoder(nn.Module):
 
 class decoder(nn.Module):
     def __init__(self, input_shape, output_shape, num_conv_blocks, block_type,
-                 num_channels_list, num_classes=None, skip=True, dropout=0.,
-                 normalization=layer_normalization, norm_kwargs=None,
-                 padding_mode='constant', kernel_size=3, upsample_mode='conv',
-                 init='kaiming_normal_', nonlinearity='ReLU',
-                 long_skip_merge_mode=None, output_transform=None, ndim=2):
+                 num_channels_list, num_classes=None, skip=True,
+                 dropout=0., normalization=layer_normalization,
+                 norm_kwargs=None, padding_mode='constant', kernel_size=3,
+                 upsample_mode='conv', init='kaiming_normal_',
+                 nonlinearity='ReLU', long_skip_merge_mode=None, ndim=2):
         super(decoder, self).__init__()
         
         # ndim must be only 2 or 3.
@@ -220,22 +219,10 @@ class decoder(nn.Module):
         self.init = init
         self.nonlinearity = nonlinearity
         self.long_skip_merge_mode = long_skip_merge_mode
-        self.output_transform = output_transform
         self.ndim = ndim
         
         self.in_channels  = self.input_shape[0]
         self.out_channels = self.output_shape[0]
-        
-        # Compute all intermediate conv shapes by working backward from the 
-        # output shape.
-        self._shapes = [self.output_shape,
-                        (self.num_channels_list[-1],)+self.output_shape[1:]]
-        for i in range(self.num_conv_blocks-1):
-            shape_spatial = (np.array(self._shapes[-1][1:])+1)//2
-            shape = (self.num_channels_list[-i-2],)+tuple(shape_spatial)
-            self._shapes.append(shape)
-        self._shapes.append(self.input_shape)
-        self._shapes = self._shapes[::-1]
         
         '''
         Set up blocks.
@@ -255,6 +242,7 @@ class decoder(nn.Module):
                 skip=_select(self.skip, False),
                 dropout=self.dropout,
                 normalization=_select(self.normalization),
+                norm_kwargs=self.norm_kwargs,
                 padding_mode=self.padding_mode,
                 kernel_size=self.kernel_size,
                 init=self.init,
@@ -283,14 +271,13 @@ class decoder(nn.Module):
         Final output - change number of channels.
         '''
         self.pre_conv = norm_nlin_conv(in_channels=last_channels,
-                                       out_channels=self.num_channels_list[-1],
+                                       out_channels=last_channels,  # NOTE
                                        kernel_size=self.kernel_size,
-                                       init=self.init,
+                                       init=self.init,              # NOTE
                                        normalization=self.normalization,
                                        norm_kwargs=self.norm_kwargs,
                                        nonlinearity=self.nonlinearity,
                                        padding_mode=self.padding_mode)
-        last_channels = self.num_channels_list[-1]
         kwargs_out_conv = {
             'in_channels': last_channels,
             'out_channels': output_shape[0],
@@ -309,9 +296,8 @@ class decoder(nn.Module):
                 in_channels=self.out_channels,
                 out_channels=self.num_classes,
                 kernel_size=1,
-                ndim=self.ndim)
-        
-        
+                ndim=self.ndim)        
+    
     def forward(self, z, skip_info=None):
         # Compute output.
         out = z
@@ -319,13 +305,13 @@ class decoder(nn.Module):
             skip_info = skip_info[::-1]
         for n, block in enumerate(self.blocks):
             if (self.long_skip_merge_mode=='pool' and skip_info is not None
-                                                  and n<len(skip_info)+1):
+                                                  and n<len(skip_info)):
                 skip = skip_info[n]
                 out = adjust_to_size(out, skip.size()[2:])
                 out = block(out, unpool_indices=skip)
             elif (self.long_skip_merge_mode is not None
                                                   and skip_info is not None
-                                                  and n<len(skip_info)+1):
+                                                  and n<len(skip_info)):
                 skip = skip_info[n]
                 out = block(out)
                 out = adjust_to_size(out, skip.size()[2:])
@@ -340,15 +326,20 @@ class decoder(nn.Module):
                     ValueError()
             else:
                 out = block(out)
-                out = adjust_to_size(out, self._shapes[n+1][1:])
+                assert skip_info is not None    # Decoder must take skip_info.
+                out = adjust_to_size(out, skip_info[n].size()[2:])
             if not out.is_contiguous():
                 out = out.contiguous()
         out = self.pre_conv(out)
         out = self.out_conv(out)
-        if self.num_classes is not None:
+        if self.num_classes is None:
+            out = torch.tanh(out)
+        else:
             out = self.classifier(out)
-        if self.output_transform is not None:
-            out = self.output_transform(out)
+            if self.num_classes==1:
+                out = torch.sigmoid(out)
+            else:
+                out = torch.softmax(out, dim=1)
         return out
 
 

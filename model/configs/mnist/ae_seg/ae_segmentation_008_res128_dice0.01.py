@@ -1,4 +1,3 @@
-from collections import OrderedDict
 import torch
 from torch import nn
 from torch.functional import F
@@ -16,8 +15,7 @@ from model.common.network.basic import (adjust_to_size,
                                         instance_normalization,
                                         layer_normalization,
                                         norm_nlin_conv,
-                                        pool_block,
-                                        repeat_block)
+                                        pool_block)
 from model.common.losses import (dist_ratio_mse_abs,
                                  mae,
                                  mse)
@@ -339,23 +337,3 @@ class decoder(nn.Module):
             out = torch.sigmoid(out)
         return out
 
-
-class mi_estimation_network(nn.Module):
-    def __init__(self, x_size, z_size, n_hidden):
-        super(mi_estimation_network, self).__init__()
-        self.x_size = x_size
-        self.z_size = z_size
-        self.n_hidden = n_hidden
-        modules = []
-        modules.append(nn.Linear(x_size+z_size, self.n_hidden))
-        modules.append(nn.ReLU())
-        for i in range(2):
-            modules.append(nn.Linear(self.n_hidden, self.n_hidden))
-            modules.append(nn.ReLU())
-        modules.append(nn.Linear(self.n_hidden, 1))
-        self.model = nn.Sequential(*tuple(modules))
-    
-    def forward(self, x, z):
-        out = self.model(torch.cat([x.view(x.size(0), -1),
-                                    z.view(z.size(0), -1)], dim=-1))
-        return out

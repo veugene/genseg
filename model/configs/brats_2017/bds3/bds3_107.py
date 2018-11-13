@@ -30,14 +30,14 @@ from model.bd_segmentation import segmentation_model
 def build_model():
     N = 512 # Number of features at the bottleneck.
     n = 128 # Number of features to sample at the bottleneck.
-    image_size = (1, 128, 128)
+    image_size = (4, 240, 120)
     lambdas = {
         'lambda_disc'       : 3,
         'lambda_x_id'       : 50,
         'lambda_z_id'       : 1,
         'lambda_f_id'       : 0,
         'lambda_cyc'        : 50,
-        'lambda_seg'        : 0}
+        'lambda_seg'        : 0.01}
     
     encoder_kwargs = {
         'input_shape'         : image_size,
@@ -81,7 +81,6 @@ def build_model():
         'num_conv_blocks'     : 5,
         'block_type'          : conv_block,
         'num_channels_list'   : [N//2, N//4, N//8, N//16, N//32],
-        'num_classes'         : 1,
         'skip'                : False,
         'dropout'             : 0.,
         'normalization'       : layer_normalization,
@@ -94,9 +93,28 @@ def build_model():
         'long_skip_merge_mode': 'skinny_cat',
         'ndim'                : 2}
     
+    segmenter_kwargs = {
+        'input_shape'         : enc_out_shape,
+        'output_shape'        : image_size,
+        'num_conv_blocks'     : 5,
+        'block_type'          : conv_block,
+        'num_channels_list'   : [N//2, N//4, N//8, N//16, N//32],
+        'num_classes'         : 4,
+        'skip'                : True,
+        'dropout'             : 0.,
+        'normalization'       : layer_normalization,
+        'norm_kwargs'         : None,
+        'padding_mode'        : 'reflect',
+        'kernel_size'         : 3,
+        'init'                : 'kaiming_normal_',
+        'upsample_mode'       : 'repeat',
+        'nonlinearity'        : lambda : nn.ReLU(inplace=True),
+        'long_skip_merge_mode': 'skinny_cat',
+        'ndim'                : 2}
+    
     discriminator_kwargs = {
         'input_dim'           : image_size[0],
-        'num_channels_list'   : [N//4, N//2, N],
+        'num_channels_list'   : [N//8, N//4, N//2, N],
         'num_scales'          : 3,
         'normalization'       : layer_normalization,
         'norm_kwargs'         : None,
@@ -112,24 +130,25 @@ def build_model():
         'encoder'           : encoder_instance,
         'decoder_common'    : decoder(**decoder_common_kwargs),
         'decoder_residual'  : decoder(**decoder_residual_kwargs),
-        'segmenter'         : None,
+        'segmenter'         : segmenter(**segmenter_kwargs),
         'mutual_information': mi_estimation_network(
                                             x_size=np.product(x_shape),
                                             z_size=np.product(z_shape),
                                             n_hidden=1000),
         'disc_A'            : munit_discriminator(**discriminator_kwargs),
         'disc_B'            : munit_discriminator(**discriminator_kwargs)}
-    for m in submodel.values():
+    for key, m in submodel.items():
+        if key=='segmenter':
+            continue    # Don't apply SN to segmentation module.
         if m is None:
             continue
         recursive_spectral_norm(m)
-    remove_spectral_norm(submodel['decoder_residual'].out_conv[1].conv.op)
-    remove_spectral_norm(submodel['decoder_residual'].classifier.op)
+    remove_spectral_norm(submodel['decoder_residual'].out_conv.conv.op)
     
     model = segmentation_model(**submodel,
                                shape_sample=z_shape,
                                loss_gan='hinge',
-                               loss_seg=dice_loss(),
+                               loss_seg=multi_class_dice_loss([1,2,4]),
                                relativistic=False,
                                rng=np.random.RandomState(1234),
                                **lambdas)
@@ -138,7 +157,8 @@ def build_model():
         ('G', model),
         ('D', nn.ModuleList([model.separate_networks['disc_A'],
                              model.separate_networks['disc_B']])),
-        ('E', model.separate_networks['mi_estimator'])
+        ('E', model.separate_networks['mi_estimator']),
+        ('S', model.separate_networks['segmenter'])
         ))
 
 
@@ -258,7 +278,7 @@ class switching_normalization(nn.Module):
 class decoder(nn.Module):
     def __init__(self, input_shape, output_shape, num_conv_blocks, block_type,
                  num_channels_list, num_classes=None, skip=True, dropout=0.,
-                 normalization=instance_normalization, norm_kwargs=None,
+                 normalization=layer_normalization, norm_kwargs=None,
                  padding_mode='constant', kernel_size=3, upsample_mode='conv',
                  init='kaiming_normal_', nonlinearity='ReLU',
                  long_skip_merge_mode=None, ndim=2):
@@ -325,6 +345,7 @@ class decoder(nn.Module):
                 skip=_select(self.skip, False),
                 dropout=self.dropout,
                 normalization=_select(normalization_switch),
+                norm_kwargs=self.norm_kwargs,
                 padding_mode=self.padding_mode,
                 kernel_size=self.kernel_size,
                 init=self.init,
@@ -370,9 +391,7 @@ class decoder(nn.Module):
             'padding_mode': self.padding_mode,
             'init': self.init,
             'ndim': self.ndim}
-        self.out_conv = [norm_nlin_conv(**kwargs_out_conv),
-                         norm_nlin_conv(**kwargs_out_conv)]     # 1 per mode.
-        self.out_conv = nn.ModuleList(self.out_conv)
+        self.out_conv = norm_nlin_conv(**kwargs_out_conv)
         
         # Classifier for segmentation (mode 1).
         if self.num_classes is not None:
@@ -380,19 +399,12 @@ class decoder(nn.Module):
                 in_channels=self.out_channels,
                 out_channels=self.num_classes,
                 kernel_size=1,
-                ndim=self.ndim)
+                ndim=self.ndim)        
         
-        
-    def forward(self, z, skip_info=None, mode=0):
-        # Set mode (0: trans, 1: seg).
-        assert mode in [0, 1]
-        for m in self.modules():
-            if isinstance(m, switching_normalization):
-                m.set_mode(mode)
-        
+    def forward(self, z, skip_info=None):
         # Compute output.
         out = z
-        if skip_info is not None and mode==0:
+        if skip_info is not None:
             skip_info = skip_info[::-1]
         for n, block in enumerate(self.blocks):
             if (self.long_skip_merge_mode=='pool' and skip_info is not None
@@ -420,16 +432,26 @@ class decoder(nn.Module):
             if not out.is_contiguous():
                 out = out.contiguous()
         out = self.pre_conv(out)
-        out = self.out_conv[mode](out)
-        if mode==0:
+        out = self.out_conv(out)
+        if self.num_classes is None:
             out = torch.tanh(out)
-            return out, skip_info
-        elif mode==1:
-            out = self.classifier(out)
-            out = torch.sigmoid(out)
-            return out
+            return out, (skip_info, z)
         else:
-            AssertionError()
+            out = self.classifier(out)
+            if self.num_classes==1:
+                out = torch.sigmoid(out)
+            else:
+                out = torch.softmax(out, dim=1)
+            return out
+
+
+class segmenter(nn.Module):
+    def __init__(self, *args, **kwargs):
+        super(segmenter, self).__init__()
+        self._decoder = decoder(*args, **kwargs)
+    def forward(self, x, skip_info):
+        skip_info, z = skip_info
+        return self._decoder(z, skip_info=skip_info[::-1])
 
 
 class mi_estimation_network(nn.Module):
@@ -451,3 +473,27 @@ class mi_estimation_network(nn.Module):
         out = self.model(torch.cat([x.view(x.size(0), -1),
                                     z.view(z.size(0), -1)], dim=-1))
         return out
+
+
+class multi_class_dice_loss(object):
+    def __init__(self, target_class=1, mask_class=None):
+        if not hasattr(target_class, '__len__'):
+            target_class = [target_class]
+        self.target_class = target_class
+        self.mask_class = mask_class
+        self._losses_single = []
+        for c in [0]+target_class:
+            # Dice loss for each class individually.
+            self._losses_single.append(dice_loss(target_class=c,
+                                                 mask_class=mask_class))
+        # Dice loss for all classes, combined.
+        self._loss_all = dice_loss(target_class=target_class, 
+                                   mask_class=mask_class)
+    
+    def __call__(self, y_pred, y_true):
+        loss = self._loss_all(1.-y_pred[:,0:1], y_true)
+        for i, l in enumerate(self._losses_single):
+            loss += l(y_pred[:,i:i+1].contiguous(), y_true)
+        loss /= len(self._losses_single)+1
+        return loss
+

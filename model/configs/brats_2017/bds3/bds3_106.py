@@ -30,14 +30,14 @@ from model.bd_segmentation import segmentation_model
 def build_model():
     N = 512 # Number of features at the bottleneck.
     n = 128 # Number of features to sample at the bottleneck.
-    image_size = (1, 128, 128)
+    image_size = (4, 240, 120)
     lambdas = {
         'lambda_disc'       : 3,
         'lambda_x_id'       : 50,
         'lambda_z_id'       : 1,
         'lambda_f_id'       : 0,
         'lambda_cyc'        : 50,
-        'lambda_seg'        : 0}
+        'lambda_seg'        : 0.01}
     
     encoder_kwargs = {
         'input_shape'         : image_size,
@@ -81,7 +81,7 @@ def build_model():
         'num_conv_blocks'     : 5,
         'block_type'          : conv_block,
         'num_channels_list'   : [N//2, N//4, N//8, N//16, N//32],
-        'num_classes'         : 1,
+        'num_classes'         : 4,
         'skip'                : False,
         'dropout'             : 0.,
         'normalization'       : layer_normalization,
@@ -96,7 +96,7 @@ def build_model():
     
     discriminator_kwargs = {
         'input_dim'           : image_size[0],
-        'num_channels_list'   : [N//4, N//2, N],
+        'num_channels_list'   : [N//8, N//4, N//2, N],
         'num_scales'          : 3,
         'normalization'       : layer_normalization,
         'norm_kwargs'         : None,
@@ -129,7 +129,7 @@ def build_model():
     model = segmentation_model(**submodel,
                                shape_sample=z_shape,
                                loss_gan='hinge',
-                               loss_seg=dice_loss(),
+                               loss_seg=multi_class_dice_loss([1,2,4]),
                                relativistic=False,
                                rng=np.random.RandomState(1234),
                                **lambdas)
@@ -325,6 +325,7 @@ class decoder(nn.Module):
                 skip=_select(self.skip, False),
                 dropout=self.dropout,
                 normalization=_select(normalization_switch),
+                norm_kwargs=self.norm_kwargs,
                 padding_mode=self.padding_mode,
                 kernel_size=self.kernel_size,
                 init=self.init,
@@ -426,7 +427,10 @@ class decoder(nn.Module):
             return out, skip_info
         elif mode==1:
             out = self.classifier(out)
-            out = torch.sigmoid(out)
+            if self.num_classes==1:
+                out = torch.sigmoid(out)
+            else:
+                out = torch.softmax(out, dim=1)
             return out
         else:
             AssertionError()
@@ -451,3 +455,27 @@ class mi_estimation_network(nn.Module):
         out = self.model(torch.cat([x.view(x.size(0), -1),
                                     z.view(z.size(0), -1)], dim=-1))
         return out
+
+
+class multi_class_dice_loss(object):
+    def __init__(self, target_class=1, mask_class=None):
+        if not hasattr(target_class, '__len__'):
+            target_class = [target_class]
+        self.target_class = target_class
+        self.mask_class = mask_class
+        self._losses_single = []
+        for c in [0]+target_class:
+            # Dice loss for each class individually.
+            self._losses_single.append(dice_loss(target_class=c,
+                                                 mask_class=mask_class))
+        # Dice loss for all classes, combined.
+        self._loss_all = dice_loss(target_class=target_class, 
+                                   mask_class=mask_class)
+    
+    def __call__(self, y_pred, y_true):
+        loss = self._loss_all(1.-y_pred[:,0:1], y_true)
+        for i, l in enumerate(self._losses_single):
+            loss += l(y_pred[:,i:i+1].contiguous(), y_true)
+        loss /= len(self._losses_single)+1
+        return loss
+
