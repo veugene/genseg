@@ -1,6 +1,7 @@
 from collections import OrderedDict
 import torch
 from torch import nn
+from torch.nn.utils import remove_spectral_norm
 from torch.functional import F
 from torch.nn.utils import spectral_norm
 import numpy as np
@@ -129,6 +130,8 @@ def build_model():
         if m is None:
             continue
         recursive_spectral_norm(m)
+    remove_spectral_norm(submodel['decoder_residual'].out_conv[1].conv.op)
+    remove_spectral_norm(submodel['decoder_residual'].classifier.op)
     
     model = segmentation_model(**submodel,
                                shape_sample=z_shape,
