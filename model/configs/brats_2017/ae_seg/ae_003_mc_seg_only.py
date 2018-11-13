@@ -66,7 +66,8 @@ def build_model():
         'encoder'           : encoder_instance,
         'decoder_rec'       : None,
         'decoder_seg'       : decoder(**decoder_kwargs,
-                                      output_transform=torch.sigmoid,
+                                      output_transform=lambda x: \
+                                                torch.softmax(x, dim=1),
                                       long_skip_merge_mode='skinny_cat',
                                       num_classes=4)}
     

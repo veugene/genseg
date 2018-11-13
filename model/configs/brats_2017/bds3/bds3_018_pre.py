@@ -457,7 +457,10 @@ class decoder(nn.Module):
             return out, (skip_info, adain_params)
         elif mode==1:
             out = self.classifier(out)
-            out = torch.sigmoid(out)
+            if self.num_classes==1:
+                out = torch.sigmoid(out)
+            else:
+                out = torch.softmax(out, dim=1)
             return out
         else:
             AssertionError()
