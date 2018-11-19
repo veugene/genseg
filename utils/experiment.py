@@ -23,6 +23,7 @@ class experiment(object):
     """
     def __init__(self, name, parser):
         self.name = name
+        self._epoch = [0]
         
         # Set up model, and optimizers.
         args = parser.parse_args()
@@ -33,18 +34,15 @@ class experiment(object):
                                      learning_rate=args.learning_rate,
                                      opt_kwargs=args.opt_kwargs,
                                      weight_decay=args.weight_decay)
-            if not args.model_from.endswith(".py"):
-                # Load weights if model defined from checkpoint.
-                model, optimizer = self._load_state(
-                                     load_from=args.model_from,
-                                     model=model,
-                                     optimizer=optimizer)
             experiment_path, experiment_id = self._setup_experiment_directory(
                 name="{}__{}".format(name, args.name),
                 save_path=args.save_path)
             self.experiment_path = experiment_path
             self.experiment_id = experiment_id
-            self._epoch = [0]
+            if args.weights_from is not None:
+                # Load weights from specified checkpoint.
+                self._load_state(load_from=args.weights_from, model=model)
+                self._epoch[0] = 0
         else:
             args = self._load_and_merge_args(parser)
             state_file = natsorted([fn for fn in os.listdir(args.resume_from)
@@ -58,10 +56,8 @@ class experiment(object):
                                      learning_rate=args.learning_rate,
                                      opt_kwargs=args.opt_kwargs,
                                      weight_decay=args.weight_decay)
-            model, optimizer = self._load_state(
-                                     load_from=state_from,
-                                     model=model,
-                                     optimizer=optimizer)
+            self._load_state(load_from=state_from,
+                             model=model, optimizer=optimizer)
             self.experiment_path = args.resume_from
         self.args = args
         self.model = model
@@ -191,21 +187,21 @@ class experiment(object):
         
         return model, optimizer
     
-    def _load_state(self, load_from, model, optimizer):
+    def _load_state(self, load_from, model, optimizer=None):
         '''
         Restore the model, its state, and the optimizer's state.
         '''
         saved_dict = torch.load(load_from)
         for key in model.keys():
             model[key].load_state_dict(saved_dict[key]['model_state'])
-            optimizer[key].load_state_dict(saved_dict[key]['optimizer_state'])
+            if optimizer is not None:
+                optimizer[key].load_state_dict(
+                                   saved_dict[key]['optimizer_state'])
         
         # Experiment metadata.
         self.experiment_id = saved_dict['experiment_id']
         self._epoch[0] = saved_dict['epoch'][0]+1
         self.model_as_str = saved_dict['model_as_str']
-        
-        return model, optimizer
     
     def load_last_state(self):
         state_file = natsorted([fn for fn in os.listdir(self.experiment_path)

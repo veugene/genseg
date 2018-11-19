@@ -52,6 +52,7 @@ def get_parser():
     mutex_from = g_exp.add_mutually_exclusive_group()
     mutex_from.add_argument('--model_from', type=str, default=None)
     mutex_from.add_argument('--resume_from', type=str, default=None)
+    g_exp.add_argument('--weights_from', type=str, default=None)
     g_exp.add_argument('--weight_decay', type=float, default=1e-4)
     g_exp.add_argument('--labeled_fraction', type=float, default=0.1)
     g_exp.add_argument('--yield_only_labeled', action='store_true')
