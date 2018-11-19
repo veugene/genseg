@@ -350,8 +350,7 @@ def run():
             prefix=key,
             output_transform=lambda x: dict([(k, _tuple(v))
                                              for k, v in x.items()
-                                             if k.startswith('l_')
-                                             or k.startswith('prob')]),
+                                             if k.startswith('l_')]),
             metric_keys=['dice']+['dice{}'.format(c) for c in target_class])
     
     # Set up image logging.

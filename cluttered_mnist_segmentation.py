@@ -354,8 +354,7 @@ def run():
             prefix=key,
             output_transform=lambda x: dict([(k, _tuple(v))
                                              for k, v in x.items()
-                                             if k.startswith('l_')
-                                             or k.startswith('prob')]),
+                                             if k.startswith('l_')]),
             metric_keys=['dice'])
     
     # Set up image logging to tensorboard.
