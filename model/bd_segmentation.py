@@ -298,6 +298,7 @@ class _forward(nn.Module):
         
         # Encode inputs.
         s_A, skip_A = self.encoder(x_A)
+        s_B = skip_B = None
         if (   self.lambda_disc
             or self.lambda_x_id
             or self.lambda_z_id):
@@ -322,16 +323,16 @@ class _forward(nn.Module):
             return x, x_list
         
         # A->(B, dA)->A
-        x_AB = x_AB_residual = X_AA = x_AA_list = c_A = u_A = None
-        info_AB = {'skip_info': skip_A}
-        if class_A is not None:
-            info_AB['class_info'] = class_A
+        x_AB = x_AB_residual = x_AA = x_AA_list = None
         if (self.lambda_seg
          or self.lambda_disc or self.lambda_x_id or self.lambda_z_id):
+            info_AB = {'skip_info': skip_A}
+            if class_A is not None:
+                info_AB['class_info'] = class_A
             x_AB_residual, skip_AM = self.decoder_residual(s_A, **info_AB)
+        c_A, u_A = torch.split(s_A, [s_A.size(1)-self.shape_sample[0],
+                                     self.shape_sample[0]], dim=1)
         if self.lambda_disc or self.lambda_x_id or self.lambda_z_id:
-            c_A, u_A = torch.split(s_A, [s_A.size(1)-self.shape_sample[0],
-                                         self.shape_sample[0]], dim=1)
             x_AB, _ = self.decoder_common(c_A, **info_AB)
             x_AA = add(x_AB, x_AB_residual)
             
@@ -341,11 +342,11 @@ class _forward(nn.Module):
             x_AB_residual, _= unpack(x_AB_residual)
         
         # B->(B, dA)->A
-        x_BA = x_BA_residual = x_BB = z_BA = x_BB_list = None
-        info_BA = {'skip_info': skip_B}
-        if class_A is not None:
-            info_BA['class_info'] = class_B
+        x_BA = x_BA_residual = x_BB = z_BA = x_BB_list = u_BA = c_B = None
         if self.lambda_disc or self.lambda_x_id or self.lambda_z_id:
+            info_BA = {'skip_info': skip_B}
+            if class_A is not None:
+                info_BA['class_info'] = class_B
             u_BA = self._z_sample(batch_size, rng=rng)
             c_B  = s_B[:,:s_B.size(1)-self.shape_sample[0]]
             z_BA = torch.cat([c_B, u_BA], dim=1)
@@ -383,10 +384,10 @@ class _forward(nn.Module):
         
         # Cycle.
         x_BAB = c_BA = u_BA = None
-        info_BAB = {'skip_info': skip_BA}
-        if class_A is not None:
-            info_BAB['class_info'] = class_B
         if self.lambda_cyc:
+            info_BAB = {'skip_info': skip_BA}
+            if class_A is not None:
+                info_BAB['class_info'] = class_B
             c_BA, u_BA = torch.split(s_BA, [s_BA.size(1)-self.shape_sample[0],
                                             self.shape_sample[0]], dim=1)
             x_BAB, _ = self.decoder_common(c_BA, **info_BAB)
@@ -521,9 +522,10 @@ class _loss_G(nn.Module):
                 class_A=None, class_B=None):
         # Mutual information loss for generator.
         loss_mi_gen = defaultdict(int)
-        if self.net['mi'] is not None:
+        if self.net['mi'] is not None and self.lambda_mi:
             loss_mi_gen['A']  = -self.lambda_mi*self.net['mi'](c_A, u_A)
-            loss_mi_gen['BA'] = -self.lambda_mi*self.net['mi'](c_BA, u_BA)
+            if self.lambda_cyc:
+                loss_mi_gen['BA'] = -self.lambda_mi*self.net['mi'](c_BA, u_BA)
         
         # Slice number classification.
         loss_slice_gen = defaultdict(int)
