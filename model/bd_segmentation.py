@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from torch import nn
 from torch.autograd import Variable
+import torch.nn.functional as F
 from fcn_maker.loss import dice_loss
 from .common.network.basic import grad_norm
 from .common.losses import (bce,
@@ -34,16 +35,25 @@ def _reduce(loss):
     return sum([_mean(v) for v in loss])
 
 
-def _foreach(func, x):
-    # If x is a list, process every element (and reduce to batch dim).
+def _cce(p, t):
+    # Cross entropy loss that can handle multi-scale classifiers.
+    # 
+    # If p is a list, process every element (and reduce to batch dim).
     # Each tensor is reduced by `mean` and reduced tensors are averaged
     # together.
-    # (For multi-scale discriminators. Each scale is given equal weight.)
-    if not isinstance(x, torch.Tensor):
-        return sum([_foreach(func, elem) for elem in x])/float(len(x))
-    out = func(x)
+    # (For multi-scale classifiers. Each scale is given equal weight.)
+    if not isinstance(p, torch.Tensor):
+        return sum([_cce(elem, t) for elem in p])/float(len(p))
+    # Convert target list to torch tensor (batch_size, 1, 1, 1).
+    t = torch.Tensor(t).reshape(-1,1,1).expand(-1,p.size(2),p.size(3)).long()
+    if p.is_cuda:
+        t = t.to(p.device)
+    # Cross-entropy.
+    out = F.cross_entropy(p, t)
+    # Return if no dimensions beyond batch dim.
     if out.dim()<=1:
         return out
+    # Else, return after reducing to batch dim.
     return out.view(out.size(0), -1).mean(1)    # Reduce to batch dim.
 
 
@@ -477,11 +487,9 @@ class _loss_D(nn.Module):
         # Slice number classification.
         loss_slice_est = defaultdict(int)
         if self.lambda_slice and class_A is not None:
-            loss_slice_est['A'] = _foreach(lambda args: cce(*args),
-                                           (self.net['class_A'](x_A), class_A))
+            loss_slice_est['A'] = _cce(self.net['class_A'](x_A), class_A)
         if self.lambda_slice and class_B is not None:
-            loss_slice_est['B'] = _foreach(lambda args: cce(*args),
-                                           (self.net['class_B'](x_B), class_B))
+            loss_slice_est['B'] = _cce(self.net['class_B'](x_B), class_B)
         
         # Mutual information estimate.
         loss_mi_est = defaultdict(int)
@@ -530,11 +538,9 @@ class _loss_G(nn.Module):
         # Slice number classification.
         loss_slice_gen = defaultdict(int)
         if self.lambda_slice and class_A is not None:
-            loss_slice_gen['BA'] =_foreach(lambda args: cce(*args),
-                                           (self.net['class_A'](x_BA),class_A))
+            loss_slice_gen['BA'] = _cce(self.net['class_A'](x_BA),class_A)
         if self.lambda_slice and class_B is not None:
-            loss_slice_gen['AB'] =_foreach(lambda args: cce(*args),
-                                           (self.net['class_A'](x_AB),class_A))
+            loss_slice_gen['AB'] = _cce(self.net['class_A'](x_AB),class_A)
         
         # Generator loss.
         loss_gen = defaultdict(int)

@@ -37,7 +37,8 @@ def build_model():
         'lambda_z_id'       : 1,
         'lambda_f_id'       : 0,
         'lambda_cyc'        : 50,
-        'lambda_seg'        : 0.01}
+        'lambda_seg'        : 0.01,
+        'lambda_slice'      : 10}
     
     encoder_kwargs = {
         'input_shape'         : image_size,
@@ -140,7 +141,9 @@ def build_model():
     return OrderedDict((
         ('G', model),
         ('D', nn.ModuleList([model.separate_networks['disc_A'],
-                             model.separate_networks['disc_B']])),
+                             model.separate_networks['disc_B'],
+                             model.separate_networks['classifier_A'],
+                             model.separate_networks['classifier_B']])),
         ('E', model.separate_networks['mi_estimator'])
         ))
 
@@ -524,7 +527,9 @@ class munit_discriminator(nn.Module):
         for model in self.cnns:
             out = model(x)
             if classifier:
-                out = torch.softmax(out[:,1:], dim=1)
+                #out = torch.softmax(out[:,1:], dim=1)
+                out = out[:,1:]   # Using `torch.nn.functional.cross_entropy`,
+                                  # `log_softmax` is applied by torch.
             else:
                 out = out[:,0]
             outputs.append(out)
