@@ -91,19 +91,6 @@ class experiment(object):
     
     def setup_checkpoints(self, trainer, evaluator=None,
                           score_function=None, n_saved=2):
-        # Checkpoint for best model performance.
-        checkpoint_best_handler = None
-        if evaluator is not None:
-            checkpoint_best_handler = ModelCheckpoint(
-                                        dirname=self.experiment_path,
-                                        filename_prefix='best_state',
-                                        n_saved=1,
-                                        score_function=score_function,
-                                        atomic=True,
-                                        create_dir=True,
-                                        require_empty=False)
-            checkpoint_best_handler._iteration = self._epoch[0]
-        
         # Checkpoint at every epoch and increment epoch in
         # `self.model_save_dict`.
         checkpoint_last_handler = ModelCheckpoint(
@@ -118,18 +105,37 @@ class experiment(object):
         
         # Function to update state dicts, call checkpoint handlers, and
         # increment epoch count.
-        def checkpoint_handler(engine):
+        def checkpoint_handler_train(engine):
             model_save_dict = self.get_model_save_dict()
             checkpoint_last_handler(engine, model_save_dict)
-            checkpoint_best_handler(engine, model_save_dict)
             self._increment_epoch(engine)
-        trainer.add_event_handler(Events.EPOCH_COMPLETED, checkpoint_handler)
+        trainer.add_event_handler(Events.EPOCH_COMPLETED,
+                                  checkpoint_handler_train)
         
         # Setup initial epoch in the training engine.
         trainer.add_event_handler(Events.STARTED,
                                   lambda engine: setattr(engine.state,
                                                          "epoch",
                                                          self._epoch[0]))
+        
+        # Checkpoint for best model performance.
+        checkpoint_best_handler = None
+        if evaluator is not None:
+            checkpoint_best_handler = ModelCheckpoint(
+                                        dirname=self.experiment_path,
+                                        filename_prefix='best_state',
+                                        n_saved=1,
+                                        score_function=score_function,
+                                        atomic=True,
+                                        create_dir=True,
+                                        require_empty=False)
+            checkpoint_best_handler._iteration = self._epoch[0]
+            def checkpoint_handler_valid(engine):
+                model_save_dict = self.get_model_save_dict()
+                checkpoint_best_handler(engine, model_save_dict)
+                self._increment_epoch(engine)
+            evaluator.add_event_handler(Events.EPOCH_COMPLETED,
+                                        checkpoint_handler_valid)
 
     def get_epoch(self):
         return self._epoch[0]
