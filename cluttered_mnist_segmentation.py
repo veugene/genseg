@@ -77,7 +77,8 @@ def get_parser():
     g_exp.add_argument('--nb_proc_workers', type=int, default=1)
     g_exp.add_argument('--save_image_events', action='store_true',
                        help="Save images into tensorboard event files.")
-    g_exp.add_argument('--rseed', type=int, default=1234)
+    g_exp.add_argument('--init_seed', type=int, default=1234)
+    g_exp.add_argument('--data_seed', type=int, default=0)
     g_sel = parser.add_argument_group('Cluster select.')
     mutex_cluster = g_sel.add_mutually_exclusive_group()
     mutex_cluster.add_argument('--dispatch_dgx', default=False,
@@ -180,7 +181,7 @@ def run():
     experiment_state = experiment(name="mnist", parser=get_parser())
     args = experiment_state.args
     assert args.labeled_fraction > 0
-    torch.manual_seed(args.rseed)
+    torch.manual_seed(args.init_seed)
     
     # Data augmentation settings.
     da_kwargs = {'rotation_range': 3.,
@@ -231,7 +232,7 @@ def run():
         gen_train_online=args.epoch_length is not None,
         background_noise=args.background_noise,
         verbose=True,
-        rng=np.random.RandomState(args.rseed))
+        rng=np.random.RandomState(args.data_seed))
     n_samples_train = None if args.epoch_length is None \
                            else args.epoch_length*args.batch_size_train
     loader = {
@@ -240,7 +241,7 @@ def run():
                             batch_size=args.batch_size_train,
                             sample_random=True,
                             preprocessor=preprocessor(warp=args.augment_data),
-                            rng=np.random.RandomState(args.rseed),
+                            rng=np.random.RandomState(args.init_seed),
                             nb_io_workers=args.nb_io_workers,
                             nb_proc_workers=args.nb_proc_workers),
         'valid': data_flow([mnist_data_valid(data)],
