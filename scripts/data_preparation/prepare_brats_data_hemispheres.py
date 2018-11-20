@@ -123,10 +123,11 @@ def get_slices(volume, segmentation, brain_mask, indices,
             continue
         tumor_fraction = count_tumor/float(count_brain)
         brain_fraction = count_brain/float(count_total)
-        if tumor_fraction>min_tumor_fraction:
-            indices_anomaly.append(i)
-        if count_tumor==0 and brain_fraction>min_brain_fraction:
-            indices_healthy.append(i)
+        if brain_fraction>min_brain_fraction:
+            if tumor_fraction>min_tumor_fraction:
+                indices_anomaly.append(i)
+            if count_tumor==0:
+                indices_healthy.append(i)
     
     # Sort slices.
     slices_dict = OrderedDict()
