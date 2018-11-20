@@ -68,7 +68,8 @@ def get_parser():
     g_exp.add_argument('--nb_proc_workers', type=int, default=1)
     g_exp.add_argument('--save_image_events', action='store_true',
                        help="Save images into tensorboard event files.")
-    g_exp.add_argument('--rseed', type=int, default=1234)
+    g_exp.add_argument('--init_seed', type=int, default=1234)
+    g_exp.add_argument('--data_seed', type=int, default=0)
     g_sel = parser.add_argument_group('Cluster select.')
     mutex_cluster = g_sel.add_mutually_exclusive_group()
     mutex_cluster.add_argument('--dispatch_dgx', default=False,
@@ -171,7 +172,7 @@ def run():
     experiment_state = experiment(name="brats", parser=get_parser())
     args = experiment_state.args
     assert args.labeled_fraction > 0
-    torch.manual_seed(args.rseed)
+    torch.manual_seed(args.init_seed)
     
     # Data augmentation settings.
     da_kwargs = {'rotation_range': 3.,
@@ -200,7 +201,7 @@ def run():
                               orientations=args.orientation,
                               masked_fraction=1.-args.labeled_fraction,
                               drop_masked=args.yield_only_labeled,
-                              rng=np.random.RandomState(args.rseed))
+                              rng=np.random.RandomState(args.data_seed))
     data_train = [data['train']['h'], data['train']['s'], data['train']['m'],
                   data['train']['hi'], data['train']['si']]
     data_valid = [data['valid']['h'], data['valid']['s'], data['valid']['m'],
@@ -213,7 +214,7 @@ def run():
                                        data_augmentation_kwargs=da_kwargs),
                                    nb_io_workers=args.nb_io_workers,
                                    nb_proc_workers=args.nb_proc_workers,
-                                   rng=np.random.RandomState(args.rseed)),
+                                   rng=np.random.RandomState(args.init_seed)),
         'valid': data_flow_sampler(data_valid,
                                    sample_random=True,
                                    batch_size=args.batch_size_valid,
@@ -221,7 +222,7 @@ def run():
                                        data_augmentation_kwargs=None),
                                    nb_io_workers=args.nb_io_workers,
                                    nb_proc_workers=args.nb_proc_workers,
-                                   rng=np.random.RandomState(args.rseed))}
+                                   rng=np.random.RandomState(args.init_seed))}
     
     # Function to convert data to pytorch usable form.
     def prepare_batch(batch, slice_conditional=False):

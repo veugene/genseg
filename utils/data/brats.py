@@ -62,6 +62,11 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
         axes along which to slice image volumes.
     rng (numpy RandomState) : Random number generator.
     
+    NOTE: A constant random seed (0) is always used to determine the training/
+    validation split. The rng passed for data preparation is used to determine
+    which labels to mask out (if any); if none is passed, the default uses a
+    random seed of 0.
+    
     Returns six arrays: healthy slices, sick slices, and segmentations for 
     the training and validation subsets.
     """
@@ -71,7 +76,7 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
     elif not hasattr(orientations, '__len__'):
         orientations = [orientations]
     if rng is None:
-        rng = np.random.RandomState()
+        rng = np.random.RandomState(0)
     if masked_fraction < 0 or masked_fraction > 1:
         raise ValueError("`masked_fraction` must be in [0, 1].")
         
