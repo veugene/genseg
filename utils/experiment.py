@@ -217,8 +217,6 @@ class experiment(object):
         model, optimizer = self._load_state(load_from=state_from,
                                             model=self.model,
                                             optimizer=self.optimizer)
-        self.model = model
-        self.optimizer = optimizer
     
     def load_best_state(self):
         state_file = natsorted([fn for fn in os.listdir(self.experiment_path)
@@ -228,8 +226,6 @@ class experiment(object):
         model, optimizer = self._load_state(load_from=state_from,
                                             model=self.model,
                                             optimizer=self.optimizer)
-        self.model = model
-        self.optimizer = optimizer
 
     def _get_optimizer(self, name, params, lr=0., opt_kwargs=None, 
                        weight_decay=0.):
