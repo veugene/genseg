@@ -9,7 +9,6 @@ from data_tools.data_augmentation import image_random_transform
  
 def prepare_data_brats17(path_hgg, path_lgg,
                          masked_fraction=0, drop_masked=False,
-                         orientations=None,
                          rng=None):
     # Random 20% data split.
     rnd_state = np.random.RandomState(0)
@@ -24,12 +23,10 @@ def prepare_data_brats17(path_hgg, path_lgg,
                                masked_fraction=masked_fraction,
                                validation_indices=validation_indices,
                                drop_masked=drop_masked,
-                               orientations=orientations,
                                rng=rng)
 
 def prepare_data_brats13s(path_hgg, path_lgg,
                           masked_fraction=0, drop_masked=False,
-                          orientations=None,
                           rng=None):
     rnd_state = np.random.RandomState(0)
     hgg_indices = np.arange(0, 25)
@@ -43,12 +40,11 @@ def prepare_data_brats13s(path_hgg, path_lgg,
                                masked_fraction=masked_fraction,
                                validation_indices=validation_indices,
                                drop_masked=drop_masked,
-                               orientations=orientations,
                                rng=rng)
 
 def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
                         masked_fraction=0, drop_masked=False,
-                        orientations=None, rng=None):
+                        rng=None):
     """
     Convenience function to prepare brats data as multi_source_array objects,
     split into training and validation subsets.
@@ -58,8 +54,6 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
     masked_fraction (float) : The fraction in [0, 1.] of volumes in the 
         training set for which  to return segmentation masks as None
     drop_masked (bool) : Whether to omit volumes with "masked" segmentations.
-    orientations (list) : A list of integers in {1, 2, 3}, specifying the
-        axes along which to slice image volumes.
     rng (numpy RandomState) : Random number generator.
     
     NOTE: A constant random seed (0) is always used to determine the training/
@@ -71,10 +65,6 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
     the training and validation subsets.
     """
     
-    if orientations is None:
-        orientations = [1,2,3]
-    elif not hasattr(orientations, '__len__'):
-        orientations = [orientations]
     if rng is None:
         rng = np.random.RandomState(0)
     if masked_fraction < 0 or masked_fraction > 1:
@@ -102,7 +92,7 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
                         'lgg': [i for i in range(num_lgg) \
                                 if i not in validation_indices['lgg']]}
     
-    def _prepare(path, axis, key):
+    def _prepare(path, key):
         # Open h5py file.
         try:
             h5py_file = h5py.File(path, mode='r')
@@ -118,11 +108,11 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
         indices_s = []
         for _key in h5py_file.keys():   # Per patient.
             group_p = h5py_file[_key]
-            volumes_h.append(group_p['healthy/axis_{}'.format(str(axis))])
-            volumes_s.append(group_p['sick/axis_{}'.format(str(axis))])
-            volumes_m.append(group_p['segmentation/axis_{}'.format(str(axis))])
-            indices_h.append(group_p['h_indices/axis_{}'.format(str(axis))])
-            indices_s.append(group_p['s_indices/axis_{}'.format(str(axis))])
+            volumes_h.append(group_p['healthy'])
+            volumes_s.append(group_p['sick'])
+            volumes_m.append(group_p['segmentation'])
+            indices_h.append(group_p['h_indices'])
+            indices_s.append(group_p['s_indices'])
         
         # Volumes with these indices will either be dropped from the training
         # set or have their segmentations set to None.
@@ -188,9 +178,8 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
     
     data_hgg = []
     data_lgg = []
-    for axis in orientations:
-        _extend(data_hgg, _prepare(path_hgg, axis=axis, key='hgg'))
-        _extend(data_lgg, _prepare(path_lgg, axis=axis, key='lgg'))
+    _extend(data_hgg, _prepare(path_hgg, key='hgg'))
+    _extend(data_lgg, _prepare(path_lgg, key='lgg'))
     
     data = OrderedDict([('train', OrderedDict()),
                         ('valid', OrderedDict())])

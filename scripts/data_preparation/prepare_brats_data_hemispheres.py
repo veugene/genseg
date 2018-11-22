@@ -207,8 +207,7 @@ def process_case(case_num, h5py_file, volume, segmentation, fn,
         else:
             kwargs = {'chunks': (1,)+slices[key].shape[1:],
                       'compression': 'lzf'}
-        group_k = group_p.require_group(key)
-        group_k.create_dataset('axis_1',
+        group_p.create_dataset(key,
                                shape=slices[key].shape,
                                data=slices[key],
                                dtype=slices[key].dtype,

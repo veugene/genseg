@@ -46,7 +46,6 @@ def get_parser():
     g_exp.add_argument('--dataset', type=str, default='brats13s',
                        choices=['brats13s', 'brats17'])
     g_exp.add_argument('--data_dir', type=str, default='./data/brats/2013')
-    g_exp.add_argument('--orientation', type=int, default=None)
     g_exp.add_argument('--slice_conditional', action='store_true')
     g_exp.add_argument('--save_path', type=str, default='./experiments')
     mutex_from = g_exp.add_mutually_exclusive_group()
@@ -198,7 +197,6 @@ def run():
         raise ValueError("`dataset` must only be 'brats17' or 'brats13s'")
     data = prepare_data_brats(path_hgg=os.path.join(args.data_dir, "hgg.h5"),
                               path_lgg=os.path.join(args.data_dir, "lgg.h5"),
-                              orientations=args.orientation,
                               masked_fraction=1.-args.labeled_fraction,
                               drop_masked=args.yield_only_labeled,
                               rng=np.random.RandomState(args.data_seed))
