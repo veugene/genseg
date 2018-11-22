@@ -102,22 +102,6 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
                         'lgg': [i for i in range(num_lgg) \
                                 if i not in validation_indices['lgg']]}
     
-    # Volumes with these indices will either be dropped from the training_set
-    # or have their segmentations set to None.
-    masked_indices = {
-        'hgg': rng.choice(num_hgg,
-                          size=int(min(num_hgg, masked_fraction*num_hgg+0.5)),
-                          replace=False),
-        'lgg': rng.choice(num_lgg,
-                          size=int(min(num_lgg, masked_fraction*num_lgg+0.5)),
-                          replace=False)
-        }
-    if drop_masked:
-        for key in masked_indices.keys():
-            training_indices[key] = [i for i in training_indices[key] \
-                                     if i not in masked_indices[key]]
-            masked_indices[key] = []
-    
     def _prepare(path, axis, key):
         # Open h5py file.
         try:
@@ -140,12 +124,46 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
             indices_h.append(group_p['h_indices/axis_{}'.format(str(axis))])
             indices_s.append(group_p['s_indices/axis_{}'.format(str(axis))])
         
+        # Volumes with these indices will either be dropped from the training
+        # set or have their segmentations set to None.
+        # 
+        # The `masked_fraction` determines the maximal fraction of slices that
+        # are to be thus removed. All or none of the slices are selected for 
+        # each volume.
+        masked_indices = []
+        num_total_slices = sum([len(v) for v in volumes_m])
+        num_masked_slices = 0
+        max_masked_slices = int(min(num_total_slices,
+                                    num_total_slices*masked_fraction+0.5))
+        for i in rng.permutation(len(volumes_m)):
+            num_slices = len(volumes_m[i])
+            if num_slices>0 and num_masked_slices >= max_masked_slices:
+                continue    # Stop masking non-empty volumes (mask empty).
+            if num_slices+num_masked_slices >= max_masked_slices:
+                continue    # Stop masking non-empty volumes (mask empty).
+            masked_indices.append(i)
+            num_masked_slices += num_slices
+        print("DEBUG: In {}, a total of {}/{} slices are labeled across {} "
+              "volumes ({:.1f}%)."
+              "".format(key,
+                        num_total_slices-num_masked_slices,
+                        num_total_slices,
+                        len(volumes_m)-len(masked_indices),
+                        100*(1-num_masked_slices/float(num_total_slices))))
+        
+        # If dropping masked volumes, remove them from training indices.
+        # NOTE: in-place modification.
+        if drop_masked:
+            training_indices[key] = [i for i in training_indices[key]
+                                     if i not in masked_indices]
+            masked_indices = []
+        
         # Split data into training and validation.
         h_train = [volumes_h[i] for i in training_indices[key]]
         h_valid = [volumes_h[i] for i in validation_indices[key]]
         s_train = [volumes_s[i] for i in training_indices[key]]
         s_valid = [volumes_s[i] for i in validation_indices[key]]
-        m_train = [volumes_m[i] if i not in masked_indices[key]
+        m_train = [volumes_m[i] if i not in masked_indices
                    else np.array([None]*len(volumes_m[i]))
                    for i in training_indices[key]]
         m_valid = [volumes_m[i] for i in validation_indices[key]]
