@@ -87,134 +87,109 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
         raise Exception("Max validation index is {} but len(lgg) is {}".
                         format(max_lgg_idx, num_lgg))
     
-    training_indices = {'hgg': [i for i in range(num_hgg) \
-                                if i not in validation_indices['hgg']],
-                        'lgg': [i for i in range(num_lgg) \
-                                if i not in validation_indices['lgg']]}
-    
-    def _prepare(path, key):
-        # Open h5py file.
+    # Assemble volumes and corresponding segmentations; split train/valid.
+    path = OrderedDict((('hgg', path_hgg), ('lgg', path_lgg)))
+    for key, path in path.items():
         try:
             h5py_file = h5py.File(path, mode='r')
         except:
             print("Failed to open data: {}".format(path))
             raise
-        
-        # Assemble volumes and corresponding segmentations.
-        volumes_h = []
-        volumes_s = []
-        volumes_m = []
-        indices_h = []
-        indices_s = []
-        for _key in h5py_file.keys():   # Per patient.
-            group_p = h5py_file[_key]
-            volumes_h.append(group_p['healthy'])
-            volumes_s.append(group_p['sick'])
-            volumes_m.append(group_p['segmentation'])
-            indices_h.append(group_p['h_indices'])
-            indices_s.append(group_p['s_indices'])
-        
-        # Volumes with these indices will either be dropped from the training
-        # set or have their segmentations set to None.
-        # 
-        # The `masked_fraction` determines the maximal fraction of slices that
-        # are to be thus removed. All or none of the slices are selected for 
-        # each volume.
-        masked_indices = []
-        num_total_slices = sum([len(v) for v in volumes_m])
-        num_masked_slices = 0
-        max_masked_slices = int(min(num_total_slices,
-                                    num_total_slices*masked_fraction+0.5))
-        for i in rng.permutation(len(volumes_m)):
-            num_slices = len(volumes_m[i])
-            if num_slices>0 and num_masked_slices >= max_masked_slices:
-                continue    # Stop masking non-empty volumes (mask empty).
-            if num_slices+num_masked_slices >= max_masked_slices:
-                continue    # Stop masking non-empty volumes (mask empty).
-            masked_indices.append(i)
-            num_masked_slices += num_slices
-        print("DEBUG: In {}, a total of {}/{} slices are labeled across {} "
-              "volumes ({:.1f}%)."
-              "".format(key,
-                        num_total_slices-num_masked_slices,
-                        num_total_slices,
-                        len(volumes_m)-len(masked_indices),
-                        100*(1-num_masked_slices/float(num_total_slices))))
-        
-        # If dropping masked volumes, remove them from training indices.
-        # NOTE: in-place modification.
-        if drop_masked:
-            training_indices[key] = [i for i in training_indices[key]
-                                     if i not in masked_indices]
-            masked_indices = []
-        
-        # Split data into training and validation.
-        h_train = [volumes_h[i] for i in training_indices[key]]
-        h_valid = [volumes_h[i] for i in validation_indices[key]]
-        s_train = [volumes_s[i] for i in training_indices[key]]
-        s_valid = [volumes_s[i] for i in validation_indices[key]]
-        m_train = [volumes_m[i] if i not in masked_indices
-                   else np.array([None]*len(volumes_m[i]))
-                   for i in training_indices[key]]
-        m_valid = [volumes_m[i] for i in validation_indices[key]]
-        hi_train = [indices_h[i] for i in training_indices[key]]
-        hi_valid = [indices_h[i] for i in validation_indices[key]]
-        si_train = [indices_s[i] for i in training_indices[key]]
-        si_valid = [indices_s[i] for i in validation_indices[key]]
-        
-        return (h_train,  h_valid,
-                s_train,  s_valid,
-                m_train,  m_valid,
-                hi_train, hi_valid,
-                si_train, si_valid)
-    
-    def _extend(target, source):
-        for i in range(len(source)):
-            if len(target) < len(source):
-                target.append(source[i])
+        volumes_h = {'train': [], 'valid': []}
+        volumes_s = {'train': [], 'valid': []}
+        volumes_m = {'train': [], 'valid': []}
+        indices_h = {'train': [], 'valid': []}
+        indices_s = {'train': [], 'valid': []}
+        for idx, case_id in enumerate(h5py_file.keys()):   # Per patient.
+            f = h5py_file[case_id]
+            if idx in validation_indices[key]:
+                split = 'valid'
             else:
-                target[i].extend(source[i])
-        return target
+                split = 'train'
+            volumes_h[split].append(f['healthy'])
+            volumes_s[split].append(f['sick'])
+            volumes_m[split].append(f['segmentation'])
+            indices_h[split].append(f['h_indices'])
+            indices_s[split].append(f['s_indices'])
+
+    # Volumes with these indices will either be dropped from the training
+    # set or have their segmentations set to None.
+    # 
+    # The `masked_fraction` determines the maximal fraction of slices that
+    # are to be thus removed. All or none of the slices are selected for 
+    # each volume.
+    masked_indices = []
+    num_total_slices = sum([len(v) for v in volumes_m['train']])
+    num_masked_slices = 0
+    max_masked_slices = int(min(num_total_slices,
+                                num_total_slices*masked_fraction+0.5))
+    for i in rng.permutation(len(volumes_m['train'])):
+        num_slices = len(volumes_m['train'][i])
+        if num_slices>0 and num_masked_slices >= max_masked_slices:
+            continue    # Stop masking non-empty volumes (mask empty).
+        if num_slices+num_masked_slices >= max_masked_slices:
+            continue    # Stop masking non-empty volumes (mask empty).
+        masked_indices.append(i)
+        num_masked_slices += num_slices
+    print("DEBUG: A total of {}/{} slices are labeled across {} "
+          "volumes ({:.1f}%)."
+          "".format(num_total_slices-num_masked_slices,
+                    num_total_slices,
+                    len(volumes_m['train'])-len(masked_indices),
+                    100*(1-num_masked_slices/float(num_total_slices))))
     
-    data_hgg = []
-    data_lgg = []
-    _extend(data_hgg, _prepare(path_hgg, key='hgg'))
-    _extend(data_lgg, _prepare(path_lgg, key='lgg'))
+    # Apply masking in one of two ways.
+    # 
+    # 1. Mask out the labels for volumes indexed with `masked_indices` by 
+    # setting the segmentations volume as an array of `None`, with length 
+    # equal to the number of slices in the volume.
+    # 
+    # OR if `drop_masked` is True:
+    # 
+    # 2. Remove all volumes indexed with `masked_indices`.
+    volumes_h_train = []
+    volumes_s_train = []
+    volumes_m_train = []
+    indices_h_train = []
+    indices_s_train = []
+    for i in range(len(volumes_m['train'])):
+        if drop_masked:
+            # Drop.
+            continue
+        elif i not in masked_indices:
+            # Keep.
+            volumes_m_train.append(volumes_m['train'][i])
+        else:
+            # Mask out.
+            volumes_m_train.append(np.array([None]*len(volumes_m['train'][i])))
+        volumes_h_train.append(volumes_h['train'][i])
+        volumes_s_train.append(volumes_s['train'][i])
+        indices_h_train.append(indices_h['train'][i])
+        indices_s_train.append(indices_s['train'][i])
+    volumes_h['train'] = volumes_h_train
+    volumes_s['train'] = volumes_s_train
+    volumes_m['train'] = volumes_m_train
+    indices_h['train'] = indices_h_train
+    indices_s['train'] = indices_s_train
     
+    # Merge all arrays in each list of arrays.
     data = OrderedDict([('train', OrderedDict()),
                         ('valid', OrderedDict())])
-    msa = multi_source_array
-    train_h  = data_hgg[0]+data_lgg[0]
-    valid_h  = data_hgg[1]+data_lgg[1]
-    train_s  = data_hgg[2]+data_lgg[2]
-    valid_s  = data_hgg[3]+data_lgg[3]
-    train_m  = data_hgg[4]+data_lgg[4]
-    valid_m  = data_hgg[5]+data_lgg[5]
-    train_hi = data_hgg[6]+data_lgg[6]
-    valid_hi = data_hgg[7]+data_lgg[7]
-    train_si = data_hgg[8]+data_lgg[8]
-    valid_si = data_hgg[9]+data_lgg[9]
-
-    # HACK: we may have a situation where the number of sick examples
-    # is greater than the number of healthy. In that case, we should
-    # duplicate the healthy set M times so that it has a bigger size
-    # than the sick set.
-    m = 1
-    len_h = sum([ len(elem) for elem in train_h])
-    len_s = sum([ len(elem) for elem in train_s])
-    if len_h < len_s:
-        m = int(np.ceil(len_s / len_h))
-    data['train']['h']  = msa(train_h*m,  no_shape=True)
-    data['valid']['h']  = msa(valid_h*m,  no_shape=True)
-    data['train']['s']  = msa(train_s,    no_shape=True)
-    data['valid']['s']  = msa(valid_s,    no_shape=True)
-    data['train']['m']  = msa(train_m,    no_shape=True)
-    data['valid']['m']  = msa(valid_m,    no_shape=True)
-    data['train']['hi'] = msa(train_hi*m, no_shape=True)
-    data['valid']['hi'] = msa(valid_hi*m, no_shape=True)
-    data['train']['si'] = msa(train_si,   no_shape=True)
-    data['valid']['si'] = msa(valid_si,   no_shape=True)
-        
+    for key in data.keys():
+        # HACK: we may have a situation where the number of sick examples
+        # is greater than the number of healthy. In that case, we should
+        # duplicate the healthy set M times so that it has a bigger size
+        # than the sick set.
+        m = 1
+        len_h = sum([len(elem) for elem in volumes_h[key]])
+        len_s = sum([len(elem) for elem in volumes_s[key]])
+        if len_h < len_s:
+            m = int(np.ceil(len_s / len_h))
+        data[key]['h']  = multi_source_array(volumes_h[key]*m, no_shape=True)
+        data[key]['s']  = multi_source_array(volumes_s[key],   no_shape=True)
+        data[key]['m']  = multi_source_array(volumes_m[key],   no_shape=True)
+        data[key]['hi'] = multi_source_array(indices_h[key]*m, no_shape=True)
+        data[key]['si'] = multi_source_array(indices_s[key],   no_shape=True)
     return data
 
 
@@ -292,7 +267,7 @@ def preprocessor_brats(data_augmentation_kwargs=None):
             
         return elem
         
-    def process_batch(batch):        
+    def process_batch(batch):
         # Find the largest slice.
         max_shape = (0,0)
         for b in batch[:-2]:
