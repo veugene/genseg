@@ -11,6 +11,7 @@ except ImportError:
     import Queue as queue   # python 2
 
 import numpy as np
+import scipy.misc
 from scipy import ndimage
 import SimpleITK as sitk
 import h5py
@@ -51,6 +52,10 @@ def parse():
     parser.add_argument('--num_threads',
                         help="The number of parallel threads to execute.",
                         required=False, type=int, default=None)
+    parser.add_argument('--save_debug_to',
+                        help="Save images of each slice to this directory, "
+                             "for inspection.",
+                        required=False, type=str, default=None)
     return parser.parse_args()
 
 
@@ -188,7 +193,7 @@ def preprocess(volume, segmentation, skip_bias_correction=False):
 
 def process_case(case_num, h5py_file, volume, segmentation, fn,
                  min_tumor_fraction, min_brain_fraction,
-                 skip_bias_correction=False):
+                 skip_bias_correction=False, save_debug_to=None):
     print("Processing case {}: {}".format(case_num, fn))
     group_p = h5py_file.create_group(str(case_num))
     # TODO: set attribute containing fn.
@@ -208,6 +213,21 @@ def process_case(case_num, h5py_file, volume, segmentation, fn,
                                data=slices[key],
                                dtype=slices[key].dtype,
                                **kwargs)
+    
+    # Debug outputs for inspection.
+    if save_debug_to is not None:
+        for key in slices.keys():
+            if "indices" in key:
+                continue
+            dest = os.path.join(save_debug_to, key)
+            if not os.path.exists(dest):
+                os.makedirs(dest)
+            for i in range(len(slices[key])):
+                im = slices[key][i]
+                for ch, im_ch in enumerate(im):
+                    scipy.misc.imsave(os.path.join(dest, "{}_{}_{}.png"
+                                                   "".format(case_num, i, ch)),
+                                      slices[key][i][ch])
                                        
                                        
 class thread_pool_executor(object):
@@ -285,7 +305,8 @@ if __name__=='__main__':
             executor.submit(process_case, i, h5py_file, vol, seg, fn,
                             args.min_tumor_fraction,
                             args.min_brain_fraction,
-                            args.skip_bias_correction)
+                            args.skip_bias_correction,
+                            args.save_debug_to)
         executor.shutdown(wait=True)
     except KeyboardInterrupt:
         pass
