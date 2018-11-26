@@ -538,9 +538,9 @@ class _loss_G(nn.Module):
         # Slice number classification.
         loss_slice_gen = defaultdict(int)
         if self.lambda_slice and class_A is not None:
-            loss_slice_gen['BA'] = _cce(self.net['class_A'](x_BA),class_A)
+            loss_slice_gen['BA'] = _cce(self.net['class_A'](x_BA), class_A)
         if self.lambda_slice and class_B is not None:
-            loss_slice_gen['AB'] = _cce(self.net['class_A'](x_AB),class_A)
+            loss_slice_gen['AB'] = _cce(self.net['class_B'](x_AB), class_B)
         
         # Generator loss.
         loss_gen = defaultdict(int)
