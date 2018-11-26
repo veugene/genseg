@@ -68,7 +68,7 @@ class segmentation_model(nn.Module):
                  relativistic=False, grad_penalty=None, disc_clip_norm=None,
                  gen_clip_norm=None,  lambda_disc=1, lambda_x_id=10,
                  lambda_z_id=1, lambda_f_id=1, lambda_seg=1, lambda_cyc=0,
-                 lambda_mi=1, lambda_slice=0., rng=None):
+                 lambda_mi=1, lambda_slice=0., debug_ac_gan=False, rng=None):
         super(segmentation_model, self).__init__()
         lambdas = OrderedDict((
             ('lambda_disc',       lambda_disc),
@@ -98,7 +98,8 @@ class segmentation_model(nn.Module):
                                                 relativistic=relativistic,
                                                 grad_penalty_real=grad_penalty,
                                                 grad_penalty_fake=None,
-                                                grad_penalty_mean=0))
+                                                grad_penalty_mean=0)),
+            ('debug_ac_gan',      debug_ac_gan)
             ))
         self.separate_networks = OrderedDict((
             ('segmenter',         segmenter),
@@ -132,7 +133,7 @@ class segmentation_model(nn.Module):
         # Module to compute discriminator losses on GPU.
         # Outputs are placed on CPU when there are multiple GPUs.
         keys_D = ['gan_objective', 'disc_A', 'disc_B', 'mi_estimator',
-                  'classifier_A', 'classifier_B']
+                  'classifier_A', 'classifier_B', 'debug_ac_gan']
         kwargs_D = dict([(key, val) for key, val in kwargs.items()
                          if key in keys_D])
         self._loss_D = _loss_D(**kwargs_D, **lambdas)
@@ -142,7 +143,7 @@ class segmentation_model(nn.Module):
         # Module to compute generator updates on GPU.
         # Outputs are placed on CPU when there are multiple GPUs.
         keys_G = ['gan_objective', 'disc_A', 'disc_B', 'mi_estimator',
-                  'classifier_A', 'classifier_B', 'loss_rec']
+                  'classifier_A', 'classifier_B', 'loss_rec', 'debug_ac_gan']
         kwargs_G = dict([(key, val) for key, val in kwargs.items()
                          if key in keys_G])
         self._loss_G = _loss_G(**kwargs_G, **lambdas)
@@ -442,7 +443,8 @@ class _loss_D(nn.Module):
     def __init__(self, gan_objective, disc_A, disc_B, classifier_A=None, 
                  classifier_B=None, mi_estimator=None, lambda_disc=1,
                  lambda_x_id=10, lambda_z_id=1, lambda_f_id=1, lambda_seg=1,
-                 lambda_cyc=0, lambda_mi=1, lambda_slice=0):
+                 lambda_cyc=0, lambda_mi=1, lambda_slice=0,
+                 debug_ac_gan=False):
         super(_loss_D, self).__init__()
         self._gan               = gan_objective
         self.lambda_disc        = lambda_disc
@@ -453,6 +455,7 @@ class _loss_D(nn.Module):
         self.lambda_cyc         = lambda_cyc
         self.lambda_mi          = lambda_mi
         self.lambda_slice       = lambda_slice
+        self.debug_ac_gan       = debug_ac_gan
         self.net = {'disc_A'    : disc_A,
                     'disc_B'    : disc_B,
                     'class_A'   : classifier_A,
@@ -488,8 +491,14 @@ class _loss_D(nn.Module):
         loss_slice_est = defaultdict(int)
         if self.lambda_slice and class_A is not None:
             loss_slice_est['A'] = _cce(self.net['class_A'](x_A), class_A)
+            if self.debug_ac_gan:
+                loss_slice_est['BA'] = _cce(self.net['class_A'](x_BA.detach()), 
+                                            class_A)
         if self.lambda_slice and class_B is not None:
             loss_slice_est['B'] = _cce(self.net['class_B'](x_B), class_B)
+            if self.debug_ac_gan:
+                loss_slice_est['AB'] = _cce(self.net['class_B'](x_AB.detach()),
+                                            class_B)
         
         # Mutual information estimate.
         loss_mi_est = defaultdict(int)
@@ -506,7 +515,8 @@ class _loss_G(nn.Module):
     def __init__(self, gan_objective, disc_A, disc_B, classifier_A=None, 
                  classifier_B=None, mi_estimator=None, loss_rec=mae,
                  lambda_disc=1, lambda_x_id=10, lambda_z_id=1, lambda_f_id=1,
-                 lambda_seg=1, lambda_cyc=0, lambda_mi=1, lambda_slice=0):
+                 lambda_seg=1, lambda_cyc=0, lambda_mi=1, lambda_slice=0,
+                 debug_ac_gan=False):
         super(_loss_G, self).__init__()
         self._gan               = gan_objective
         self.loss_rec           = loss_rec
@@ -518,6 +528,7 @@ class _loss_G(nn.Module):
         self.lambda_cyc         = lambda_cyc
         self.lambda_mi          = lambda_mi
         self.lambda_slice       = lambda_slice
+        self.debug_ac_gan       = debug_ac_gan
         self.net = {'disc_A'    : disc_A,
                     'disc_B'    : disc_B,
                     'class_A'   : classifier_A,
