@@ -153,15 +153,14 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
     indices_h_train = []
     indices_s_train = []
     for i in range(len(volumes_m['train'])):
-        if drop_masked:
-            # Drop.
-            continue
-        elif i not in masked_indices:
+        if i in masked_indices:
+            # Mask out or drop.
+            if drop_masked:
+                continue    # Drop.
+            volumes_m_train.append(np.array([None]*len(volumes_m['train'][i])))
+        else:
             # Keep.
             volumes_m_train.append(volumes_m['train'][i])
-        else:
-            # Mask out.
-            volumes_m_train.append(np.array([None]*len(volumes_m['train'][i])))
         volumes_h_train.append(volumes_h['train'][i])
         volumes_s_train.append(volumes_s['train'][i])
         indices_h_train.append(indices_h['train'][i])
