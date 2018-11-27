@@ -89,17 +89,17 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
     
     # Assemble volumes and corresponding segmentations; split train/valid.
     path = OrderedDict((('hgg', path_hgg), ('lgg', path_lgg)))
+    volumes_h = {'train': [], 'valid': []}
+    volumes_s = {'train': [], 'valid': []}
+    volumes_m = {'train': [], 'valid': []}
+    indices_h = {'train': [], 'valid': []}
+    indices_s = {'train': [], 'valid': []}
     for key, path in path.items():
         try:
             h5py_file = h5py.File(path, mode='r')
         except:
             print("Failed to open data: {}".format(path))
             raise
-        volumes_h = {'train': [], 'valid': []}
-        volumes_s = {'train': [], 'valid': []}
-        volumes_m = {'train': [], 'valid': []}
-        indices_h = {'train': [], 'valid': []}
-        indices_s = {'train': [], 'valid': []}
         for idx, case_id in enumerate(h5py_file.keys()):   # Per patient.
             f = h5py_file[case_id]
             if idx in validation_indices[key]:
