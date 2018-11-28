@@ -133,65 +133,51 @@ class summary_tracker(object):
         self._epoch[idx] += 1
     
     def _update(self, output, prefix, idx):
-        _value_dict = output
         value_dict = OrderedDict()
-        for key in _value_dict:
+        for key in output.keys():
             # Convert torch tensors to numpy.
-            val, count = _value_dict[key]
+            val = output[key]
             if isinstance(val, torch.Tensor):
-                value_dict[key] = (val.cpu().numpy(), count)
-        for _key, (val, count) in value_dict.items():
+                value_dict[key] = val.cpu().numpy()
+        for key, val in value_dict.items():
             # Prefix key, if requested.
-            key = _key
             if prefix is not None:
                 key = "{}_{}".format(prefix, key)
                 
-            # Initialize
-            init_keys = None
-            if len(val.shape)==3:
-                init_keys = [key+'_image_mean', key+'_image_std']
-            elif len(val.shape) in [0, 1]:
-                init_keys = [key]
-            else:
-                init_keys = [key+'_min', key+'_max', key+'_mean', key+'_std']
-            for k in init_keys:
+            # Initialize.
+            for k in [key+'_mean', key+'_std', key+'_min', key+'_max']:
                 if k not in self._metric_value_dict[idx].keys():
-                    self._metric_value_dict[idx][k] = np.zeros(val.shape[1:],
-                                                            dtype=np.float32)
+                    self._metric_value_dict[idx][k] = 0
 
-            # Matrix: log image. Update mean, var. Online - Welford's method.
-            if len(val.shape)==3:
-                mean = self._metric_value_dict[idx][key+'_image_mean']
-                var  = self._metric_value_dict[idx][key+'_image_std']
-                count = 0
-                for i, elem in enumerate(val):
-                    # Update mean, var.
-                    count += 1
-                    old_mean = mean
-                    mean += (elem-mean)/float(count)
-                    var  += (elem-mean)*(elem-old_mean)
-                self._metric_value_dict[idx][key+'_image_mean'] = mean
-                self._metric_value_dict[idx][key+'_image_std']  = var
+            # Size of value (1 if scalar).
+            count = np.product(np.shape(val)) or 1
             
-            # Non-image.
+            # Running stats so far.
+            mean_a = self._metric_value_dict[idx][key+'_mean']
+            var_a  = self._metric_value_dict[idx][key+'_std']
+            min_a  = self._metric_value_dict[idx][key+'_min']
+            max_a  = self._metric_value_dict[idx][key+'_max']
+            
+            # Stats on this value.
+            mean_b = np.mean(val)
+            var_b  = np.var(val)
+            min_b  = np.min(val)
+            max_b  = np.max(val)
+            
+            # Update running stats with stats of this value.
+            a, b = self._item_counter[idx][key], count
+            mean = (mean_a*a + mean_b*b) / float(a+b)
+            if len(np.shape(val))==0:
+                # Scalar.
+                var = (var_a*a+(val-mean_a)*(val-mean))/float(a+b)
             else:
-                a, b = self._item_counter[idx][key], count
-                labels, reductions = [], []
-                if len(val.shape) in [0, 1]:       # Scalar.
-                    labels.append('')
-                    reductions.append(lambda x: x)
-                else:
-                    axes = tuple(range(1, len(val.shape)))
-                    labels.extend(['_min', '_max', '_mean', '_std'])
-                    reductions.extend([lambda x: np.amin(x, axis=axes),
-                                       lambda x: np.amax(x, axis=axes),
-                                       lambda x: np.mean(x, axis=axes),
-                                       lambda x:  np.std(x, axis=axes)])
-                for l, f in zip(labels, reductions):
-                    old_mean = self._metric_value_dict[idx][key+l]
-                    reduced_val = np.mean(f(val))
-                    mean = (old_mean*a + reduced_val*b) / float(a+b)
-                    self._metric_value_dict[idx][key+l] = mean
+                # Tensor.
+                var = ( var_a*a + var_b*b
+                       +(mean_b-mean_a)**2 * a*b/float(a+b)  )/float(a+b)
+            self._metric_value_dict[idx][key+'_mean'] = mean
+            self._metric_value_dict[idx][key+'_std']  = var
+            self._metric_value_dict[idx][key+'_min']  = min(min_a, min_b)
+            self._metric_value_dict[idx][key+'_max']  = max(max_a, max_b)
                 
             # Increment counter.
             self._item_counter[idx][key] += count
@@ -203,18 +189,12 @@ class summary_tracker(object):
         global_step : typically, the current epoch.
         '''
         for key, val in self._metric_value_dict[idx].items():
-            s_value = None
-            if key.endswith('_image_std') or key.endswith('_image_mean'):
-                if key.endswith('_image_std'):
-                    # Turn variance into standard deviation
-                    val = np.sqrt(val)
-                self.summary_writer.add_image(tag=key,
-                                              img_tensor=val,
-                                              global_step=epoch)
-            else:
-                self.summary_writer.add_scalar(tag=key,
-                                               scalar_value=val,
-                                               global_step=epoch)
+            if key.endswith('_std'):
+                # Turn variance into standard deviation
+                val = np.sqrt(val)
+            self.summary_writer.add_scalar(tag=key,
+                                           scalar_value=val,
+                                           global_step=epoch)
             self.summary_writer.file_writer.flush()
         self._item_counter[idx] = defaultdict(int)
         self._metric_value_dict[idx] = OrderedDict()

@@ -345,15 +345,11 @@ def run():
     # Set up tensorboard logging for losses.
     tracker = summary_tracker(experiment_state.experiment_path,
                               initial_epoch=experiment_state.get_epoch())
-    def _tuple(x):
-        if isinstance(x, torch.Tensor) and x.dim()>0:
-            return (torch.mean(x, dim=0), len(x))
-        return (x, 1)
     for key in ['train', 'valid']:
         tracker.attach(
             engine=engines[key],
             prefix=key,
-            output_transform=lambda x: dict([(k, _tuple(v))
+            output_transform=lambda x: dict([(k, v)
                                              for k, v in x.items()
                                              if k.startswith('l_')]),
             metric_keys=['dice'])
