@@ -214,18 +214,18 @@ class experiment(object):
                                 if fn.startswith('state_dict_')
                                 and fn.endswith('.pth')])[-1]
         state_from = os.path.join(self.experiment_path, state_file)
-        model, optimizer = self._load_state(load_from=state_from,
-                                            model=self.model,
-                                            optimizer=self.optimizer)
+        self._load_state(load_from=state_from,
+                         model=self.model,
+                         optimizer=self.optimizer)
     
     def load_best_state(self):
         state_file = natsorted([fn for fn in os.listdir(self.experiment_path)
                                 if fn.startswith('best_state_dict_')
                                 and fn.endswith('.pth')])[-1]
         state_from = os.path.join(self.experiment_path, state_file)
-        model, optimizer = self._load_state(load_from=state_from,
-                                            model=self.model,
-                                            optimizer=self.optimizer)
+        self._load_state(load_from=state_from,
+                         model=self.model,
+                         optimizer=self.optimizer)
 
     def _get_optimizer(self, name, params, lr=0., opt_kwargs=None, 
                        weight_decay=0.):
