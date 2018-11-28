@@ -942,12 +942,15 @@ class AdaptiveInstanceNorm2d(nn.Module):
         return self.__class__.__name__ + '(' + str(self.num_features) + ')'
 
 
-def grad_norm(module):
+def grad_norm(module, reduce=False):
     """
-    Count the number of parameters in a module.
+    Compute a set of gradient norms, one for every parameter in the module.
+    If `reduce` is True, reduce the set to an average value.
     """
     parameters = filter(lambda p: p.grad is not None, module.parameters())
-    norm = sum([torch.norm(p.grad) for p in parameters])
+    norm = torch.Tensor([torch.norm(p.grad) for p in parameters])
+    if reduce:
+        norm = norm.mean()
     return norm
 
 
