@@ -42,7 +42,7 @@ def get_parser():
     parser = argparse.ArgumentParser(description="DDSM seg.")
     g_exp = parser.add_argument_group('Experiment')
     g_exp.add_argument('--name', type=str, default="")
-    g_exp.add_argument('--data_dir', type=str, default='./data/ddsm')
+    g_exp.add_argument('--data', type=str, default='./data/ddsm/ddsm.h5')
     g_exp.add_argument('--save_path', type=str, default='./experiments')
     mutex_from = g_exp.add_mutually_exclusive_group()
     mutex_from.add_argument('--model_from', type=str, default=None)
@@ -184,7 +184,7 @@ def run():
         da_kwargs=None
     
     # Prepare data.
-    data = prepare_data_ddsm(path=os.path.join(args.data_dir, "ddsm.h5"),
+    data = prepare_data_ddsm(path=args.data,
                              masked_fraction=1.-args.labeled_fraction,
                              drop_masked=args.yield_only_labeled,
                              rng=np.random.RandomState(args.data_seed))
@@ -232,8 +232,7 @@ def run():
             model.train()
         B, A, M = prepare_batch(batch)
         outputs = experiment_state.model['G'](A, B, M,
-                                         optimizer=experiment_state.optimizer,
-                                         class_A=I_A, class_B=I_B)
+                                         optimizer=experiment_state.optimizer)
         outputs = detach(outputs)
         
         # Drop images without labels, for visualization.
@@ -252,8 +251,7 @@ def run():
             model.eval()
         B, A, M = prepare_batch(batch)
         with torch.no_grad():
-            outputs = experiment_state.model['G'](A, B, M, rng=engine.rng,
-                                                  class_A=I_A, class_B=I_B)
+            outputs = experiment_state.model['G'](A, B, M, rng=engine.rng)
         outputs = detach(outputs)
         return outputs
     
@@ -334,12 +332,12 @@ def run():
         initial_epoch=experiment_state.get_epoch(),
         directory=os.path.join(experiment_state.experiment_path, "images"),
         summary_tracker=tracker if args.save_image_events else None,
-        num_vis=min(args.n_vis, args.n_valid),
+        num_vis=args.n_vis,
         output_transform=lambda x: OrderedDict([(k.replace('x_',''), _p(v))
                                                 for k, v in x.items()
                                                 if k.startswith('x_')
                                                 and v is not None]),
-        fontsize=12)
+        fontsize=48)
     save_image.attach(engines['valid'])
     
     '''
