@@ -161,6 +161,7 @@ def preprocessor_ddsm(output_size, data_augmentation_kwargs=None):
     """
     def process_element(inputs):
         h, s, m = inputs
+
         # Float, rescale, center.
         h = h.astype(np.float32)
         s = s.astype(np.float32)
@@ -201,16 +202,18 @@ def preprocessor_ddsm(output_size, data_augmentation_kwargs=None):
     return process_batch
 
 
-def resize(image, size, order=False):
+def resize(image, size, order=1):
+    image = image.copy()
     out_image = np.zeros(image.shape[:-2]+size, dtype=image.dtype)
     for idx in np.ndindex(image.shape[:-2]):
-        if any([a<b for a,b in zip(size, image.shape[-2:])]):
+        if any([a<b for a,b in zip(size, image.shape[-2:])]) and order>0:
             # Downscaling - smooth, first.
             s = [(1-float(a)/b)/2. for a,b in zip(size, image.shape[-2:])]
             image[idx] = filters.gaussian(image[idx], sigma=s)
         out_image[idx] = transform.resize(image[idx],
                                           output_shape=size,
                                           mode='constant',
+                                          order=order,
                                           cval=0,
                                           clip=False,
                                           preserve_range=True)
