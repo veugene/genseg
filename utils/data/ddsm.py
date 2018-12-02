@@ -220,7 +220,8 @@ def resize(image, size, order=1):
     for idx in np.ndindex(image.shape[:-2]):
         if any([a<b for a,b in zip(size, image.shape[-2:])]) and order>0:
             # Downscaling - smooth, first.
-            s = [(1-float(a)/b)/2. for a,b in zip(size, image.shape[-2:])]
+            s = [(1-float(a)/b)/2. if a<b else 0
+                 for a,b in zip(size, image.shape[-2:])]
             image[idx] = filters.gaussian(image[idx], sigma=s)
         out_image[idx] = transform.resize(image[idx],
                                           output_shape=size,
