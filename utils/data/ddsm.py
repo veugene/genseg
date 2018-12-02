@@ -188,6 +188,8 @@ def preprocessor_ddsm(output_size, data_augmentation_kwargs=None):
                                        n_warp_threads=1)
             if m is not None:
                 s, m = _
+            else:
+                s = _
         
         return h, s, m
     
