@@ -179,7 +179,8 @@ def run():
                  'fill_mode': 'reflect',
                  'spline_warp': True,
                  'warp_sigma': 5,
-                 'warp_grid_size': 3}
+                 'warp_grid_size': 3,
+                 'crop_size': (args.output_size, args.output_size)}
     if not args.augment_data:
         da_kwargs=None
     
@@ -195,7 +196,7 @@ def run():
                                    sample_random=True,
                                    batch_size=args.batch_size_train,
                                    preprocessor=preprocessor_ddsm(
-                                       output_size=args.output_size,
+                                       resize_to=int(args.output_size*1.25),
                                        data_augmentation_kwargs=da_kwargs),
                                    nb_io_workers=args.nb_io_workers,
                                    nb_proc_workers=args.nb_proc_workers,
@@ -204,7 +205,8 @@ def run():
                                    sample_random=True,
                                    batch_size=args.batch_size_valid,
                                    preprocessor=preprocessor_ddsm(
-                                       output_size=args.output_size,
+                                       resize_to=int(args.output_size*1.25),
+                                       crop_to=args.output_size,
                                        data_augmentation_kwargs=None),
                                    nb_io_workers=args.nb_io_workers,
                                    nb_proc_workers=args.nb_proc_workers,

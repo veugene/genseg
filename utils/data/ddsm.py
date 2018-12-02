@@ -90,8 +90,6 @@ def prepare_data_ddsm(path, masked_fraction=0, drop_masked=False, rng=None):
     num_cases_total  = len(cases_m['train'])
     num_cases_masked = int(min(num_cases_total,
                                num_cases_total*masked_fraction+0.5))
-    if masked_fraction < 1: # At least 1 unmasked.
-        num_cases_masked = max(num_cases_total-1, num_cases_masked)
     masked_indices = rng.permutation(num_cases_total)[:num_cases_masked]
     print("DEBUG: A total of {}/{} images are labeled."
           "".format(num_cases_total-num_cases_masked, num_cases_total))
@@ -151,11 +149,14 @@ class _list(object):
         return len(self._items)
 
 
-def preprocessor_ddsm(output_size, data_augmentation_kwargs=None):
+def preprocessor_ddsm(resize_to, crop_to=None, data_augmentation_kwargs=None):
     """
     Preprocessor function to pass to a data_flow, for DDSM data.
     
-    output_size : A tuple defining the spatial size to resize all inputs to.
+    resize_to : An int defining the spatial size to resize all inputs to.
+    crop_to : An int defining the spatial size to crop all inputs to,
+        after resizing and data augmentation (if any). Crops are centered.
+        Used for processing images for validation.
     data_augmentation_kwargs : Dictionary of keyword arguments to pass to
         the data augmentation code (image_stack_random_transform).
     """
@@ -169,10 +170,10 @@ def preprocessor_ddsm(output_size, data_augmentation_kwargs=None):
         s = s/2**15 - 1
         
         # Resize.
-        h = resize(h, size=(output_size, output_size), order=1)
-        s = resize(s, size=(output_size, output_size), order=1)
+        h = resize(h, size=(resize_to, resize_to), order=1)
+        s = resize(s, size=(resize_to, resize_to), order=1)
         if m is not None:
-            m = resize(m, size=(output_size, output_size), order=0)
+            m = resize(m, size=(resize_to, resize_to), order=0)
         
         # Expand dims.
         h = np.expand_dims(h, 0)
@@ -190,6 +191,15 @@ def preprocessor_ddsm(output_size, data_augmentation_kwargs=None):
                 s, m = _
             else:
                 s = _
+        
+        # Crop images (centered) -- for validation.
+        if crop_to is not None:
+            assert np.all(h.shape==s.shape)
+            assert np.all(h.shape==m.shape)
+            x, y = np.subtract(h.shape[-2:], crop_to)
+            h = h[:, x:x+crop_to, y:y+crop_to]
+            s = s[:, x:x+crop_to, y:y+crop_to]
+            m = m[:, x:x+crop_to, y:y+crop_to]
         
         return h, s, m
     
