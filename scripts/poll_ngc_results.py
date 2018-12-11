@@ -14,11 +14,15 @@ import time
 
 def get_args():
     parser = argparse.ArgumentParser(description="NGC results polling.")
-    parser.add_argument('--working_dir', type=str, default='./.ngc_meta')
-    parser.add_argument('--target_dir', type=str, default='./experiments')
+    parser.add_argument('--working_dir', type=str, default='./.ngc_meta',
+                        help="temporary data and record of ended jobs")
+    parser.add_argument('--target_dir', type=str, default='./experiments',
+                        help="transfer results here")
     parser.add_argument('--poll_every', type=int, default=240, help="minutes")
     parser.add_argument('--n_workers', type=int, default=32)
     parser.add_argument('--max_download_attempts', type=int, default=5)
+    parser.add_argument('--days', type=int, default=365,
+                        help="max job age")
     args = parser.parse_args()
     return args
 
@@ -94,9 +98,11 @@ def download(job_id, working_dir, target_dir):
 
 
 def update(working_dir, target_dir, local=False, n_workers=32,
-           max_download_attempts=5):
+           max_download_attempts=5, days=365):
     # Read out all job IDs on NGC.
-    output = subprocess.check_output(["ngc batch list"], shell=True)
+    output = subprocess.check_output(["ngc batch list --duration {}D"
+                                      "".format(days)],
+                                     shell=True)
     jobs = scrub(output.decode('utf-8'))
     
     # Create working or target directories, if necessary.
@@ -190,7 +196,8 @@ if __name__=='__main__':
     args = get_args()
     while True:
         update(args.working_dir, args.target_dir, n_workers=args.n_workers,
-               max_download_attempts=args.max_download_attempts)
+               max_download_attempts=args.max_download_attempts,
+               days=args.days)
         print("====")
         for second in range(args.poll_every*60+1):
             now = time.strftime('%H:%M:%S', time.localtime(time.time()))
