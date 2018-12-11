@@ -108,7 +108,6 @@ class experiment(object):
         def checkpoint_handler_train(engine):
             model_save_dict = self.get_model_save_dict()
             checkpoint_last_handler(engine, model_save_dict)
-            self._increment_epoch(engine)
         trainer.add_event_handler(Events.EPOCH_COMPLETED,
                                   checkpoint_handler_train)
         
