@@ -68,7 +68,7 @@ class segmentation_model(nn.Module):
                  relativistic=False, grad_penalty=None, disc_clip_norm=None,
                  gen_clip_norm=None,  lambda_disc=1, lambda_x_id=10,
                  lambda_z_id=1, lambda_f_id=1, lambda_seg=1, lambda_cyc=0,
-                 lambda_mi=1, lambda_slice=0., debug_ac_gan=False, rng=None):
+                 lambda_mi=0, lambda_slice=0., debug_ac_gan=False, rng=None):
         super(segmentation_model, self).__init__()
         lambdas = OrderedDict((
             ('lambda_disc',       lambda_disc),
@@ -277,7 +277,7 @@ class segmentation_model(nn.Module):
 class _forward(nn.Module):
     def __init__(self, encoder, decoder_common, decoder_residual, segmenter,
                  shape_sample, lambda_disc=1, lambda_x_id=10, lambda_z_id=1,
-                 lambda_f_id=1, lambda_seg=1, lambda_cyc=0, lambda_mi=1,
+                 lambda_f_id=1, lambda_seg=1, lambda_cyc=0, lambda_mi=0,
                  lambda_slice=0, rng=None):
         super(_forward, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
@@ -443,7 +443,7 @@ class _loss_D(nn.Module):
     def __init__(self, gan_objective, disc_A, disc_B, classifier_A=None, 
                  classifier_B=None, mi_estimator=None, lambda_disc=1,
                  lambda_x_id=10, lambda_z_id=1, lambda_f_id=1, lambda_seg=1,
-                 lambda_cyc=0, lambda_mi=1, lambda_slice=0,
+                 lambda_cyc=0, lambda_mi=0, lambda_slice=0,
                  debug_ac_gan=False):
         super(_loss_D, self).__init__()
         self._gan               = gan_objective
@@ -515,7 +515,7 @@ class _loss_G(nn.Module):
     def __init__(self, gan_objective, disc_A, disc_B, classifier_A=None, 
                  classifier_B=None, mi_estimator=None, loss_rec=mae,
                  lambda_disc=1, lambda_x_id=10, lambda_z_id=1, lambda_f_id=1,
-                 lambda_seg=1, lambda_cyc=0, lambda_mi=1, lambda_slice=0,
+                 lambda_seg=1, lambda_cyc=0, lambda_mi=0, lambda_slice=0,
                  debug_ac_gan=False):
         super(_loss_G, self).__init__()
         self._gan               = gan_objective
