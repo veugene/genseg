@@ -179,8 +179,12 @@ class experiment(object):
             def parse(arg):
                 # Helper function for args when passed as dict, with
                 # model names as keys.
-                if isinstance(arg, dict) and key in arg:
-                    return arg[key]
+                if isinstance(arg, dict):
+                    if key in arg:
+                        return arg[key]
+                    else:
+                        raise ValueError("Missing entry for {} in optimizer "
+                                         "setup.".format(key))
                 return arg
             model[key].cuda()
             optimizer[key] = self._get_optimizer(
