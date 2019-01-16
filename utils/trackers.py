@@ -265,6 +265,8 @@ class image_logger(object):
         else:
             labels, images = None, output
         num_images = len(images[0])
+        if num_images==0:
+            return
         for stack in images:
             assert len(stack)==num_images
         self._num_seen += num_images
