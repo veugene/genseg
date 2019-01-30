@@ -94,10 +94,11 @@ class setup_mnist_data(object):
         y_test  = y_test.astype(np.int64)
         
         # Split out validation.
+        rng_split = np.random.RandomState(0)    # Hardcode for split.
         if self.n_valid < 0 or self.n_valid > len(x_train):
             raise ValueError("`n_valid` must be in [0, {}] but is {}"
                              "".format(len(x_train), self.n_valid))
-        R = self.rng.permutation(len(x_train))
+        R = rng_split.permutation(len(x_train))
         x_train = x_train[R]
         y_train = y_train[R]
         x_valid = x_train[len(x_train)-self.n_valid:]

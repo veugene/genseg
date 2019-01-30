@@ -1,11 +1,13 @@
 from __future__ import (print_function,
                         division)
-from functools import partial
-from collections import OrderedDict
-import sys
-import os
-import shutil
 import argparse
+from collections import OrderedDict
+from functools import partial
+import os
+import re
+import shutil
+import subprocess
+import sys
 import warnings
 
 import numpy as np
@@ -25,13 +27,12 @@ from utils.trackers import(image_logger,
                            scoring_function,
                            summary_tracker)
 from utils.metrics import (batchwise_loss_accumulator,
-                           dice_loss)
+                           dice_global)
 from utils.data.cluttered_mnist import (setup_mnist_data,
                                         mnist_data_train,
                                         mnist_data_valid,
                                         mnist_data_test)
 from model import configs
-from model.bidomain_segmentation import segmentation_model as model_gan
 from model.ae_segmentation import segmentation_model as model_ae
 
 import itertools
@@ -42,43 +43,137 @@ Process arguments.
 '''
 def get_parser():
     parser = argparse.ArgumentParser(description="Cluttered MNIST seg.")
-    parser.add_argument('--name', type=str, default="")
-    parser.add_argument('--data_dir', type=str, default='./data/mnist')
-    parser.add_argument('--save_path', type=str, default='./experiments')
-    mutex_parser = parser.add_mutually_exclusive_group()
-    mutex_parser.add_argument('--model_from', type=str, default=None)
-    mutex_parser.add_argument('--resume_from', type=str, default=None)
-    parser.add_argument('--weight_decay', type=float, default=1e-4)
-    parser.add_argument('--labeled_fraction', type=float, default=0.1)
-    parser.add_argument('--unlabeled_digits', type=int, default=None,
-                        nargs='+')
-    parser.add_argument('--yield_only_labeled', action='store_true')
-    parser.add_argument('--augment_data', action='store_true')
-    parser.add_argument('--batch_size_train', type=int, default=20)
-    parser.add_argument('--batch_size_valid', type=int, default=20)
-    parser.add_argument('--epoch_length', type=int, default=None,
-                        help="By default, the training set is pregenerated. "
-                             "Otherwise, `epoch_length` batches are "
-                             "generated online per epoch.")
-    parser.add_argument('--epochs', type=int, default=200)
-    parser.add_argument('--learning_rate', type=json.loads, default=0.001)
-    parser.add_argument('--opt_kwargs', type=json.loads, default=None)
-    parser.add_argument('--optimizer', type=str, default='amsgrad',
-                        choices=['adam', 'amsgrad', 'rmsprop', 'sgd'])
-    parser.add_argument('--n_clutter', type=int, default=8)
-    parser.add_argument('--size_clutter', type=int, default=10)
-    parser.add_argument('--size_output', type=int, default=100)
-    parser.add_argument('--background_noise', type=float, default=0.01)
-    parser.add_argument('--n_valid', type=int, default=500)
-    parser.add_argument('--n_vis', type=int, default=20)
-    parser.add_argument('--cpu', default=False, action='store_true')
-    parser.add_argument('--nb_io_workers', type=int, default=1)
-    parser.add_argument('--nb_proc_workers', type=int, default=1)
-    parser.add_argument('--rseed', type=int, default=1234)
+    g_exp = parser.add_argument_group('Experiment')
+    g_exp.add_argument('--name', type=str, default="")
+    g_exp.add_argument('--data_dir', type=str, default='./data/mnist')
+    g_exp.add_argument('--save_path', type=str, default='./experiments')
+    mutex_from = g_exp.add_mutually_exclusive_group()
+    mutex_from.add_argument('--model_from', type=str, default=None)
+    mutex_from.add_argument('--resume_from', type=str, default=None)
+    g_exp.add_argument('--weights_from', type=str, default=None)
+    g_exp.add_argument('--weight_decay', type=float, default=1e-4)
+    g_exp.add_argument('--labeled_fraction', type=float, default=0.1)
+    g_exp.add_argument('--unlabeled_digits', type=int, default=None,
+                       nargs='+')
+    g_exp.add_argument('--yield_only_labeled', action='store_true')
+    g_exp.add_argument('--augment_data', action='store_true')
+    g_exp.add_argument('--batch_size_train', type=int, default=20)
+    g_exp.add_argument('--batch_size_valid', type=int, default=20)
+    g_exp.add_argument('--epoch_length', type=int, default=None,
+                       help="By default, the training set is pregenerated. "
+                            "Otherwise, `epoch_length` batches are "
+                            "generated online per epoch.")
+    g_exp.add_argument('--epochs', type=int, default=200)
+    g_exp.add_argument('--learning_rate', type=json.loads, default=0.001)
+    g_exp.add_argument('--opt_kwargs', type=json.loads, default=None)
+    g_exp.add_argument('--optimizer', type=str, default='amsgrad')
+    g_exp.add_argument('--n_clutter', type=int, default=8)
+    g_exp.add_argument('--size_clutter', type=int, default=10)
+    g_exp.add_argument('--size_output', type=int, default=100)
+    g_exp.add_argument('--background_noise', type=float, default=0.01)
+    g_exp.add_argument('--n_valid', type=int, default=500)
+    g_exp.add_argument('--n_vis', type=int, default=20)
+    g_exp.add_argument('--nb_io_workers', type=int, default=1)
+    g_exp.add_argument('--nb_proc_workers', type=int, default=1)
+    g_exp.add_argument('--save_image_events', action='store_true',
+                       help="Save images into tensorboard event files.")
+    g_exp.add_argument('--init_seed', type=int, default=1234)
+    g_exp.add_argument('--data_seed', type=int, default=0)
+    g_sel = parser.add_argument_group('Cluster select.')
+    mutex_cluster = g_sel.add_mutually_exclusive_group()
+    mutex_cluster.add_argument('--dispatch_dgx', default=False,
+                               action='store_true')
+    mutex_cluster.add_argument('--dispatch_ngc', default=False,
+                               action='store_true')
+    g_dgx = parser.add_argument_group('DGX cluster')
+    g_dgx.add_argument('--cluster_id', type=int, default=425)
+    g_dgx.add_argument('--docker_id', type=str,
+                       default="nvidian_general/"
+                               "9.0-cudnn7-devel-ubuntu16.04_genseg:v2")
+    g_dgx.add_argument('--gpu', type=int, default=1)
+    g_dgx.add_argument('--cpu', type=int, default=2)
+    g_dgx.add_argument('--mem', type=int, default=12)
+    g_dgx.add_argument('--nfs_host', type=str, default="dcg-zfs-03.nvidia.com")
+    g_dgx.add_argument('--nfs_path', type=str,
+                       default="/export/ganloc.cosmos253/")
+    g_ngc = parser.add_argument_group('NGC cluster')
+    g_ngc.add_argument('--ace', type=str, default='nv-us-west-2')
+    g_ngc.add_argument('--instance', type=str, default='ngcv1',
+                       choices=['ngcv1', 'ngcv2', 'ngcv4', 'ngcv8'],
+                       help="Number of GPUs.")
+    g_ngc.add_argument('--image', type=str,
+                       default="nvidian/lpr/"
+                               "9.0-cudnn7-devel-ubuntu16.04_genseg:v2")
+    g_ngc.add_argument('--source_id', type=str, default=None)
+    g_ngc.add_argument('--dataset_id', type=str, default=None)
+    g_ngc.add_argument('--workspace', type=str,
+                       default='8CfEU-RDR_eu5BDfnMypNQ:/workspace')
+    g_ngc.add_argument('--result', type=str, default="/results")
     return parser
 
 
-if __name__ == '__main__':
+def dispatch_dgx():
+    parser = get_parser()
+    args = parser.parse_args()
+    if args.resume_from is not None:
+        with open(os.path.join(args.resume_from, "args.txt"), 'r') as f:
+            saved_args = f.read().split('\n')[1:]
+            name = parser.parse_args(saved_args).name
+    else:
+        name = args.name
+    name = re.sub('[\W]', '_', name)         # Strip non-alphanumeric.
+    pre_cmd = ("export HOME=/tmp; "
+               "export ROOT=/scratch/; "
+               "cd /scratch/ssl-seg-eugene; "
+               "source register_submodules.sh;")
+    cmd = subprocess.list2cmdline(sys.argv)       # Shell executable.
+    cmd = cmd.replace(" --dispatch_dgx", "")          # Remove recursion.
+    cmd = "bash -c '{} python3 {};'".format(pre_cmd, cmd)  # Combine.
+    mount_point = "/scratch"
+    subprocess.run(["dgx", "job", "submit",
+                    "-n", name,
+                    "-i", str(args.docker_id),
+                    "--gpu", str(args.gpu),
+                    "--cpu", str(args.cpu),
+                    "--mem", str(args.mem),
+                    "--clusterid", str(args.cluster_id),
+                    "--volume", "{}@{}:{}".format(args.nfs_path,
+                                                  args.nfs_host,
+                                                  mount_point),
+                    "-c", cmd])
+
+
+def dispatch_ngc():
+    parser = get_parser()
+    args = parser.parse_args()
+    if args.resume_from is not None:
+        with open(os.path.join(args.resume_from, "args.txt"), 'r') as f:
+            saved_args = f.read().split('\n')[1:]
+            name = parser.parse_args(saved_args).name
+    else:
+        name = args.name
+    name = re.sub('[\W]', '_', name)         # Strip non-alphanumeric.
+    pre_cmd = ("cd /repo; "
+               "source register_submodules.sh;")
+    cmd = subprocess.list2cmdline(sys.argv)       # Shell executable.
+    cmd = cmd.replace(" --dispatch_ngc", "")          # Remove recursion.
+    cmd = "bash -c '{} python3 {};'".format(pre_cmd, cmd)  # Combine.
+    share_path = "/export/ganloc.cosmos253/"
+    share_host = "dcg-zfs-03.nvidia.com"
+    mount_point = "/scratch"
+    subprocess.run(["ngc", "batch", "run",
+                    "--name", name,
+                    "--image", args.image,
+                    "--ace", args.ace,
+                    "--instance", args.instance,
+                    "--commandline", cmd,
+                    "--datasetid", args.dataset_id,
+                    "--datasetid", args.source_id,
+                    "--workspace", args.workspace,
+                    "--result", args.result])
+
+
+def run():
     # Disable buggy profiler.
     torch.backends.cudnn.benchmark = True
     
@@ -86,7 +181,7 @@ if __name__ == '__main__':
     experiment_state = experiment(name="mnist", parser=get_parser())
     args = experiment_state.args
     assert args.labeled_fraction > 0
-    torch.manual_seed(args.rseed)
+    torch.manual_seed(args.init_seed)
     
     # Data augmentation settings.
     da_kwargs = {'rotation_range': 3.,
@@ -118,18 +213,15 @@ if __name__ == '__main__':
     
     # Function to convert data to pytorch usable form.
     def prepare_batch(batch):
-        s, h, m = batch
+        h, s, m = batch
         # Prepare for pytorch.
-        s = Variable(torch.from_numpy(s))
-        h = Variable(torch.from_numpy(h))
-        if not args.cpu:
-            s = s.cuda()
-            h = h.cuda()
-        return s, h, m
+        h = Variable(torch.from_numpy(h)).cuda()
+        s = Variable(torch.from_numpy(s)).cuda()
+        return h, s, m
     
     # Prepare data.
     data = setup_mnist_data(
-        data_dir='./data/mnist',
+        data_dir=args.data_dir,
         n_valid=args.n_valid,
         n_clutter=args.n_clutter,
         size_clutter=args.size_clutter,
@@ -140,7 +232,7 @@ if __name__ == '__main__':
         gen_train_online=args.epoch_length is not None,
         background_noise=args.background_noise,
         verbose=True,
-        rng=np.random.RandomState(args.rseed))
+        rng=np.random.RandomState(args.data_seed))
     n_samples_train = None if args.epoch_length is None \
                            else args.epoch_length*args.batch_size_train
     loader = {
@@ -149,7 +241,7 @@ if __name__ == '__main__':
                             batch_size=args.batch_size_train,
                             sample_random=True,
                             preprocessor=preprocessor(warp=args.augment_data),
-                            rng=np.random.RandomState(args.rseed),
+                            rng=np.random.RandomState(args.init_seed),
                             nb_io_workers=args.nb_io_workers,
                             nb_proc_workers=args.nb_proc_workers),
         'valid': data_flow([mnist_data_valid(data)],
@@ -165,17 +257,17 @@ if __name__ == '__main__':
     
     # Helper for training/validation loops : detach variables from graph.
     def detach(x):
-        detached = dict([(k, v.detach())
-                         if isinstance(v, Variable)
-                         else (k, v)
-                         for k, v in x.items()])
+        detached = OrderedDict([(k, v.detach())
+                                if isinstance(v, Variable)
+                                else (k, v)
+                                for k, v in x.items()])
         return detached
     
     # Training loop.
     def training_function(engine, batch):
         for model in experiment_state.model.values():
             model.train()
-        A, B, M = prepare_batch(batch)
+        B, A, M = prepare_batch(batch)
         outputs = experiment_state.model['G'](A, B, M,
                                          optimizer=experiment_state.optimizer)
         outputs = detach(outputs)
@@ -185,7 +277,7 @@ if __name__ == '__main__':
     def validation_function(engine, batch):
         for model in experiment_state.model.values():
             model.eval()
-        A, B, M = prepare_batch(batch)
+        B, A, M = prepare_batch(batch)
         outputs = OrderedDict(zip(['x_A', 'x_B'], [A, B]))
         with torch.no_grad():
             _outputs = experiment_state.model['G'](A, B, M, rng=engine.rng)
@@ -220,14 +312,14 @@ if __name__ == '__main__':
     metrics = {}
     for key in engines:
         metrics[key] = {}
-        metrics[key]['dice'] = dice_loss(target_class=1,
+        metrics[key]['dice'] = dice_global(target_class=1,
                         output_transform=lambda x: (x['x_AM'], x['x_M']))
-        if isinstance(experiment_state.model, model_ae):
+        metrics[key]['rec']  = batchwise_loss_accumulator(
+                            output_transform=lambda x: x['l_rec'])
+        if isinstance(experiment_state.model['G'], model_ae):
             metrics[key]['loss'] = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_all'])
-            metrics[key]['rec']  = batchwise_loss_accumulator(
-                            output_transform=lambda x: x['l_rec'])
-        if isinstance(experiment_state.model, model_gan):
+        else:
             metrics[key]['G']    = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_G'])
             metrics[key]['DA']   = batchwise_loss_accumulator(
@@ -253,18 +345,13 @@ if __name__ == '__main__':
     # Set up tensorboard logging for losses.
     tracker = summary_tracker(experiment_state.experiment_path,
                               initial_epoch=experiment_state.get_epoch())
-    def _tuple(x):
-        if isinstance(x, torch.Tensor) and x.dim()>0:
-            return (torch.mean(x, dim=0), len(x))
-        return (x, 1)
     for key in ['train', 'valid']:
         tracker.attach(
             engine=engines[key],
             prefix=key,
-            output_transform=lambda x: dict([(k, _tuple(v))
+            output_transform=lambda x: dict([(k, v)
                                              for k, v in x.items()
-                                             if k.startswith('l_')
-                                             or k.startswith('prob')]),
+                                             if k.startswith('l_')]),
             metric_keys=['dice'])
     
     # Set up image logging to tensorboard.
@@ -272,13 +359,14 @@ if __name__ == '__main__':
     save_image = image_logger(
         initial_epoch=experiment_state.get_epoch(),
         directory=os.path.join(experiment_state.experiment_path, "images"),
-        summary_tracker=tracker,
+        summary_tracker=tracker if args.save_image_events else None,
         num_vis=min(args.n_vis, args.n_valid),
         output_transform=lambda x: OrderedDict([(k.replace('x_',''), _p(v))
                                                 for k, v in x.items()
                                                 if k.startswith('x_')
-                                                and v is not None]))
-    save_image.attach(engines['valid'], name='save_image')
+                                                and v is not None]),
+        fontsize=12)
+    save_image.attach(engines['valid'])
     
     '''
     Train.
@@ -290,3 +378,18 @@ if __name__ == '__main__':
     '''
     print("\nTESTING\n")
     engines['test'].run(loader['test'])
+    print("\nTESTING ON BEST CHECKPOINT\n")
+    experiment_state.load_best_state()
+    engines['test'].run(loader['test'])
+
+if __name__ == '__main__':
+    parser = get_parser()
+    args = parser.parse_args()
+    if args.dispatch_dgx:
+        dispatch_dgx()
+    elif args.dispatch_ngc:
+        dispatch_ngc()
+    elif args.model_from is None and args.resume_from is None:
+        parser.print_help()
+    else:
+        run()

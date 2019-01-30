@@ -942,27 +942,32 @@ class AdaptiveInstanceNorm2d(nn.Module):
         return self.__class__.__name__ + '(' + str(self.num_features) + ')'
 
 
-def grad_norm(module):
+def grad_norm(module, reduce=False):
     """
-    Count the number of parameters in a module.
+    Compute a set of gradient norms, one for every parameter in the module.
+    If `reduce` is True, reduce the set to an average value.
     """
     parameters = filter(lambda p: p.grad is not None, module.parameters())
-    norm = sum([torch.norm(p.grad) for p in parameters])
+    norm = torch.Tensor([torch.norm(p.grad) for p in parameters])
+    if reduce:
+        norm = norm.mean()
     return norm
 
 
-def recursive_spectral_norm(module):
+def recursive_spectral_norm(module, types=None):
     """
     Recursively traverse submodules in a module and apply spectral norm to
     all convolutional layers.
     """
+    if types is None:
+        types = tuple()
     for m in module.modules():
         if isinstance(m, (nn.Conv1d,
                           nn.Conv2d,
                           nn.Conv3d,
                           nn.ConvTranspose1d,
                           nn.ConvTranspose2d,
-                          nn.ConvTranspose3d)):
+                          nn.ConvTranspose3d)+types):
             if not hasattr(m, '_has_spectral_norm'):
                 spectral_norm(m)
             setattr(m, '_has_spectral_norm', True)

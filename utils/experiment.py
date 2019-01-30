@@ -23,15 +23,14 @@ class experiment(object):
     """
     def __init__(self, name, parser):
         self.name = name
+        self._epoch = [0]
         
         # Set up model, and optimizers.
         args = parser.parse_args()
-        self._epoch = [0]
         if args.resume_from is None:
             model, optimizer = self._init_state(
                                      model_from=args.model_from,
                                      optimizer_name=args.optimizer,
-                                     cpu=args.cpu,
                                      learning_rate=args.learning_rate,
                                      opt_kwargs=args.opt_kwargs,
                                      weight_decay=args.weight_decay)
@@ -40,6 +39,10 @@ class experiment(object):
                 save_path=args.save_path)
             self.experiment_path = experiment_path
             self.experiment_id = experiment_id
+            if args.weights_from is not None:
+                # Load weights from specified checkpoint.
+                self._load_state(load_from=args.weights_from, model=model)
+                self._epoch[0] = 0
         else:
             args = self._load_and_merge_args(parser)
             state_file = natsorted([fn for fn in os.listdir(args.resume_from)
@@ -50,14 +53,11 @@ class experiment(object):
             model, optimizer = self._init_state(
                                      model_from=state_from,
                                      optimizer_name=args.optimizer,
-                                     cpu=args.cpu,
                                      learning_rate=args.learning_rate,
                                      opt_kwargs=args.opt_kwargs,
                                      weight_decay=args.weight_decay)
-            model, optimizer = self._load_state(
-                                     load_from=state_from,
-                                     model=model,
-                                     optimizer=optimizer)
+            self._load_state(load_from=state_from,
+                             model=model, optimizer=optimizer)
             self.experiment_path = args.resume_from
         self.args = args
         self.model = model
@@ -91,19 +91,6 @@ class experiment(object):
     
     def setup_checkpoints(self, trainer, evaluator=None,
                           score_function=None, n_saved=2):
-        # Checkpoint for best model performance.
-        checkpoint_best_handler = None
-        if evaluator is not None:
-            checkpoint_best_handler = ModelCheckpoint(
-                                        dirname=self.experiment_path,
-                                        filename_prefix='best_state',
-                                        n_saved=n_saved,
-                                        score_function=score_function,
-                                        atomic=True,
-                                        create_dir=True,
-                                        require_empty=False)
-            checkpoint_best_handler._iteration = self._epoch[0]
-        
         # Checkpoint at every epoch and increment epoch in
         # `self.model_save_dict`.
         checkpoint_last_handler = ModelCheckpoint(
@@ -118,18 +105,36 @@ class experiment(object):
         
         # Function to update state dicts, call checkpoint handlers, and
         # increment epoch count.
-        def checkpoint_handler(engine):
+        def checkpoint_handler_train(engine):
             model_save_dict = self.get_model_save_dict()
             checkpoint_last_handler(engine, model_save_dict)
-            checkpoint_best_handler(engine, model_save_dict)
-            self._increment_epoch(engine)
-        trainer.add_event_handler(Events.EPOCH_COMPLETED, checkpoint_handler)
+        trainer.add_event_handler(Events.EPOCH_COMPLETED,
+                                  checkpoint_handler_train)
         
         # Setup initial epoch in the training engine.
         trainer.add_event_handler(Events.STARTED,
                                   lambda engine: setattr(engine.state,
                                                          "epoch",
                                                          self._epoch[0]))
+        
+        # Checkpoint for best model performance.
+        checkpoint_best_handler = None
+        if evaluator is not None:
+            checkpoint_best_handler = ModelCheckpoint(
+                                        dirname=self.experiment_path,
+                                        filename_prefix='best_state',
+                                        n_saved=1,
+                                        score_function=score_function,
+                                        atomic=True,
+                                        create_dir=True,
+                                        require_empty=False)
+            checkpoint_best_handler._iteration = self._epoch[0]
+            def checkpoint_handler_valid(engine):
+                model_save_dict = self.get_model_save_dict()
+                checkpoint_best_handler(engine, model_save_dict)
+                self._increment_epoch(engine)
+            evaluator.add_event_handler(Events.EPOCH_COMPLETED,
+                                        checkpoint_handler_valid)
 
     def get_epoch(self):
         return self._epoch[0]
@@ -138,8 +143,8 @@ class experiment(object):
         self._epoch[0] += 1
         engine.epoch = self._epoch
     
-    def _init_state(self, model_from, optimizer_name, cpu=False,
-                    learning_rate=0., opt_kwargs=None, weight_decay=0.):
+    def _init_state(self, model_from, optimizer_name, learning_rate=0.,
+                    opt_kwargs=None, weight_decay=0.):
         '''
         Initialize the model, its state, and the optimizer's state.
 
@@ -174,11 +179,14 @@ class experiment(object):
             def parse(arg):
                 # Helper function for args when passed as dict, with
                 # model names as keys.
-                if isinstance(arg, dict) and key in arg:
-                    return arg[key]
+                if isinstance(arg, dict):
+                    if key in arg:
+                        return arg[key]
+                    else:
+                        raise ValueError("Missing entry for {} in optimizer "
+                                         "setup.".format(key))
                 return arg
-            if not cpu:
-                model[key].cuda()
+            model[key].cuda()
             optimizer[key] = self._get_optimizer(
                                             name=parse(optimizer_name),
                                             params=model[key].parameters(),
@@ -188,21 +196,39 @@ class experiment(object):
         
         return model, optimizer
     
-    def _load_state(self, load_from, model, optimizer):
+    def _load_state(self, load_from, model, optimizer=None):
         '''
         Restore the model, its state, and the optimizer's state.
         '''
         saved_dict = torch.load(load_from)
         for key in model.keys():
             model[key].load_state_dict(saved_dict[key]['model_state'])
-            optimizer[key].load_state_dict(saved_dict[key]['optimizer_state'])
+            if optimizer is not None:
+                optimizer[key].load_state_dict(
+                                   saved_dict[key]['optimizer_state'])
         
         # Experiment metadata.
         self.experiment_id = saved_dict['experiment_id']
         self._epoch[0] = saved_dict['epoch'][0]+1
         self.model_as_str = saved_dict['model_as_str']
-        
-        return model, optimizer
+    
+    def load_last_state(self):
+        state_file = natsorted([fn for fn in os.listdir(self.experiment_path)
+                                if fn.startswith('state_dict_')
+                                and fn.endswith('.pth')])[-1]
+        state_from = os.path.join(self.experiment_path, state_file)
+        self._load_state(load_from=state_from,
+                         model=self.model,
+                         optimizer=self.optimizer)
+    
+    def load_best_state(self):
+        state_file = natsorted([fn for fn in os.listdir(self.experiment_path)
+                                if fn.startswith('best_state_dict_')
+                                and fn.endswith('.pth')])[-1]
+        state_from = os.path.join(self.experiment_path, state_file)
+        self._load_state(load_from=state_from,
+                         model=self.model,
+                         optimizer=self.optimizer)
 
     def _get_optimizer(self, name, params, lr=0., opt_kwargs=None, 
                        weight_decay=0.):

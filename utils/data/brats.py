@@ -9,7 +9,6 @@ from data_tools.data_augmentation import image_random_transform
  
 def prepare_data_brats17(path_hgg, path_lgg,
                          masked_fraction=0, drop_masked=False,
-                         orientations=None,
                          rng=None):
     # Random 20% data split.
     rnd_state = np.random.RandomState(0)
@@ -24,12 +23,10 @@ def prepare_data_brats17(path_hgg, path_lgg,
                                masked_fraction=masked_fraction,
                                validation_indices=validation_indices,
                                drop_masked=drop_masked,
-                               orientations=orientations,
                                rng=rng)
 
 def prepare_data_brats13s(path_hgg, path_lgg,
                           masked_fraction=0, drop_masked=False,
-                          orientations=None,
                           rng=None):
     rnd_state = np.random.RandomState(0)
     hgg_indices = np.arange(0, 25)
@@ -43,12 +40,11 @@ def prepare_data_brats13s(path_hgg, path_lgg,
                                masked_fraction=masked_fraction,
                                validation_indices=validation_indices,
                                drop_masked=drop_masked,
-                               orientations=orientations,
                                rng=rng)
 
 def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
                         masked_fraction=0, drop_masked=False,
-                        orientations=None, rng=None):
+                        rng=None):
     """
     Convenience function to prepare brats data as multi_source_array objects,
     split into training and validation subsets.
@@ -58,20 +54,19 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
     masked_fraction (float) : The fraction in [0, 1.] of volumes in the 
         training set for which  to return segmentation masks as None
     drop_masked (bool) : Whether to omit volumes with "masked" segmentations.
-    orientations (list) : A list of integers in {1, 2, 3}, specifying the
-        axes along which to slice image volumes.
     rng (numpy RandomState) : Random number generator.
+    
+    NOTE: A constant random seed (0) is always used to determine the training/
+    validation split. The rng passed for data preparation is used to determine
+    which labels to mask out (if any); if none is passed, the default uses a
+    random seed of 0.
     
     Returns six arrays: healthy slices, sick slices, and segmentations for 
     the training and validation subsets.
     """
     
-    if orientations is None:
-        orientations = [1,2,3]
-    elif not hasattr(orientations, '__len__'):
-        orientations = [orientations]
     if rng is None:
-        rng = np.random.RandomState()
+        rng = np.random.RandomState(0)
     if masked_fraction < 0 or masked_fraction > 1:
         raise ValueError("`masked_fraction` must be in [0, 1].")
         
@@ -92,115 +87,121 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
         raise Exception("Max validation index is {} but len(lgg) is {}".
                         format(max_lgg_idx, num_lgg))
     
-    training_indices = {'hgg': [i for i in range(num_hgg) \
-                                if i not in validation_indices['hgg']],
-                        'lgg': [i for i in range(num_lgg) \
-                                if i not in validation_indices['lgg']]}
-    
-    # Volumes with these indices will either be dropped from the training_set
-    # or have their segmentations set to None.
-    masked_indices = {
-        'hgg': rng.choice(num_hgg,
-                          size=int(min(num_hgg, masked_fraction*num_hgg+0.5)),
-                          replace=False),
-        'lgg': rng.choice(num_lgg,
-                          size=int(min(num_lgg, masked_fraction*num_lgg+0.5)),
-                          replace=False)
-        }
-    if drop_masked:
-        for key in masked_indices.keys():
-            training_indices[key] = [i for i in training_indices[key] \
-                                     if i not in masked_indices[key]]
-            masked_indices[key] = []
-    
-    def _prepare(path, axis, key):
-        # Open h5py file.
+    # Assemble volumes and corresponding segmentations; split train/valid.
+    path = OrderedDict((('hgg', path_hgg), ('lgg', path_lgg)))
+    volumes_h = {'train': [], 'valid': []}
+    volumes_s = {'train': [], 'valid': []}
+    volumes_m = {'train': [], 'valid': []}
+    indices_h = {'train': [], 'valid': []}
+    indices_s = {'train': [], 'valid': []}
+    for key, path in path.items():
         try:
             h5py_file = h5py.File(path, mode='r')
         except:
             print("Failed to open data: {}".format(path))
             raise
-        
-        # Assemble volumes and corresponding segmentations.
-        volumes_h = []
-        volumes_s = []
-        segmentations = []
-        for _key in h5py_file.keys():   # Per patient.
-            group_p = h5py_file[_key]
-            volumes_h.append(group_p['healthy/axis_{}'.format(str(axis))])
-            volumes_s.append(group_p['sick/axis_{}'.format(str(axis))])
-            segmentations.append(\
-                        group_p['segmentation/axis_{}'.format(str(axis))])
-        
-        # Split data into training and validation.
-        h_train = [volumes_h[i] for i in training_indices[key]]
-        h_valid = [volumes_h[i] for i in validation_indices[key]]
-        s_train = [volumes_s[i] for i in training_indices[key]]
-        s_valid = [volumes_s[i] for i in validation_indices[key]]
-        m_train = [segmentations[i] if i not in masked_indices[key]
-                   else np.array([None]*len(segmentations[i]))
-                   for i in training_indices[key]]
-        m_valid = [segmentations[i] for i in validation_indices[key]]
-        
-        return h_train, h_valid, s_train, s_valid, m_train, m_valid
-    
-    def _extend(target, source):
-        for i in range(len(source)):
-            if len(target) < len(source):
-                target.append(source[i])
+        for idx, case_id in enumerate(h5py_file.keys()):   # Per patient.
+            f = h5py_file[case_id]
+            if idx in validation_indices[key]:
+                split = 'valid'
             else:
-                target[i].extend(source[i])
-        return target
+                split = 'train'
+            volumes_h[split].append(f['healthy'])
+            volumes_s[split].append(f['sick'])
+            volumes_m[split].append(f['segmentation'])
+            indices_h[split].append(f['h_indices'])
+            indices_s[split].append(f['s_indices'])
+
+    # Volumes with these indices will either be dropped from the training
+    # set or have their segmentations set to None.
+    # 
+    # The `masked_fraction` determines the maximal fraction of slices that
+    # are to be thus removed. All or none of the slices are selected for 
+    # each volume.
+    masked_indices = []
+    num_total_slices = sum([len(v) for v in volumes_m['train']])
+    num_masked_slices = 0
+    max_masked_slices = int(min(num_total_slices,
+                                num_total_slices*masked_fraction+0.5))
+    for i in rng.permutation(len(volumes_m['train'])):
+        num_slices = len(volumes_m['train'][i])
+        if num_slices>0 and num_masked_slices >= max_masked_slices:
+            continue    # Stop masking non-empty volumes (mask empty).
+        if num_slices+num_masked_slices >= max_masked_slices:
+            continue    # Stop masking non-empty volumes (mask empty).
+        masked_indices.append(i)
+        num_masked_slices += num_slices
+    print("DEBUG: A total of {}/{} slices are labeled across {} "
+          "volumes ({:.1f}%)."
+          "".format(num_total_slices-num_masked_slices,
+                    num_total_slices,
+                    len(volumes_m['train'])-len(masked_indices),
+                    100*(1-num_masked_slices/float(num_total_slices))))
     
-    data_hgg = []
-    data_lgg = []
-    for axis in orientations:
-        _extend(data_hgg, _prepare(path_hgg, axis=axis, key='hgg'))
-        _extend(data_lgg, _prepare(path_lgg, axis=axis, key='lgg'))
+    # Apply masking in one of two ways.
+    # 
+    # 1. Mask out the labels for volumes indexed with `masked_indices` by 
+    # setting the segmentations volume as an array of `None`, with length 
+    # equal to the number of slices in the volume.
+    # 
+    # OR if `drop_masked` is True:
+    # 
+    # 2. Remove all volumes indexed with `masked_indices`.
+    volumes_h_train = []
+    volumes_s_train = []
+    volumes_m_train = []
+    indices_h_train = []
+    indices_s_train = []
+    for i in range(len(volumes_m['train'])):
+        if i in masked_indices:
+            # Mask out or drop.
+            if drop_masked:
+                continue    # Drop.
+            volumes_m_train.append(np.array([None]*len(volumes_m['train'][i])))
+        else:
+            # Keep.
+            volumes_m_train.append(volumes_m['train'][i])
+        volumes_h_train.append(volumes_h['train'][i])
+        volumes_s_train.append(volumes_s['train'][i])
+        indices_h_train.append(indices_h['train'][i])
+        indices_s_train.append(indices_s['train'][i])
+    volumes_h['train'] = volumes_h_train
+    volumes_s['train'] = volumes_s_train
+    volumes_m['train'] = volumes_m_train
+    indices_h['train'] = indices_h_train
+    indices_s['train'] = indices_s_train
     
+    # Merge all arrays in each list of arrays.
     data = OrderedDict([('train', OrderedDict()),
                         ('valid', OrderedDict())])
-    msa = multi_source_array
-    train_h = data_hgg[0]+data_lgg[0]
-    valid_h = data_hgg[1]+data_lgg[1]
-    train_s = data_hgg[2]+data_lgg[2]
-    valid_s = data_hgg[3]+data_lgg[3]
-    train_m = data_hgg[4]+data_lgg[4]
-    valid_m = data_hgg[5]+data_lgg[5]
-
-    # HACK: we may have a situation where the number of sick examples
-    # is greater than the number of healthy. In that case, we should
-    # duplicate the healthy set M times so that it has a bigger size
-    # than the sick set.
-    m = 1
-    len_h = sum([ len(elem) for elem in train_h])
-    len_s = sum([ len(elem) for elem in train_s])
-    if len_h < len_s:
-        m = int(np.ceil(len_s / len_h))
-    data['train']['h'] = msa(train_h*m, no_shape=True)
-    data['valid']['h'] = msa(valid_h*m, no_shape=True)
-    data['train']['s'] = msa(train_s, no_shape=True)
-    data['valid']['s'] = msa(valid_s, no_shape=True)
-    data['train']['m'] = msa(train_m, no_shape=True)
-    data['valid']['m'] = msa(valid_m, no_shape=True)
-        
+    for key in data.keys():
+        # HACK: we may have a situation where the number of sick examples
+        # is greater than the number of healthy. In that case, we should
+        # duplicate the healthy set M times so that it has a bigger size
+        # than the sick set.
+        m = 1
+        len_h = sum([len(elem) for elem in volumes_h[key]])
+        len_s = sum([len(elem) for elem in volumes_s[key]])
+        if len_h < len_s:
+            m = int(np.ceil(len_s / len_h))
+        data[key]['h']  = multi_source_array(volumes_h[key]*m, no_shape=True)
+        data[key]['s']  = multi_source_array(volumes_s[key],   no_shape=True)
+        data[key]['m']  = multi_source_array(volumes_m[key],   no_shape=True)
+        data[key]['hi'] = multi_source_array(indices_h[key]*m, no_shape=True)
+        data[key]['si'] = multi_source_array(indices_s[key],   no_shape=True)
     return data
 
 
-def preprocessor_brats(data_augmentation_kwargs=None,
-                       h_idx=0, s_idx=1, m_idx=2):
+def preprocessor_brats(data_augmentation_kwargs=None):
     """
     Preprocessor function to pass to a data_flow, for BRATS data.
     
     data_augmentation_kwargs : Dictionary of keyword arguments to pass to
         the data augmentation code (image_stack_random_transform).
-    h_idx : The batch index for the healthy slices (None if not in batch).
-    s_idx : The batch index for the sick slices (None if not in batch).
-    m_idx : The batch index for the segmentation masks (None if not in batch).
     """
         
-    def process_element(h, s, m, max_shape):
-        inputs = [h, s, m]
+    def process_element(inputs, max_shape):
+        h, s, m, hi, si = inputs
         
         # Center slices onto empty buffers with a size equal to the largest.
         elem = []
@@ -234,7 +235,7 @@ def preprocessor_brats(data_augmentation_kwargs=None,
                 s = _
                         
         # Set background intensity.
-        for im, im_orig in zip([h, s, m], inputs):
+        for im, im_orig in zip([h, s, m], inputs[:-2]):
             if im is None:
                 continue
             # HACK: Assuming corner pixel is always outside of the brain.
@@ -253,19 +254,22 @@ def preprocessor_brats(data_augmentation_kwargs=None,
         
         # Set dtype (all output buffers are float32 to support inf).
         elem = []
-        for im, im_orig in zip([h, s, m], inputs):
+        for im, im_orig in zip([h, s, m], inputs[:-2]):
             if im is None:
                 elem.append(None)
                 continue
             im = im.astype(im_orig.dtype)
             elem.append(im)
+        
+        # Append indices.
+        elem.extend(inputs[-2:])
             
         return elem
         
-    def process_batch(batch):        
+    def process_batch(batch):
         # Find the largest slice.
         max_shape = (0,0)
-        for b in batch:
+        for b in batch[:-2]:
             for im in b:
                 if im is None:
                     continue
@@ -276,17 +280,9 @@ def preprocessor_brats(data_augmentation_kwargs=None,
         # Process every element.
         elements = []
         for i in range(len(batch[0])):
-            h = None if h_idx is None else batch[h_idx][i]
-            s = None if s_idx is None else batch[s_idx][i]
-            m = None if m_idx is None else batch[m_idx][i]
-            elem = process_element(h=h, s=s, m=m, max_shape=max_shape)
+            elem = process_element([b[i] for b in batch], max_shape=max_shape)
             elements.append(elem)
         out_batch = list(zip(*elements))
-        
-        # Drop batch indices that are passed as `None`.
-        out_batch = [out_batch[i] \
-                     for i, elem_idx in enumerate([h_idx, s_idx, m_idx]) \
-                     if elem_idx is not None]
         
         return out_batch
     

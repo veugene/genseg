@@ -1,7 +1,6 @@
 import torch
 from ignite.engine import Events
 from ignite.metrics import Metric
-from fcn_maker.loss import dice_loss as _dice_loss
 
 
 class metric(Metric):
@@ -30,7 +29,7 @@ class metric(Metric):
         engine.add_event_handler(Events.EPOCH_COMPLETED, self.completed, name)
 
 
-class dice_loss(metric):
+class dice_global(metric):
     '''
     Global Dice metric. Accumulates counts over the course of an epoch.
     
@@ -41,7 +40,7 @@ class dice_loss(metric):
     '''
     def __init__(self, target_class, prediction_index=0, mask_class=None,
                  output_transform=lambda x: x):
-        super(dice_loss, self).__init__(output_transform)
+        super(dice_global, self).__init__(output_transform)
         if not hasattr(target_class, '__len__'):
             self.target_class = [target_class]
         else:

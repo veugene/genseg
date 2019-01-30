@@ -11,6 +11,7 @@ except ImportError:
     import Queue as queue   # python 2
 
 import numpy as np
+import scipy.misc
 from scipy import ndimage
 import SimpleITK as sitk
 import h5py
@@ -51,6 +52,10 @@ def parse():
     parser.add_argument('--num_threads',
                         help="The number of parallel threads to execute.",
                         required=False, type=int, default=None)
+    parser.add_argument('--save_debug_to',
+                        help="Save images of each slice to this directory, "
+                             "for inspection.",
+                        required=False, type=str, default=None)
     return parser.parse_args()
 
 
@@ -99,7 +104,7 @@ def data_loader(data_dir, crop=True):
         yield volume, segmentation, dn
         
         
-def get_slices(volume, segmentation, brain_mask,
+def get_slices(volume, segmentation, brain_mask, indices,
                min_tumor_fraction, min_brain_fraction):
     
     assert min_tumor_fraction>=0 and min_tumor_fraction<=1
@@ -123,16 +128,19 @@ def get_slices(volume, segmentation, brain_mask,
             continue
         tumor_fraction = count_tumor/float(count_brain)
         brain_fraction = count_brain/float(count_total)
-        if tumor_fraction>min_tumor_fraction:
-            indices_anomaly.append(i)
-        if count_tumor==0 and brain_fraction>min_brain_fraction:
-            indices_healthy.append(i)
+        if brain_fraction>min_brain_fraction:
+            if tumor_fraction>min_tumor_fraction:
+                indices_anomaly.append(i)
+            if count_tumor==0:
+                indices_healthy.append(i)
     
     # Sort slices.
     slices_dict = OrderedDict()
     slices_dict['healthy'] = volume[indices_healthy]
     slices_dict['sick'] = volume[indices_anomaly]
     slices_dict['segmentation'] = segmentation[indices_anomaly]
+    slices_dict['h_indices'] = indices[indices_healthy]
+    slices_dict['s_indices'] = indices[indices_anomaly]
     
     return slices_dict
 
@@ -156,6 +164,16 @@ def preprocess(volume, segmentation, skip_bias_correction=False):
     brain_mask = volume_out!=0
     volume_out[brain_mask] -= volume_out[brain_mask].mean()
     volume_out[brain_mask] /= volume_out[brain_mask].std()*5
+    
+    # Get slice indices, with 0 at the center.
+    #brain_mask_ax1 = brain_mask.sum(axis=(0,2,3))>0
+    #idx_min = np.argmax(brain_mask_ax1)
+    #idx_max = len(brain_mask_ax1)-1-np.argmax(np.flipud(brain_mask_ax1))
+    #idx_mid = (idx_max-idx_min)//2
+    #a = idx_mid-len(brain_mask_ax1)
+    #b = len(brain_mask_ax1)+a-1
+    #indices = np.arange(a, b)
+    indices = np.arange(brain_mask.shape[1])
         
     # Split volume along hemispheres.
     mid0 = volume.shape[-1]//2
@@ -168,30 +186,47 @@ def preprocess(volume, segmentation, skip_bias_correction=False):
                                        segmentation[:,:,:,mid1:]], axis=1)
     brain_mask = np.concatenate([brain_mask[:,:,:,:mid0],
                                  brain_mask[:,:,:,mid1:]], axis=1)
+    indices = np.concatenate([indices, indices])
     
-    return volume_out, segmentation_out, brain_mask
+    return volume_out, segmentation_out, brain_mask, indices
 
 
 def process_case(case_num, h5py_file, volume, segmentation, fn,
                  min_tumor_fraction, min_brain_fraction,
-                 skip_bias_correction=False):
+                 skip_bias_correction=False, save_debug_to=None):
     print("Processing case {}: {}".format(case_num, fn))
     group_p = h5py_file.create_group(str(case_num))
     # TODO: set attribute containing fn.
-    vol, seg, m = preprocess(volume, segmentation, skip_bias_correction)
-    slices = get_slices(vol, seg, m, min_tumor_fraction, min_brain_fraction)
+    vol, seg, m, indices = preprocess(volume, segmentation,
+                                      skip_bias_correction)
+    slices = get_slices(vol, seg, m, indices,
+                        min_tumor_fraction, min_brain_fraction)
     for key in slices.keys():
         if len(slices[key])==0:
             kwargs = {}
         else:
             kwargs = {'chunks': (1,)+slices[key].shape[1:],
                       'compression': 'lzf'}
-        group_k = group_p.require_group(key)
-        group_k.create_dataset('axis_1',
+        group_p.create_dataset(key,
                                shape=slices[key].shape,
                                data=slices[key],
                                dtype=slices[key].dtype,
                                **kwargs)
+    
+    # Debug outputs for inspection.
+    if save_debug_to is not None:
+        for key in slices.keys():
+            if "indices" in key:
+                continue
+            dest = os.path.join(save_debug_to, key)
+            if not os.path.exists(dest):
+                os.makedirs(dest)
+            for i in range(len(slices[key])):
+                im = slices[key][i]
+                for ch, im_ch in enumerate(im):
+                    scipy.misc.imsave(os.path.join(dest, "{}_{}_{}.png"
+                                                   "".format(case_num, i, ch)),
+                                      slices[key][i][ch])
                                        
                                        
 class thread_pool_executor(object):
@@ -269,7 +304,8 @@ if __name__=='__main__':
             executor.submit(process_case, i, h5py_file, vol, seg, fn,
                             args.min_tumor_fraction,
                             args.min_brain_fraction,
-                            args.skip_bias_correction)
+                            args.skip_bias_correction,
+                            args.save_debug_to)
         executor.shutdown(wait=True)
     except KeyboardInterrupt:
         pass

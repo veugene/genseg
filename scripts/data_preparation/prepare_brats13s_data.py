@@ -120,13 +120,8 @@ for grade in ['HG', 'LG']:
         healthy_slices = np.asarray(healthy_slices).swapaxes(0,1)
         sick_slices = np.asarray(sick_slices).swapaxes(0,1)
         masks = labels[patient][s_idxs]
-        h5f[patient].create_group('healthy')
-        h5f[patient].create_group('sick')
-        h5f[patient].create_group('segmentation')
-        h5f[patient]['sick'].create_dataset(
-            'axis_1', data=sick_slices)
-        h5f[patient]['segmentation'].create_dataset(
-            'axis_1', data=masks[:,np.newaxis,:,:])
-        h5f[patient]['healthy'].create_dataset(
-            'axis_1', data=healthy_slices)
+        h5f[patient].create_dataset('sick', data=sick_slices)
+        h5f[patient].create_dataset('segmentation',
+                                    data=masks[:,np.newaxis,:,:])
+        h5f[patient].create_dataset('healthy', data=healthy_slices)
     h5f.close()
