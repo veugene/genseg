@@ -75,14 +75,16 @@ def get_parser():
                                action='store_true')
     mutex_cluster.add_argument('--dispatch_ngc', default=False,
                                action='store_true')
+    mutex_cluster.add_argument('--dispatch_canada', default=False,
+                               action='store_true')
     g_dgx = parser.add_argument_group('DGX cluster')
     g_dgx.add_argument('--cluster_id', type=int, default=425)
     g_dgx.add_argument('--docker_id', type=str,
                        default="nvidian_general/"
                                "9.0-cudnn7-devel-ubuntu16.04_genseg:v2")
-    g_dgx.add_argument('--gpu', type=int, default=1)
-    g_dgx.add_argument('--cpu', type=int, default=2)
-    g_dgx.add_argument('--mem', type=int, default=12)
+    g_dgx.add_argument('--gdx_gpu', type=int, default=1)
+    g_dgx.add_argument('--gdx_cpu', type=int, default=2)
+    g_dgx.add_argument('--gdx_mem', type=int, default=12)
     g_dgx.add_argument('--nfs_host', type=str, default="dcg-zfs-03.nvidia.com")
     g_dgx.add_argument('--nfs_path', type=str,
                        default="/export/ganloc.cosmos253/")
@@ -99,6 +101,16 @@ def get_parser():
     g_ngc.add_argument('--workspace', type=str,
                        default='8CfEU-RDR_eu5BDfnMypNQ:/workspace')
     g_ngc.add_argument('--result', type=str, default="/results")
+    g_cca = parser.add_argument_group('Compute Canada cluster')
+    g_cca.add_argument('--account', type=str, default='rpp-bengioy',
+                       choices=['rpp-bengioy', 'def-bengioy'],
+                       help="Use rpp on cedar, def on graham.")
+    g_cca.add_argument('--cca_gpu', type=int, default=1)
+    g_cca.add_argument('--cca_cpu', type=int, default=2)
+    g_cca.add_argument('--cca_mem', type=str, default='12G')
+    g_cca.add_argument('--time', type=str, default='1-00:00',
+                       help="Max run time (DD-HH:MM). Shorter times get "
+                            "higher priority.")
     return parser
 
 
@@ -123,9 +135,9 @@ def dispatch_dgx():
     subprocess.run(["dgx", "job", "submit",
                     "-n", name,
                     "-i", str(args.docker_id),
-                    "--gpu", str(args.gpu),
-                    "--cpu", str(args.cpu),
-                    "--mem", str(args.mem),
+                    "--gpu", str(args.dgx_gpu),
+                    "--cpu", str(args.dgx_cpu),
+                    "--mem", str(args.dgx_mem),
                     "--clusterid", str(args.cluster_id),
                     "--volume", "{}@{}:{}".format(args.nfs_path,
                                                   args.nfs_host,
@@ -161,6 +173,31 @@ def dispatch_ngc():
                     "--datasetid", args.source_id,
                     "--workspace", args.workspace,
                     "--result", args.result])
+
+
+def dispatch_canada():
+    parser = get_parser()
+    args = parser.parse_args()
+    if args.resume_from is not None:
+        with open(os.path.join(args.resume_from, "args.txt"), 'r') as f:
+            saved_args = f.read().split('\n')[1:]
+            name = parser.parse_args(saved_args).name
+    else:
+        name = args.name
+    name = re.sub('[\W]', '_', name)         # Strip non-alphanumeric.
+    pre_cmd = ("cd /scratch/veugene/ssl-seg-eugene\n"
+               "source register_submodules.sh\n"
+               "source activate genseg\n")
+    cmd = subprocess.list2cmdline(sys.argv)       # Shell executable.
+    cmd = cmd.replace(" --dispatch_canada",   "")          # Remove recursion.
+    cmd = "#!/bin/bash\n {}\n python3 {}'".format(pre_cmd, cmd)  # Combine.
+    subprocess.run(["sbatch",
+                    "--account", args.account,
+                    "--gres", 'gpu:{}'.format(args.cca_gpu),
+                    "--cpus-per-task", str(args.cca_cpu),
+                    "--mem", args.cca_mem,
+                    "--time", args.time],
+                   input=cmd.encode('utf-8'))
 
 
 def run():
@@ -401,6 +438,8 @@ if __name__ == '__main__':
         dispatch_dgx()
     elif args.dispatch_ngc:
         dispatch_ngc()
+    elif args.dispatch_canada:
+        dispatch_canada()
     elif args.model_from is None and args.resume_from is None:
         parser.print_help()
     else:
