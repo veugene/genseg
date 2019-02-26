@@ -46,15 +46,13 @@ def get_parser():
     parser = argparse.ArgumentParser(description="BRATS seg.",
                                      parents=[dispatch_parser])
     g_exp = parser.add_argument_group('Experiment')
-    g_exp.add_argument('--name', type=str, default="")
     g_exp.add_argument('--dataset', type=str, default='brats13s',
                        choices=['brats13s', 'brats17'])
     g_exp.add_argument('--data_dir', type=str, default='./data/brats/2013')
     g_exp.add_argument('--slice_conditional', action='store_true')
-    g_exp.add_argument('--save_path', type=str, default='./experiments')
-    mutex_from = g_exp.add_mutually_exclusive_group()
-    mutex_from.add_argument('--model_from', type=str, default=None)
-    mutex_from.add_argument('--resume_from', type=str, default=None)
+    g_exp.add_argument('--path', type=str, default='./experiments')
+    g_exp.add_argument('--model_from', type=str, default=None)
+    g_exp.add_argument('--resume', action='store_true')
     g_exp.add_argument('--weights_from', type=str, default=None)
     g_exp.add_argument('--weight_decay', type=float, default=1e-4)
     g_exp.add_argument('--labeled_fraction', type=float, default=0.1)
@@ -81,7 +79,7 @@ def run():
     torch.backends.cudnn.benchmark = True
     
     # Set up experiment.
-    experiment_state = experiment(name="brats", parser=get_parser())
+    experiment_state = experiment(parser=get_parser())
     args = experiment_state.args
     assert args.labeled_fraction > 0
     torch.manual_seed(args.init_seed)
@@ -187,15 +185,14 @@ def run():
     
     # Get engines.
     engines = {}
-    append = bool(args.resume_from is not None)
     engines['train'] = experiment_state.setup_engine(
                                             training_function,
-                                            append=append,
+                                            append=args.resume,
                                             epoch_length=len(loader['train']))
     engines['valid'] = experiment_state.setup_engine(
                                             validation_function,
                                             prefix='val',
-                                            append=append,
+                                            append=args.resume,
                                             epoch_length=len(loader['valid']))
     engines['valid'].add_event_handler(
         Events.STARTED,

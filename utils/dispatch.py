@@ -1,3 +1,4 @@
+from datetime import datetime
 import os 
 import re
 import subprocess
@@ -16,16 +17,32 @@ Given a parser that contains _all_ of an experiment's arguments (including
 the cluster-specific arguments from `dispatch_parser`), as well as a run()
 method, run the experiment on the specified cluster or locally if no cluster
 is specified.
+
+NOTE: args must contain `model_from`, `path`, and `resume`.
 """
 def dispatch(parser, run):
+    # Get arguments.
     args = parser.parse_args()
+    assert hasattr(args, 'model_from')
+    assert hasattr(args, 'path')
+    assert hasattr(args, 'resume')
+    
+    # If resuming, merge with loaded arguments (newly passed arguments
+    # override loaded arguments).
+    if args.resume:
+        with open(os.path.join(args.resume, "args.txt"), 'r') as f:
+            saved_args = f.read().split('\n')[1:]
+            args = parser.parse_args(saved_args)
+            setattr(args, 'resume', True)
+    
+    # Dispatch on a cluster (or run locally if none specified).
     if args.dispatch_dgx:
-        _dispatch_dgx(parser)
+        _dispatch_dgx(args)
     elif args.dispatch_ngc:
-        _dispatch_ngc(parser)
+        _dispatch_ngc(args)
     elif args.dispatch_canada:
-        _dispatch_canada(parser)
-    elif args.model_from is None and args.resume_from is None:
+        _dispatch_canada(args)
+    elif args.model_from is None and args.resume:
         parser.print_help()
     else:
         run()
@@ -78,14 +95,7 @@ def _get_parser():
     return parser
 
 
-def _dispatch_dgx(parser):
-    args = parser.parse_args()
-    if args.resume_from is not None:
-        with open(os.path.join(args.resume_from, "args.txt"), 'r') as f:
-            saved_args = f.read().split('\n')[1:]
-            name = parser.parse_args(saved_args).name
-    else:
-        name = args.name
+def _dispatch_dgx(args):
     name = re.sub('[\W]', '_', name)         # Strip non-alphanumeric.
     pre_cmd = ("export HOME=/tmp; "
                "export ROOT=/scratch/; "
@@ -108,14 +118,7 @@ def _dispatch_dgx(parser):
                     "-c", cmd])
 
 
-def _dispatch_ngc(parser):
-    args = parser.parse_args()
-    if args.resume_from is not None:
-        with open(os.path.join(args.resume_from, "args.txt"), 'r') as f:
-            saved_args = f.read().split('\n')[1:]
-            name = parser.parse_args(saved_args).name
-    else:
-        name = args.name
+def _dispatch_ngc(args):
     name = re.sub('[\W]', '_', name)         # Strip non-alphanumeric.
     pre_cmd = ("cd /repo; "
                "source register_submodules.sh;")
@@ -137,14 +140,7 @@ def _dispatch_ngc(parser):
                     "--result", args.result])
 
 
-def _dispatch_canada(parser):
-    args = parser.parse_args()
-    if args.resume_from is not None:
-        with open(os.path.join(args.resume_from, "args.txt"), 'r') as f:
-            saved_args = f.read().split('\n')[1:]
-            name = parser.parse_args(saved_args).name
-    else:
-        name = args.name
+def _dispatch_canada(args):
     name = re.sub('[\W]', '_', name)         # Strip non-alphanumeric.
     pre_cmd = ("cd /scratch/veugene/ssl-seg-eugene\n"
                "source register_submodules.sh\n"
@@ -154,6 +150,7 @@ def _dispatch_canada(parser):
     cmd = "#!/bin/bash\n {}\n python3 {}'".format(pre_cmd, cmd)  # Combine.
     subprocess.run(["sbatch",
                     "--account", args.account,
+                    "--job_name", name,
                     "--gres", 'gpu:{}'.format(args.cca_gpu),
                     "--cpus-per-task", str(args.cca_cpu),
                     "--mem", args.cca_mem,

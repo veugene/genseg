@@ -1,4 +1,3 @@
-from datetime import datetime
 import imp
 import os
 import sys
@@ -19,36 +18,31 @@ class experiment(object):
     Parse and set up arguments, set up the model and optimizer, and prepare 
     the folder into which to save the experiment.
 
-    In args, expecting `resume_from` or `model_from`, `name`, and `save_path`.
+    In args, expecting `model_from` and `path`.
     """
-    def __init__(self, name, parser):
-        self.name = name
+    def __init__(self, parser):
         self._epoch = [0]
         
         # Set up model, and optimizers.
         args = parser.parse_args()
-        if args.resume_from is None:
+        if args.resume:
             model, optimizer = self._init_state(
                                      model_from=args.model_from,
                                      optimizer_name=args.optimizer,
                                      learning_rate=args.learning_rate,
                                      opt_kwargs=args.opt_kwargs,
                                      weight_decay=args.weight_decay)
-            experiment_path, experiment_id = self._setup_experiment_directory(
-                name="{}__{}".format(name, args.name),
-                save_path=args.save_path)
-            self.experiment_path = experiment_path
-            self.experiment_id = experiment_id
+            self._setup_experiment_directory(path=args.path)
             if args.weights_from is not None:
                 # Load weights from specified checkpoint.
                 self._load_state(load_from=args.weights_from, model=model)
                 self._epoch[0] = 0
         else:
             args = self._load_and_merge_args(parser)
-            state_file = natsorted([fn for fn in os.listdir(args.resume_from)
+            state_file = natsorted([fn for fn in os.listdir(args.path)
                                     if fn.startswith('state_dict_')
                                     and fn.endswith('.pth')])[-1]
-            state_from = os.path.join(args.resume_from, state_file)
+            state_from = os.path.join(args.path, state_file)
             print("Resuming from {}.".format(state_from))
             model, optimizer = self._init_state(
                                      model_from=state_from,
@@ -58,10 +52,10 @@ class experiment(object):
                                      weight_decay=args.weight_decay)
             self._load_state(load_from=state_from,
                              model=model, optimizer=optimizer)
-            self.experiment_path = args.resume_from
         self.args = args
         self.model = model
         self.optimizer = optimizer
+        self.experiment_path = args.path
         print("Number of parameters\n"+
               "\n".join([" {} : {}".format(key, count_params(self.model[key]))
                          for key in self.model.keys()]))
@@ -69,7 +63,6 @@ class experiment(object):
     def get_model_save_dict(self):
         # For checkpoints.
         model_save_dict = {'dict': {'epoch'        : self._epoch,
-                                    'experiment_id': self.experiment_id,
                                     'model_as_str' : self.model_as_str}}
         for key in self.model.keys():
             model_save_dict['dict'][key] = {
@@ -208,7 +201,6 @@ class experiment(object):
                                    saved_dict[key]['optimizer_state'])
         
         # Experiment metadata.
-        self.experiment_id = saved_dict['experiment_id']
         self._epoch[0] = saved_dict['epoch'][0]+1
         self.model_as_str = saved_dict['model_as_str']
     
@@ -260,16 +252,14 @@ class experiment(object):
         '''
         args = parser.parse_args()
         initial_epoch = 0
-        if not os.path.exists(args.resume_from):
-            raise ValueError("Specified resume path does not exist: {}"
-                             "".format(args.resume_from))
+        if not os.path.exists(args.path):
+            raise ValueError("Specified path does not exist: {}"
+                             "".format(args.path))
         
-        with open(os.path.join(args.resume_from, "args.txt"), 'r') as arg_file:
+        with open(os.path.join(args.path, "args.txt"), 'r') as arg_file:
             # Remove first word when parsing arguments from file.
             _args = arg_file.read().split('\n')[1:]
             args_from_file = parser.parse_args(_args)
-            setattr(args_from_file, 'resume_from',
-                    getattr(args, 'resume_from'))
             args = args_from_file
             
         # Override loaded arguments with any provided anew.
@@ -277,17 +267,16 @@ class experiment(object):
         
         return args
 
-    def _setup_experiment_directory(self, name, save_path):
-        experiment_time = "{0:%Y-%m-%d}_{0:%H-%M-%S}".format(datetime.now())
-        experiment_id   = "{}_{}".format(experiment_time, name)
-        path = os.path.join(save_path, experiment_id)
+    def _setup_experiment_directory(self, path):
         if not os.path.exists(path):
             os.makedirs(path)
+        else:
+            raise ValueError("Specified save path already exists ({})"
+                             "".format(path))
         with open(os.path.join(path, "args.txt"), 'w') as f:
             f.write('\n'.join(sys.argv))
         with open(os.path.join(path, "config.py"), 'w') as f:
             f.write(self.model_as_str)
-        return path, experiment_id
 
 
 def count_params(module, trainable_only=True):
