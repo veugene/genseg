@@ -25,7 +25,7 @@ class experiment(object):
         
         # Set up model, and optimizers.
         args = parser.parse_args()
-        if args.resume:
+        if not args.resume:
             model, optimizer = self._init_state(
                                      model_from=args.model_from,
                                      optimizer_name=args.optimizer,

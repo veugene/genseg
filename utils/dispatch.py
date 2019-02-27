@@ -1,3 +1,4 @@
+import argparse
 from datetime import datetime
 import os 
 import re
@@ -9,47 +10,8 @@ import sys
 A parser that collects all cluster-specific arguments. To be merged into
 an experiment's parser via `parents=[dispatch_parser]`.
 """
-dispatch_parser = _get_parser()
-
-
-"""
-Given a parser that contains _all_ of an experiment's arguments (including
-the cluster-specific arguments from `dispatch_parser`), as well as a run()
-method, run the experiment on the specified cluster or locally if no cluster
-is specified.
-
-NOTE: args must contain `model_from`, `path`, and `resume`.
-"""
-def dispatch(parser, run):
-    # Get arguments.
-    args = parser.parse_args()
-    assert hasattr(args, 'model_from')
-    assert hasattr(args, 'path')
-    assert hasattr(args, 'resume')
-    
-    # If resuming, merge with loaded arguments (newly passed arguments
-    # override loaded arguments).
-    if args.resume:
-        with open(os.path.join(args.resume, "args.txt"), 'r') as f:
-            saved_args = f.read().split('\n')[1:]
-            args = parser.parse_args(saved_args)
-            setattr(args, 'resume', True)
-    
-    # Dispatch on a cluster (or run locally if none specified).
-    if args.dispatch_dgx:
-        _dispatch_dgx(args)
-    elif args.dispatch_ngc:
-        _dispatch_ngc(args)
-    elif args.dispatch_canada:
-        _dispatch_canada(args)
-    elif args.model_from is None and args.resume:
-        parser.print_help()
-    else:
-        run()
-
-
-def _get_parser():
-    parser = argparse.ArgumentParser()
+def dispatch_argument_parser(*args, **kwargs):
+    parser = argparse.ArgumentParser(*args, **kwargs)
     g_sel = parser.add_argument_group('Cluster select.')
     mutex_cluster = g_sel.add_mutually_exclusive_group()
     mutex_cluster.add_argument('--dispatch_dgx', default=False,
@@ -93,6 +55,42 @@ def _get_parser():
                        help="Max run time (DD-HH:MM). Shorter times get "
                             "higher priority.")
     return parser
+
+
+"""
+Given a parser that contains _all_ of an experiment's arguments (including
+the cluster-specific arguments from `dispatch_parser`), as well as a run()
+method, run the experiment on the specified cluster or locally if no cluster
+is specified.
+
+NOTE: args must contain `model_from`, `path`, and `resume`.
+"""
+def dispatch(parser, run):
+    # Get arguments.
+    args = parser.parse_args()
+    assert hasattr(args, 'model_from')
+    assert hasattr(args, 'path')
+    assert hasattr(args, 'resume')
+    
+    # If resuming, merge with loaded arguments (newly passed arguments
+    # override loaded arguments).
+    if args.resume:
+        with open(os.path.join(args.path, "args.txt"), 'r') as f:
+            saved_args = f.read().split('\n')[1:]
+            args = parser.parse_args(saved_args)
+            setattr(args, 'resume', True)
+    
+    # Dispatch on a cluster (or run locally if none specified).
+    if args.dispatch_dgx:
+        _dispatch_dgx(args)
+    elif args.dispatch_ngc:
+        _dispatch_ngc(args)
+    elif args.dispatch_canada:
+        _dispatch_canada(args)
+    elif args.model_from is None and args.resume:
+        parser.print_help()
+    else:
+        run()
 
 
 def _dispatch_dgx(args):
@@ -147,7 +145,7 @@ def _dispatch_canada(args):
                "source activate genseg\n")
     cmd = subprocess.list2cmdline(sys.argv)       # Shell executable.
     cmd = cmd.replace(" --_dispatch_canada",   "")          # Remove recursion.
-    cmd = "#!/bin/bash\n {}\n python3 {}'".format(pre_cmd, cmd)  # Combine.
+    cmd = "#!/bin/bash\n {}\n python3 {}".format(pre_cmd, cmd)  # Combine.
     subprocess.run(["sbatch",
                     "--account", args.account,
                     "--job_name", name,

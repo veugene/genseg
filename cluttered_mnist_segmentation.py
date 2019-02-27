@@ -21,7 +21,7 @@ from utils.data.cluttered_mnist import (setup_mnist_data,
                                         mnist_data_valid,
                                         mnist_data_test)
 from utils.dispatch import (dispatch,
-                            dispatch_parser)
+                            dispatch_argument_parser)
 from utils.experiment import experiment
 from utils.metrics import (batchwise_loss_accumulator,
                            dice_global)
@@ -38,14 +38,12 @@ import itertools
 Process arguments.
 '''
 def get_parser():
-    parser = argparse.ArgumentParser(description="Cluttered MNIST seg.",
-                                     parents=[dispatch_parser])
+    parser = dispatch_argument_parser(description="Cluttered MNIST seg.")
     g_exp = parser.add_argument_group('Experiment')
     g_exp.add_argument('--data_dir', type=str, default='./data/mnist')
     g_exp.add_argument('--path', type=str, default='./experiments')
-    mutex_from = g_exp.add_mutually_exclusive_group()
     g_exp.add_argument('--model_from', type=str, default=None)
-    g_exp.add_argument('--resume', action='store_true'))
+    g_exp.add_argument('--resume', action='store_true')
     g_exp.add_argument('--weights_from', type=str, default=None)
     g_exp.add_argument('--weight_decay', type=float, default=1e-4)
     g_exp.add_argument('--labeled_fraction', type=float, default=0.1)
