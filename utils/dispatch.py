@@ -91,7 +91,6 @@ def dispatch(parser, run):
 
 
 def _dispatch_dgx(args):
-    name = re.sub('[\W]', '_', name)         # Strip non-alphanumeric.
     pre_cmd = ("export HOME=/tmp; "
                "export ROOT=/scratch/; "
                "cd /scratch/ssl-seg-eugene; "
@@ -101,7 +100,6 @@ def _dispatch_dgx(args):
     cmd = "bash -c '{} python3 {};'".format(pre_cmd, cmd)  # Combine.
     mount_point = "/scratch"
     subprocess.run(["dgx", "job", "submit",
-                    "-n", name,
                     "-i", str(args.docker_id),
                     "--gpu", str(args.dgx_gpu),
                     "--cpu", str(args.dgx_cpu),
@@ -114,7 +112,6 @@ def _dispatch_dgx(args):
 
 
 def _dispatch_ngc(args):
-    name = re.sub('[\W]', '_', name)         # Strip non-alphanumeric.
     pre_cmd = ("cd /repo; "
                "source register_submodules.sh;")
     cmd = subprocess.list2cmdline(sys.argv)       # Shell executable.
@@ -124,7 +121,6 @@ def _dispatch_ngc(args):
     share_host = "dcg-zfs-03.nvidia.com"
     mount_point = "/scratch"
     subprocess.run(["ngc", "batch", "run",
-                    "--name", name,
                     "--image", args.image,
                     "--ace", args.ace,
                     "--instance", args.instance,
@@ -136,7 +132,6 @@ def _dispatch_ngc(args):
 
 
 def _dispatch_canada(args):
-    name = re.sub('[\W]', '_', name)         # Strip non-alphanumeric.
     pre_cmd = ("cd /scratch/veugene/ssl-seg-eugene\n"
                "source register_submodules.sh\n"
                "source activate genseg\n")
@@ -145,7 +140,6 @@ def _dispatch_canada(args):
     cmd = "#!/bin/bash\n {}\n python3 {}".format(pre_cmd, cmd)  # Combine.
     subprocess.run(["sbatch",
                     "--account", args.account,
-                    "--job_name", name,
                     "--gres", 'gpu:{}'.format(args.cca_gpu),
                     "--cpus-per-task", str(args.cca_cpu),
                     "--mem", args.cca_mem,
