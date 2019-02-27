@@ -25,7 +25,7 @@ class experiment(object):
         
         # Set up model, and optimizers.
         args = parser.parse_args()
-        if not args.resume:
+        if not os.path.exists(args.path):   # NEW
             model, optimizer = self._init_state(
                                      model_from=args.model_from,
                                      optimizer_name=args.optimizer,
@@ -37,7 +37,7 @@ class experiment(object):
                 # Load weights from specified checkpoint.
                 self._load_state(load_from=args.weights_from, model=model)
                 self._epoch[0] = 0
-        else:
+        else:                               # RESUME
             args = self._load_and_merge_args(parser)
             state_file = natsorted([fn for fn in os.listdir(args.path)
                                     if fn.startswith('state_dict_')
@@ -71,7 +71,7 @@ class experiment(object):
         return model_save_dict
     
     def setup_engine(self, function,
-                     append=False, prefix=None, epoch_length=None):
+                     append=True, prefix=None, epoch_length=None):
         engine = Engine(function)
         fn = "log.txt" if prefix is None else "{}_log.txt".format(prefix)
         progress = progress_report(
@@ -251,11 +251,7 @@ class experiment(object):
         any set anew.
         '''
         args = parser.parse_args()
-        initial_epoch = 0
-        if not os.path.exists(args.path):
-            raise ValueError("Specified path does not exist: {}"
-                             "".format(args.path))
-        
+        initial_epoch = 0        
         with open(os.path.join(args.path, "args.txt"), 'r') as arg_file:
             # Remove first word when parsing arguments from file.
             _args = arg_file.read().split('\n')[1:]

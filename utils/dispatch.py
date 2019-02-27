@@ -63,22 +63,19 @@ the cluster-specific arguments from `dispatch_parser`), as well as a run()
 method, run the experiment on the specified cluster or locally if no cluster
 is specified.
 
-NOTE: args must contain `model_from`, `path`, and `resume`.
+NOTE: args must contain `path`.
 """
 def dispatch(parser, run):
     # Get arguments.
     args = parser.parse_args()
-    assert hasattr(args, 'model_from')
     assert hasattr(args, 'path')
-    assert hasattr(args, 'resume')
     
     # If resuming, merge with loaded arguments (newly passed arguments
     # override loaded arguments).
-    if args.resume:
+    if os.path.exists(args.path):
         with open(os.path.join(args.path, "args.txt"), 'r') as f:
             saved_args = f.read().split('\n')[1:]
             args = parser.parse_args(saved_args)
-            setattr(args, 'resume', True)
     
     # Dispatch on a cluster (or run locally if none specified).
     if args.dispatch_dgx:
@@ -87,7 +84,7 @@ def dispatch(parser, run):
         _dispatch_ngc(args)
     elif args.dispatch_canada:
         _dispatch_canada(args)
-    elif args.model_from is None and args.resume:
+    elif args.model_from is None and not os.path.exists(args.path):
         parser.print_help()
     else:
         run()
