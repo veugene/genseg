@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 
 """
@@ -83,7 +84,9 @@ def dispatch(parser, run):
     elif args.dispatch_ngc:
         _dispatch_ngc(args)
     elif args.dispatch_canada:
-        _dispatch_canada(args)
+        import daemon
+        with daemon.DaemonContext():
+            _dispatch_canada_daemon(args)
     elif args.model_from is None and not os.path.exists(args.path):
         parser.print_help()
     else:
@@ -136,12 +139,90 @@ def _dispatch_canada(args):
                "source register_submodules.sh\n"
                "source activate genseg\n")
     cmd = subprocess.list2cmdline(sys.argv)       # Shell executable.
-    cmd = cmd.replace(" --_dispatch_canada",   "")          # Remove recursion.
+    cmd = cmd.replace(" --dispatch_canada",   "")          # Remove recursion.
     cmd = "#!/bin/bash\n {}\n python3 {}".format(pre_cmd, cmd)  # Combine.
-    subprocess.run(["sbatch",
+    out = subprocess.check_output([
+                    "sbatch",
                     "--account", args.account,
                     "--gres", 'gpu:{}'.format(args.cca_gpu),
                     "--cpus-per-task", str(args.cca_cpu),
                     "--mem", args.cca_mem,
                     "--time", args.time],
-                   input=cmd.encode('utf-8'))
+                   input=cmd,
+                   encoding='utf-8')
+    print(out)
+    return out
+
+
+def _dispatch_canada_daemon(args):
+    # Parse time argument to seconds.
+    if   args.time.count(':')==0 and args.time.count('-')==0:
+        # minutes
+        time_format = "%M"
+    elif args.time.count(':')==0 and args.time.count('-')==1:
+        # days-hours
+        time_format = "%d-%H"
+    elif args.time.count(':')==1 and args.time.count('-')==0:
+        # minutes:seconds
+        time_format = "%M:%S"
+    elif args.time.count(':')==1 and args.time.count('-')==1:
+        # days-hours:minutes
+        time_format = "%d-%H:%M"
+    elif args.time.count(':')==2 and args.time.count('-')==0:
+        # hours:minutes:seconds
+        time_format = "%H:%M:%S"
+    elif args.time.count(':')==2 and args.time.count('-')==1:
+        # days-hours:minutes:seconds
+        time_format = "%d-%H:%M:%S"
+    else:
+        raise ValueError("Invalid `time` format ({}).".format(args.time))
+    datetime_obj = datetime.strptime(args.time, time_format)
+    time_seconds = ( datetime_obj
+                    -datetime(datetime_obj.year, 1, 1)).total_seconds()
+    if '-' in args.time:
+        # Add a day if days are specified, since days count up from 1.
+        time_seconds += 24*60*60
+    
+    # Periodically check status of job. Relaunch on TIMEOUT.
+    status = 'TIMEOUT'
+    while status=='TIMEOUT':
+        # Launch.
+        sbatch_output = _dispatch_canada(args)
+        job_id = sbatch_output.split(' ')[-1].strip(' \n\t')
+        try:
+            int(job_id)
+        except ValueError:
+            raise RuntimeError("Cannot extract job ID from `sbatch` standard "
+                               "output: {}".format(sbatch_output))
+        
+        # Wait until the job is launched before setting a timer.
+        status = _get_status_canada(job_id)
+        while status=='PENDING' or status is None:
+            time.sleep(10)
+            status = _get_status_canada(job_id)
+        
+        # Wait.
+        time.sleep(time_seconds)
+        
+        # Check status.
+        status = _get_status_canada(job_id)
+        
+        # If the job is still RUNNING, wait until the state changes.
+        # 
+        # The job may continue running while the cluster waits for it
+        # to exit after a TERM signal (or until it eventually KILLs the job).
+        while status=='RUNNING':
+            time.sleep(10)
+            status = _get_status_canada(job_id)
+
+
+def _get_status_canada(job_id):
+    status = None
+    sacct_output = subprocess.check_output(["sacct", "-j", job_id],
+                                           encoding='utf-8')
+    for line in sacct_output.split('\n'):
+        if re.search("\s{}\s".format(job_id), line):
+            # Status is in the last column : last word in the line.
+            status = re.search('\s(\w+)\s*$', line).group(0).strip(' \t\n')
+            break
+    return status
