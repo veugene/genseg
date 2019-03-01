@@ -85,7 +85,8 @@ def dispatch(parser, run):
         _dispatch_ngc(args)
     elif args.dispatch_canada:
         import daemon
-        with daemon.DaemonContext():
+        daemon_log_file = open(os.path.join(args.path, "daemon.log"), 'a')
+        with daemon.DaemonContext(stdout=daemon_log_file):
             _dispatch_canada_daemon(args)
     elif args.model_from is None and not os.path.exists(args.path):
         parser.print_help()
