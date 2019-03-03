@@ -73,7 +73,7 @@ def dispatch(parser, run):
     
     # If resuming, merge with loaded arguments (newly passed arguments
     # override loaded arguments).
-    if os.path.exists(args.path):
+    if os.path.exists(os.path.join(args.path, "args.txt")):
         with open(os.path.join(args.path, "args.txt"), 'r') as f:
             saved_args = f.read().split('\n')[1:]
             args = parser.parse_args(saved_args)
@@ -85,6 +85,8 @@ def dispatch(parser, run):
         _dispatch_ngc(args)
     elif args.dispatch_canada:
         import daemon
+        if not os.path.exists(args.path):
+            os.makedirs(args.path)
         daemon_log_file = open(os.path.join(args.path, "daemon.log"), 'a')
         with daemon.DaemonContext(stdout=daemon_log_file):
             _dispatch_canada_daemon(args)
