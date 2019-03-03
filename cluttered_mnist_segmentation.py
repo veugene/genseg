@@ -2,13 +2,7 @@ from __future__ import (print_function,
                         division)
 import argparse
 from collections import OrderedDict
-from functools import partial
 import os
-import re
-import shutil
-import subprocess
-import sys
-import warnings
 
 import numpy as np
 import json
@@ -22,16 +16,18 @@ from ignite.handlers import ModelCheckpoint
 from data_tools.io import data_flow
 from data_tools.data_augmentation import image_random_transform
 
-from utils.experiment import experiment
-from utils.trackers import(image_logger,
-                           scoring_function,
-                           summary_tracker)
-from utils.metrics import (batchwise_loss_accumulator,
-                           dice_global)
 from utils.data.cluttered_mnist import (setup_mnist_data,
                                         mnist_data_train,
                                         mnist_data_valid,
                                         mnist_data_test)
+from utils.dispatch import (dispatch,
+                            dispatch_argument_parser)
+from utils.experiment import experiment
+from utils.metrics import (batchwise_loss_accumulator,
+                           dice_global)
+from utils.trackers import(image_logger,
+                           scoring_function,
+                           summary_tracker)
 from model import configs
 from model.ae_segmentation import segmentation_model as model_ae
 
@@ -42,14 +38,11 @@ import itertools
 Process arguments.
 '''
 def get_parser():
-    parser = argparse.ArgumentParser(description="Cluttered MNIST seg.")
+    parser = dispatch_argument_parser(description="Cluttered MNIST seg.")
     g_exp = parser.add_argument_group('Experiment')
-    g_exp.add_argument('--name', type=str, default="")
     g_exp.add_argument('--data_dir', type=str, default='./data/mnist')
-    g_exp.add_argument('--save_path', type=str, default='./experiments')
-    mutex_from = g_exp.add_mutually_exclusive_group()
-    mutex_from.add_argument('--model_from', type=str, default=None)
-    mutex_from.add_argument('--resume_from', type=str, default=None)
+    g_exp.add_argument('--path', type=str, default='./experiments')
+    g_exp.add_argument('--model_from', type=str, default=None)
     g_exp.add_argument('--weights_from', type=str, default=None)
     g_exp.add_argument('--weight_decay', type=float, default=1e-4)
     g_exp.add_argument('--labeled_fraction', type=float, default=0.1)
@@ -79,98 +72,7 @@ def get_parser():
                        help="Save images into tensorboard event files.")
     g_exp.add_argument('--init_seed', type=int, default=1234)
     g_exp.add_argument('--data_seed', type=int, default=0)
-    g_sel = parser.add_argument_group('Cluster select.')
-    mutex_cluster = g_sel.add_mutually_exclusive_group()
-    mutex_cluster.add_argument('--dispatch_dgx', default=False,
-                               action='store_true')
-    mutex_cluster.add_argument('--dispatch_ngc', default=False,
-                               action='store_true')
-    g_dgx = parser.add_argument_group('DGX cluster')
-    g_dgx.add_argument('--cluster_id', type=int, default=425)
-    g_dgx.add_argument('--docker_id', type=str,
-                       default="nvidian_general/"
-                               "9.0-cudnn7-devel-ubuntu16.04_genseg:v2")
-    g_dgx.add_argument('--gpu', type=int, default=1)
-    g_dgx.add_argument('--cpu', type=int, default=2)
-    g_dgx.add_argument('--mem', type=int, default=12)
-    g_dgx.add_argument('--nfs_host', type=str, default="dcg-zfs-03.nvidia.com")
-    g_dgx.add_argument('--nfs_path', type=str,
-                       default="/export/ganloc.cosmos253/")
-    g_ngc = parser.add_argument_group('NGC cluster')
-    g_ngc.add_argument('--ace', type=str, default='nv-us-west-2')
-    g_ngc.add_argument('--instance', type=str, default='ngcv1',
-                       choices=['ngcv1', 'ngcv2', 'ngcv4', 'ngcv8'],
-                       help="Number of GPUs.")
-    g_ngc.add_argument('--image', type=str,
-                       default="nvidian/lpr/"
-                               "9.0-cudnn7-devel-ubuntu16.04_genseg:v2")
-    g_ngc.add_argument('--source_id', type=str, default=None)
-    g_ngc.add_argument('--dataset_id', type=str, default=None)
-    g_ngc.add_argument('--workspace', type=str,
-                       default='8CfEU-RDR_eu5BDfnMypNQ:/workspace')
-    g_ngc.add_argument('--result', type=str, default="/results")
     return parser
-
-
-def dispatch_dgx():
-    parser = get_parser()
-    args = parser.parse_args()
-    if args.resume_from is not None:
-        with open(os.path.join(args.resume_from, "args.txt"), 'r') as f:
-            saved_args = f.read().split('\n')[1:]
-            name = parser.parse_args(saved_args).name
-    else:
-        name = args.name
-    name = re.sub('[\W]', '_', name)         # Strip non-alphanumeric.
-    pre_cmd = ("export HOME=/tmp; "
-               "export ROOT=/scratch/; "
-               "cd /scratch/ssl-seg-eugene; "
-               "source register_submodules.sh;")
-    cmd = subprocess.list2cmdline(sys.argv)       # Shell executable.
-    cmd = cmd.replace(" --dispatch_dgx", "")          # Remove recursion.
-    cmd = "bash -c '{} python3 {};'".format(pre_cmd, cmd)  # Combine.
-    mount_point = "/scratch"
-    subprocess.run(["dgx", "job", "submit",
-                    "-n", name,
-                    "-i", str(args.docker_id),
-                    "--gpu", str(args.gpu),
-                    "--cpu", str(args.cpu),
-                    "--mem", str(args.mem),
-                    "--clusterid", str(args.cluster_id),
-                    "--volume", "{}@{}:{}".format(args.nfs_path,
-                                                  args.nfs_host,
-                                                  mount_point),
-                    "-c", cmd])
-
-
-def dispatch_ngc():
-    parser = get_parser()
-    args = parser.parse_args()
-    if args.resume_from is not None:
-        with open(os.path.join(args.resume_from, "args.txt"), 'r') as f:
-            saved_args = f.read().split('\n')[1:]
-            name = parser.parse_args(saved_args).name
-    else:
-        name = args.name
-    name = re.sub('[\W]', '_', name)         # Strip non-alphanumeric.
-    pre_cmd = ("cd /repo; "
-               "source register_submodules.sh;")
-    cmd = subprocess.list2cmdline(sys.argv)       # Shell executable.
-    cmd = cmd.replace(" --dispatch_ngc", "")          # Remove recursion.
-    cmd = "bash -c '{} python3 {};'".format(pre_cmd, cmd)  # Combine.
-    share_path = "/export/ganloc.cosmos253/"
-    share_host = "dcg-zfs-03.nvidia.com"
-    mount_point = "/scratch"
-    subprocess.run(["ngc", "batch", "run",
-                    "--name", name,
-                    "--image", args.image,
-                    "--ace", args.ace,
-                    "--instance", args.instance,
-                    "--commandline", cmd,
-                    "--datasetid", args.dataset_id,
-                    "--datasetid", args.source_id,
-                    "--workspace", args.workspace,
-                    "--result", args.result])
 
 
 def run():
@@ -178,7 +80,7 @@ def run():
     torch.backends.cudnn.benchmark = True
     
     # Set up experiment.
-    experiment_state = experiment(name="mnist", parser=get_parser())
+    experiment_state = experiment(parser=get_parser())
     args = experiment_state.args
     assert args.labeled_fraction > 0
     torch.manual_seed(args.init_seed)
@@ -287,20 +189,16 @@ def run():
     
     # Get engines.
     engines = {}
-    append = bool(args.resume_from is not None)
     engines['train'] = experiment_state.setup_engine(
                                             training_function,
-                                            append=append,
                                             epoch_length=len(loader['train']))
     engines['valid'] = experiment_state.setup_engine(
                                             validation_function,
                                             prefix='val',
-                                            append=append,
                                             epoch_length=len(loader['valid']))
     engines['test'] = experiment_state.setup_engine(
                                             validation_function,
                                             prefix='test',
-                                            append=append,
                                             epoch_length=len(loader['test']))
     for key in ['valid', 'test']:
         engines[key].add_event_handler(
@@ -384,12 +282,4 @@ def run():
 
 if __name__ == '__main__':
     parser = get_parser()
-    args = parser.parse_args()
-    if args.dispatch_dgx:
-        dispatch_dgx()
-    elif args.dispatch_ngc:
-        dispatch_ngc()
-    elif args.model_from is None and args.resume_from is None:
-        parser.print_help()
-    else:
-        run()
+    dispatch(parser, run)
