@@ -9,9 +9,15 @@ Run `source link_submodules.sh` from *within the root directory of the source tr
 Requires:
 - h5py
 - imageio
+- json
 - natsort
-- tqdm
+- numpy
+- python-daemon
 - SimpleITK
+- scikit-image
+- scipy
+- torch
+- tqdm
 - zarr
 
 ## Models
@@ -40,7 +46,8 @@ def build_model():
 ## Tasks
 
 `brats_segmentation.py` : BRATS  
-`cluttered_mnist_segmentation.py` : Cluttered MNIST
+`cluttered_mnist_segmentation.py` : Cluttered MNIST  
+`ddsm_segmentation.py` : DDSM
 
 Task launchers are used to start/resume an experiment.
 
