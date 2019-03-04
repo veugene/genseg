@@ -167,15 +167,12 @@ def run():
     
     # Get engines.
     engines = {}
-    append = bool(args.resume_from is not None)
     engines['train'] = experiment_state.setup_engine(
                                             training_function,
-                                            append=append,
                                             epoch_length=len(loader['train']))
     engines['valid'] = experiment_state.setup_engine(
                                             validation_function,
                                             prefix='val',
-                                            append=append,
                                             epoch_length=len(loader['valid']))
     engines['valid'].add_event_handler(
         Events.STARTED,
