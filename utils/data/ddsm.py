@@ -5,14 +5,13 @@ import numpy as np
 from skimage import filters
 from skimage import transform
 
-from data_tools.wrap import multi_source_array
 from data_tools.data_augmentation import image_random_transform
 
  
 def prepare_data_ddsm(path, masked_fraction=0, drop_masked=False, rng=None):
     """
-    Convenience function to prepare DDSM data as multi_source_array objects,
-    split into training and validation subsets.
+    Convenience function to prepare DDSM data split into training and
+    validation subsets.
     
     path (string) : Path of the h5py file containing the DDSM data.
     masked_fraction (float) : The fraction in [0, 1.] of cases in the 
