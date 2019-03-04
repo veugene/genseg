@@ -26,7 +26,7 @@ def prepare_data_ddsm(path, masked_fraction=0, drop_masked=False, rng=None):
     random seed of 0.
     
     Returns dictionary: healthy slices, sick slices, and segmentations for 
-    the training and validation subsets.
+    the training, validation, and testing subsets.
     """
     if rng is None:
         rng = np.random.RandomState(0)
@@ -207,7 +207,7 @@ def preprocessor_ddsm(resize_to, crop_to=None, data_augmentation_kwargs=None):
         if crop_to is not None:
             assert np.all(h.shape==s.shape)
             assert np.all(h.shape==m.shape)
-            x, y = np.subtract(h.shape[-2:], crop_to)
+            x, y = np.subtract(h.shape[-2:], crop_to)//2
             h = h[:, x:x+crop_to, y:y+crop_to]
             s = s[:, x:x+crop_to, y:y+crop_to]
             m = m[:, x:x+crop_to, y:y+crop_to]
