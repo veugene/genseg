@@ -104,7 +104,6 @@ def run():
                                    sample_random=True,
                                    batch_size=args.batch_size_train,
                                    preprocessor=preprocessor_ddsm(
-                                       resize_to=int(args.output_size*1.25),
                                        data_augmentation_kwargs=da_kwargs),
                                    nb_io_workers=args.nb_io_workers,
                                    nb_proc_workers=args.nb_proc_workers,
@@ -113,7 +112,6 @@ def run():
                                    sample_random=True,
                                    batch_size=args.batch_size_valid,
                                    preprocessor=preprocessor_ddsm(
-                                       resize_to=int(args.output_size*1.25),
                                        crop_to=args.output_size,
                                        data_augmentation_kwargs=None),
                                    nb_io_workers=args.nb_io_workers,
