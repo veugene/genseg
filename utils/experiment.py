@@ -213,7 +213,7 @@ class experiment(object):
                                    saved_dict[key]['optimizer_state'])
         
         # Experiment metadata.
-        self._epoch[0] = saved_dict['epoch'][0]+1
+        self._epoch[0] = saved_dict['epoch'][0]
         self.model_as_str = saved_dict['model_as_str']
     
     def load_last_state(self):
