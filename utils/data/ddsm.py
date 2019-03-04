@@ -33,13 +33,13 @@ def prepare_data_ddsm(path, masked_fraction=0, drop_masked=False, rng=None):
     if masked_fraction < 0 or masked_fraction > 1:
         raise ValueError("`masked_fraction` must be in [0, 1].")
     
-    # Random 20% data split for validation.
+    # Random 20% data split for validation, random 20% for testing.
     # 
-    # First, split out a random sample of the sick patients into a validation
-    # set. Any sick patients in the validation set that reoccur in the
-    # healthy set are placed in the validation set for the healthy set, as 
-    # well. The remainder of the healthy validation set is completed with 
-    # a random sample.
+    # First, split out a random sample of the sick patients into a
+    # validation/test set. Any sick patients in the validation/test set that 
+    # reoccur in the healthy set are placed in the validation/test set for 
+    # the healthy set, as well. The remainder of the healthy validation/test
+    # set is completed with a random sample.
     case_id_h = {}
     case_id_s = {}
     try:
@@ -47,29 +47,39 @@ def prepare_data_ddsm(path, masked_fraction=0, drop_masked=False, rng=None):
     except:
         print("Failed to open data: {}".format(path))
         raise
+    rnd_state = np.random.RandomState(0)
+    indices = {'s': rnd_state.permutation(len(h5py_file['sick'].keys())),
+               'h': rnd_state.permutation(len(h5py_file['healthy'].keys()))}
     def get(keys, indices): # Index into keys object.
         return [k for i, k in enumerate(keys) if i in indices]
-    rnd_state = np.random.RandomState(0)
-    indices_s = rnd_state.permutation(len(h5py_file['sick'].keys()))
-    indices_h = rnd_state.permutation(len(h5py_file['healthy'].keys()))
-    n_valid = int(0.2*len(indices_s))   # Determined by sick cases.
-    indices_s_valid, indices_s_train = np.split(indices_s, [n_valid])
-    case_id_s['valid'] = get(h5py_file['sick'].keys(), indices_s_valid)
-    case_id_s['train'] = get(h5py_file['sick'].keys(), indices_s_train)
+    def split(n_cases):
+        indices_s_split = indices['s'][:n_cases]
+        case_id_s_split = get(h5py_file['sick'].keys(), indices_s_split)
+        indices_s_and_h = [i for i, k in enumerate(h5py_file['healthy'].keys())
+                           if k in case_id_s_split]
+        indices_h_only  = [i for i, k in enumerate(h5py_file['healthy'].keys())
+                           if i not in indices_s_and_h]
+        n_random = n_cases-len(indices_s_and_h)
+        indices_h_split = indices_s_and_h+indices_h_only[:n_random]
+        case_id_h_split = get(h5py_file['healthy'].keys(), indices_h_split)
+        indices['s'] = [i for i in indices['s'] if i not in indices_s_split]
+        indices['h'] = [i for i in indices['h'] if i not in indices_h_split]
+        return case_id_s_split, case_id_h_split
+    n_valid = int(0.2*len(indices['s']))
+    case_id_s['valid'], case_id_h['valid'] = split(n_valid)
+    case_id_s['test'],  case_id_h['test']  = split(n_valid)
     
-    case_id_h_and_s = list(filter(lambda x:x in case_id_s['valid'],
-                                  h5py_file['healthy'].keys()))
-    n_random = n_valid-len(case_id_h_and_s)
-    case_id_only_h = get(h5py_file['healthy'].keys(), indices_h[:n_random])
-    case_id_h['valid'] = case_id_h_and_s+case_id_only_h
-    case_id_h['train'] = list(filter(lambda x:x not in case_id_h['valid'],
-                                     h5py_file['healthy'].keys()))
+    # Remaining cases go in the training set. At this point, indices for
+    # cases in the validation and test sets have been removed.
+    case_id_s['train'] = get(h5py_file['sick'].keys(),    indices['s'])
+    case_id_h['train'] = get(h5py_file['healthy'].keys(), indices['h'])
+    indices = None  # Clear remaining indices.
     
     # Assemble cases with corresponding segmentations; split train/valid.
-    cases_h = {'train': [], 'valid': []}
-    cases_s = {'train': [], 'valid': []}
-    cases_m = {'train': [], 'valid': []}
-    for split in ['train', 'valid']:
+    cases_h = {'train': [], 'valid': [], 'test': []}
+    cases_s = {'train': [], 'valid': [], 'test': []}
+    cases_m = {'train': [], 'valid': [], 'test': []}
+    for split in ['train', 'valid', 'test']:
         for case_id in case_id_s[split]:
             f = h5py_file['sick'][case_id]
             for view in f.keys():
@@ -119,7 +129,8 @@ def prepare_data_ddsm(path, masked_fraction=0, drop_masked=False, rng=None):
     
     # Merge all arrays in each list of arrays.
     data = OrderedDict([('train', OrderedDict()),
-                        ('valid', OrderedDict())])
+                        ('valid', OrderedDict()),
+                        ('test',  OrderedDict())])
     for key in data.keys():
         # HACK: we may have a situation where the number of sick examples
         # is greater than the number of healthy. In that case, we should
