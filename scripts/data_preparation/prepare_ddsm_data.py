@@ -17,6 +17,7 @@ def get_parser():
                         default='./data/ddsm/ddsm_simple.h5')
     parser.add_argument('--image_size', type=int, default=128)
     parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--min_patch_size', type=int, default=0)
     return parser
 
 
@@ -152,8 +153,11 @@ if __name__ == '__main__':
     for fold in ['train', 'valid', 'test']:
         for key in ['h', 's', 'm']:
             print("Writing {}/{}".format(fold, key))
-            dtype = data[fold][key][0].dtype
+            dtype = np.uint8 if key=='m' else np.float32
+            order = 0 if key=='m' else 1
             shape = (args.image_size, args.image_size)
+            if np.any(np.less(shape, args.min_patch_size)):
+                continue    # Patch is too small - skip.
             writer = h5py_array_writer(
                 data_element_shape=shape,
                 dtype=dtype,
@@ -163,7 +167,7 @@ if __name__ == '__main__':
                 append=True,
                 kwargs={'chunks': (1,)+shape})
             for case in tqdm(data[fold][key]):
-                case_resized = resize(case, size=shape, order=1)
+                case_resized = resize(case.astype(dtype),
+                                      size=shape, order=order)
                 writer.buffered_write(case_resized)
             writer.flush_buffer()
-            
