@@ -184,11 +184,11 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
         len_s = sum([len(elem) for elem in volumes_s[key]])
         if len_h < len_s:
             m = int(np.ceil(len_s / len_h))
-        data[key]['h']  = multi_source_array(volumes_h[key]*m, no_shape=True)
-        data[key]['s']  = multi_source_array(volumes_s[key],   no_shape=True)
-        data[key]['m']  = multi_source_array(volumes_m[key],   no_shape=True)
-        data[key]['hi'] = multi_source_array(indices_h[key]*m, no_shape=True)
-        data[key]['si'] = multi_source_array(indices_s[key],   no_shape=True)
+        data[key]['h']  = multi_source_array(volumes_h[key]*m)
+        data[key]['s']  = multi_source_array(volumes_s[key])
+        data[key]['m']  = multi_source_array(volumes_m[key])
+        data[key]['hi'] = multi_source_array(indices_h[key]*m)
+        data[key]['si'] = multi_source_array(indices_s[key])
     return data
 
 
