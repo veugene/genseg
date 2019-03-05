@@ -9,13 +9,13 @@ Run `source link_submodules.sh` from *within the root directory of the source tr
 Requires:
 - h5py
 - imageio
-- json
 - natsort
 - numpy
 - python-daemon
 - SimpleITK
 - scikit-image
 - scipy
+- tensorboardx
 - torch
 - tqdm
 - zarr
