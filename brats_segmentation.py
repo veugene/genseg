@@ -1,42 +1,9 @@
 from __future__ import (print_function,
                         division)
 import argparse
-from collections import OrderedDict
-from functools import partial
-import os
-import re
-import shutil
-import subprocess
-import sys
-import warnings
-
-import numpy as np
 import json
-import torch
-from torch.autograd import Variable
-import ignite
-from ignite.engine import (Events,
-                           Engine)
-from ignite.handlers import ModelCheckpoint
-
-from data_tools.io import data_flow
-from data_tools.data_augmentation import image_random_transform
-
-from utils.data.brats import (prepare_data_brats13s,
-                              prepare_data_brats17,
-                              preprocessor_brats)
-from utils.data.common import data_flow_sampler
 from utils.dispatch import (dispatch,
                             dispatch_parser)
-from utils.experiment import experiment
-from utils.metrics import (batchwise_loss_accumulator,
-                           dice_global)
-from utils.trackers import(image_logger,
-                           scoring_function,
-                           summary_tracker)
-
-from model import configs
-from model.ae_segmentation import segmentation_model as model_ae
 
 
 '''
@@ -74,6 +41,42 @@ def get_parser():
 
 
 def run():
+    from collections import OrderedDict
+    from functools import partial
+    import os
+    import re
+    import shutil
+    import subprocess
+    import sys
+    import warnings
+
+    import numpy as np
+    import torch
+    from torch.autograd import Variable
+    import ignite
+    from ignite.engine import (Events,
+                               Engine)
+    from ignite.handlers import ModelCheckpoint
+
+    from data_tools.io import data_flow
+    from data_tools.data_augmentation import image_random_transform
+
+    from utils.data.brats import (prepare_data_brats13s,
+                                  prepare_data_brats17,
+                                  preprocessor_brats)
+    from utils.data.common import data_flow_sampler
+
+    from utils.experiment import experiment
+    from utils.metrics import (batchwise_loss_accumulator,
+                               dice_global)
+    from utils.trackers import(image_logger,
+                               scoring_function,
+                               summary_tracker)
+
+    from model import configs
+    from model.ae_segmentation import segmentation_model as model_ae
+
+
     # Disable buggy profiler.
     torch.backends.cudnn.benchmark = True
     
