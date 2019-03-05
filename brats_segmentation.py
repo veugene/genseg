@@ -3,15 +3,14 @@ from __future__ import (print_function,
 import argparse
 import json
 from utils.dispatch import (dispatch,
-                            dispatch_parser)
+                            dispatch_argument_parser)
 
 
 '''
 Process arguments.
 '''
 def get_parser():
-    parser = argparse.ArgumentParser(description="BRATS seg.",
-                                     parents=[dispatch_parser])
+    parser = dispatch_argument_parser(description="BRATS seg.")
     g_exp = parser.add_argument_group('Experiment')
     g_exp.add_argument('--dataset', type=str, default='brats13s',
                        choices=['brats13s', 'brats17'])
