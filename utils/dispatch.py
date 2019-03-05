@@ -88,6 +88,8 @@ def dispatch(parser, run):
         if not os.path.exists(args.path):
             os.makedirs(args.path)
         daemon_log_file = open(os.path.join(args.path, "daemon.log"), 'a')
+        print("Dispatch on Compute Canada - daemonizing ({})."
+              "".format(args.path))
         with daemon.DaemonContext(stdout=daemon_log_file):
             _dispatch_canada_daemon(args)
     elif args.model_from is None and not os.path.exists(args.path):
