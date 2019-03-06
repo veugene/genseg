@@ -64,16 +64,18 @@ Adaptive instance normalization uses parameters predicted by an MLP when the dec
 
 An example of an experiment launched with this config is:
 ```
-CUDA_VISIBLE_DEVICES="0" python3 brats_segmentation.py` --name "bds3_003_xid50_cyc50 (f0.01, D_lr 0.001) [b0.3]" --model_from model/configs/brats_2017/bds3/bds3_003_xid50_cyc50.py --batch_size_train 20 --batch_size_valid 20 --epochs 1000000 --rseed 1234 --optimizer '{"G": "amsgrad", "D": "amsgrad"}' --opt_kwargs '{"G": {"betas": [0.5, 0.999], "lr": 0.001}, "D": {"betas": [0.5, 0.999], "lr": 0.01}}' --save_path experiments/brats_2017/bds3 --n_vis 8 --weight_decay 0.0001 --dataset brats17 --orientation 1 --data_dir=./data/brats/2017/hemispheres_b0.3_t0.01/ --labeled_fraction 0.01 --augment_data --nb_proc_workers 2
+python3 brats_segmentation.py` --path "experiments/brats_2017/bds3/bds3_003_xid50_cyc50 (f0.01, D_lr 0.001) [b0.3]" --model_from model/configs/brats_2017/bds3/bds3_003_xid50_cyc50.py --batch_size_train 20 --batch_size_valid 20 --epochs 1000000 --rseed 1234 --optimizer '{"G": "amsgrad", "D": "amsgrad"}' --opt_kwargs '{"G": {"betas": [0.5, 0.999], "lr": 0.001}, "D": {"betas": [0.5, 0.999], "lr": 0.01}}' --n_vis 8 --weight_decay 0.0001 --dataset brats17 --orientation 1 --data_dir=./data/brats/2017/hemispheres_b0.3_t0.01/ --labeled_fraction 0.01 --augment_data --nb_proc_workers 2
 ```
 
 Optimizer arguments are passed as a JSON string through the `--opt_kwargs` argument.
+
+Note that if `CUDA_VISIBLE_DEVICES` is not set to specify which GPUs to use, the model will attempt to use all available GPUs. The code is multi-GPU capable but no serious training has been done on multiple GPUs. Use multiple GPUs with caution. There have been bugs in pytorch (hopefully fixed now) that made it either cause some layers to fail to be updated or fail to be resumed.
 
 #### Example: resuming a brats experiment
 
 Resuming the above experiment could be done with:
 ```
-CUDA_VISIBLE_DEVICES="0" python3 brats_segmentation.py --resume_from experiments/brats_2017/bds3/<experiment directory>
+python3 brats_segmentation.py --path "experiments/brats_2017/bds3/bds3_003_xid50_cyc50 (f0.01, D_lr 0.001) [b0.3]"
 ```
 
 Upon resuming, the model configuration file is loaded from the saved checkpoint. All arguments passed upon initializing the experiment are loaded as well. **Any of these can be over-ridden by simply passing them again with the resuming command.**

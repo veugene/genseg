@@ -106,7 +106,7 @@ def _dispatch_dgx(args):
                "cd /scratch/ssl-seg-eugene; "
                "source register_submodules.sh;")
     cmd = subprocess.list2cmdline(sys.argv)       # Shell executable.
-    cmd = cmd.replace(" --_dispatch_dgx", "")          # Remove recursion.
+    cmd = cmd.replace(" --_dispatch_dgx", "")     # Remove recursion.
     cmd = "bash -c '{} python3 {};'".format(pre_cmd, cmd)  # Combine.
     mount_point = "/scratch"
     subprocess.run(["dgx", "job", "submit",
@@ -125,11 +125,8 @@ def _dispatch_ngc(args):
     pre_cmd = ("cd /repo; "
                "source register_submodules.sh;")
     cmd = subprocess.list2cmdline(sys.argv)       # Shell executable.
-    cmd = cmd.replace(" --_dispatch_ngc", "")          # Remove recursion.
+    cmd = cmd.replace(" --_dispatch_ngc", "")     # Remove recursion.
     cmd = "bash -c '{} python3 {};'".format(pre_cmd, cmd)  # Combine.
-    share_path = "/export/ganloc.cosmos253/"
-    share_host = "dcg-zfs-03.nvidia.com"
-    mount_point = "/scratch"
     subprocess.run(["ngc", "batch", "run",
                     "--image", args.image,
                     "--ace", args.ace,
@@ -146,7 +143,7 @@ def _dispatch_canada(args):
                "source register_submodules.sh\n"
                "source activate genseg\n")
     cmd = subprocess.list2cmdline(sys.argv)       # Shell executable.
-    cmd = cmd.replace(" --dispatch_canada",   "")          # Remove recursion.
+    cmd = cmd.replace(" --dispatch_canada",   "") # Remove recursion.
     cmd = "#!/bin/bash\n {}\n python3 {}".format(pre_cmd, cmd)  # Combine.
     out = subprocess.check_output([
                     "sbatch",
