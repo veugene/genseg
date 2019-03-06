@@ -10,18 +10,16 @@ from utils.dispatch import (dispatch,
 Process arguments.
 '''
 def get_parser():
-    parser = dispatch_argument_parser(description="BRATS seg.")
+    parser = dispatch_argument_parser(description="DDSM seg.")
     g_exp = parser.add_argument_group('Experiment')
-    g_exp.add_argument('--dataset', type=str, default='brats13s',
-                       choices=['brats13s', 'brats17'])
-    g_exp.add_argument('--data_dir', type=str, default='./data/brats/2013')
-    g_exp.add_argument('--slice_conditional', action='store_true')
+    g_exp.add_argument('--data', type=str, default='./data/ddsm/ddsm.h5')
     g_exp.add_argument('--path', type=str, default='./experiments')
     g_exp.add_argument('--model_from', type=str, default=None)
     g_exp.add_argument('--weights_from', type=str, default=None)
     g_exp.add_argument('--weight_decay', type=float, default=1e-4)
     g_exp.add_argument('--labeled_fraction', type=float, default=0.1)
     g_exp.add_argument('--yield_only_labeled', action='store_true')
+    g_exp.add_argument('--output_size', type=int, default=128)
     g_exp.add_argument('--augment_data', action='store_true')
     g_exp.add_argument('--batch_size_train', type=int, default=20)
     g_exp.add_argument('--batch_size_valid', type=int, default=20)
@@ -60,22 +58,19 @@ def run():
     from data_tools.io import data_flow
     from data_tools.data_augmentation import image_random_transform
 
-    from utils.data.brats import (prepare_data_brats13s,
-                                  prepare_data_brats17,
-                                  preprocessor_brats)
     from utils.data.common import data_flow_sampler
-
+    from utils.data.ddsm import (prepare_data_ddsm,
+                                 preprocessor_ddsm)
     from utils.experiment import experiment
     from utils.metrics import (batchwise_loss_accumulator,
                                dice_global)
     from utils.trackers import(image_logger,
                                scoring_function,
                                summary_tracker)
-
     from model import configs
     from model.ae_segmentation import segmentation_model as model_ae
-
-
+    
+    
     # Disable buggy profiler.
     torch.backends.cudnn.benchmark = True
     
@@ -94,33 +89,23 @@ def run():
                  'fill_mode': 'reflect',
                  'spline_warp': True,
                  'warp_sigma': 5,
-                 'warp_grid_size': 3}
+                 'warp_grid_size': 3,
+                 'crop_size': (args.output_size, args.output_size)}
     if not args.augment_data:
         da_kwargs=None
     
     # Prepare data.
-    if args.dataset=='brats17':
-        prepare_data_brats = prepare_data_brats17
-        target_class = [1,2,4]
-    elif args.dataset=='brats13s':
-        prepare_data_brats = prepare_data_brats13s
-        target_class = [4,5]
-    else:
-        raise ValueError("`dataset` must only be 'brats17' or 'brats13s'")
-    data = prepare_data_brats(path_hgg=os.path.join(args.data_dir, "hgg.h5"),
-                              path_lgg=os.path.join(args.data_dir, "lgg.h5"),
-                              masked_fraction=1.-args.labeled_fraction,
-                              drop_masked=args.yield_only_labeled,
-                              rng=np.random.RandomState(args.data_seed))
-    data_train = [data['train']['h'], data['train']['s'], data['train']['m'],
-                  data['train']['hi'], data['train']['si']]
-    data_valid = [data['valid']['h'], data['valid']['s'], data['valid']['m'],
-                  data['valid']['hi'], data['valid']['si']]
+    data = prepare_data_ddsm(path=args.data,
+                             masked_fraction=1.-args.labeled_fraction,
+                             drop_masked=args.yield_only_labeled,
+                             rng=np.random.RandomState(args.data_seed))
+    data_train = [data['train']['h'], data['train']['s'], data['train']['m']]
+    data_valid = [data['valid']['h'], data['valid']['s'], data['valid']['m']]
     loader = {
         'train': data_flow_sampler(data_train,
                                    sample_random=True,
                                    batch_size=args.batch_size_train,
-                                   preprocessor=preprocessor_brats(
+                                   preprocessor=preprocessor_ddsm(
                                        data_augmentation_kwargs=da_kwargs),
                                    nb_io_workers=args.nb_io_workers,
                                    nb_proc_workers=args.nb_proc_workers,
@@ -128,22 +113,20 @@ def run():
         'valid': data_flow_sampler(data_valid,
                                    sample_random=True,
                                    batch_size=args.batch_size_valid,
-                                   preprocessor=preprocessor_brats(
+                                   preprocessor=preprocessor_ddsm(
+                                       crop_to=args.output_size,
                                        data_augmentation_kwargs=None),
                                    nb_io_workers=args.nb_io_workers,
                                    nb_proc_workers=args.nb_proc_workers,
                                    rng=np.random.RandomState(args.init_seed))}
     
     # Function to convert data to pytorch usable form.
-    def prepare_batch(batch, slice_conditional=False):
-        h, s, m, h_indices, s_indices = batch
+    def prepare_batch(batch):
+        h, s, m = batch
         # Prepare for pytorch.
         h = Variable(torch.from_numpy(np.array(h))).cuda()
         s = Variable(torch.from_numpy(np.array(s))).cuda()
-        # Provide slice index tuple if slice_conditional.
-        if not slice_conditional:
-            h_indices = s_indices = None
-        return h, s, m, h_indices, s_indices
+        return h, s, m
     
     # Helper for training/validation loops : detach variables from graph.
     def detach(x):
@@ -157,10 +140,9 @@ def run():
     def training_function(engine, batch):
         for model in experiment_state.model.values():
             model.train()
-        B, A, M, I_A, I_B = prepare_batch(batch, args.slice_conditional)
+        B, A, M = prepare_batch(batch)
         outputs = experiment_state.model['G'](A, B, M,
-                                         optimizer=experiment_state.optimizer,
-                                         class_A=I_A, class_B=I_B)
+                                         optimizer=experiment_state.optimizer)
         outputs = detach(outputs)
         
         # Drop images without labels, for visualization.
@@ -177,10 +159,9 @@ def run():
     def validation_function(engine, batch):
         for model in experiment_state.model.values():
             model.eval()
-        B, A, M, I_A, I_B = prepare_batch(batch, args.slice_conditional)
+        B, A, M = prepare_batch(batch)
         with torch.no_grad():
-            outputs = experiment_state.model['G'](A, B, M, rng=engine.rng,
-                                                  class_A=I_A, class_B=I_B)
+            outputs = experiment_state.model['G'](A, B, M, rng=engine.rng)
         outputs = detach(outputs)
         return outputs
     
@@ -210,13 +191,8 @@ def run():
         return (None, x['x_M'])                     # 1 out; do nothing. HACK
     for key in engines:
         metrics[key] = OrderedDict()
-        metrics[key]['dice'] = dice_global(target_class=target_class,
+        metrics[key]['dice'] = dice_global(target_class=1,
                                            output_transform=dice_transform_all)
-        for i, c in enumerate(target_class):
-            metrics[key]['dice{}'.format(c)] = dice_global(
-                target_class=c,
-                prediction_index=i+1,
-                output_transform=dice_transform_single)
         metrics[key]['rec']  = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_rec'])
         if isinstance(experiment_state.model['G'], model_ae):
@@ -255,47 +231,21 @@ def run():
             output_transform=lambda x: dict([(k, v)
                                              for k, v in x.items()
                                              if k.startswith('l_')]),
-            metric_keys=['dice']+['dice{}'.format(c) for c in target_class])
+            metric_keys=['dice'])
     
-    # Set up image logging.
-    for channel, sequence_name in enumerate(['flair', 't1', 't1c', 't2']):
-        def output_transform(output, channel=channel):
-            transformed = OrderedDict()
-            for k, v in output.items():
-                if k.startswith('x_') and v is not None and v.dim()==4:
-                    k_new = k.replace('x_','')
-                    v_new = v.cpu().numpy()
-                    if k_new in ['M', 'AM']:
-                        if v_new.shape[1]==1:
-                            # 'M', or 'AM' with single class.
-                            v_new = np.squeeze(v_new, axis=1)
-                        else:
-                            # 'AM' with multiple classes.
-                            v_new = np.argmax(v_new, axis=1)
-                            v_new = sum([(v_new==i+1)*c
-                                         for i, c in enumerate(target_class)])
-                        if output['x_AM'] is not None and \
-                                                    output['x_AM'].shape[1]!=1:
-                            # HACK (min and max values for correct vis)
-                            v_new[:,0,0]  = max(target_class)
-                            v_new[:,0,-1] = 0
-                    else:
-                        v_new = v_new[:,channel]         # 4 sequences per img.
-                    transformed[k_new] = v_new
-            return transformed
-        for key in ['train', 'valid']:
-            save_image = image_logger(
-                initial_epoch=experiment_state.get_epoch(),
-                directory=os.path.join(experiment_state.experiment_path,
-                                    "images/{}".format(key)),
-                summary_tracker=(tracker if key=='valid'
-                                         and args.save_image_events else None),
-                num_vis=args.n_vis,
-                suffix=sequence_name,
-                output_name=sequence_name,
-                output_transform=output_transform,
-                fontsize=40)
-            save_image.attach(engines[key])
+    # Set up image logging to tensorboard.
+    def _p(val): return np.squeeze(val.cpu().numpy(), 1)
+    save_image = image_logger(
+        initial_epoch=experiment_state.get_epoch(),
+        directory=os.path.join(experiment_state.experiment_path, "images"),
+        summary_tracker=tracker if args.save_image_events else None,
+        num_vis=args.n_vis,
+        output_transform=lambda x: OrderedDict([(k.replace('x_',''), _p(v))
+                                                for k, v in x.items()
+                                                if k.startswith('x_')
+                                                and v is not None]),
+        fontsize=48)
+    save_image.attach(engines['valid'])
     
     '''
     Train.

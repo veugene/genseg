@@ -22,26 +22,21 @@ class experiment(object):
     """
     def __init__(self, parser):
         self._epoch = [0]
-        
-        # Set up model, and optimizers.
         args = parser.parse_args()
-        if not os.path.exists(args.path):   # NEW
-            model, optimizer = self._init_state(
-                                     model_from=args.model_from,
-                                     optimizer_name=args.optimizer,
-                                     learning_rate=args.learning_rate,
-                                     opt_kwargs=args.opt_kwargs,
-                                     weight_decay=args.weight_decay)
-            self._setup_experiment_directory(path=args.path)
-            if args.weights_from is not None:
-                # Load weights from specified checkpoint.
-                self._load_state(load_from=args.weights_from, model=model)
-                self._epoch[0] = 0
-        else:                               # RESUME
+        
+        # Make experiment directory, if necessary.
+        if not os.path.exists(args.path):
+            os.makedirs(args.path)
+            
+        # Does the experiment directory already contain state files?
+        state_file_list = natsorted([fn for fn in os.listdir(args.path)
+                                     if fn.startswith('state_dict_')
+                                     and fn.endswith('.pth')])
+        
+        # If yes, resume; else, initialize a new experiment.
+        if os.path.exists(args.path) and len(state_file_list):
             args = self._load_and_merge_args(parser)
-            state_file = natsorted([fn for fn in os.listdir(args.path)
-                                    if fn.startswith('state_dict_')
-                                    and fn.endswith('.pth')])[-1]
+            state_file = state_file_list[-1]
             state_from = os.path.join(args.path, state_file)
             print("Resuming from {}.".format(state_from))
             model, optimizer = self._init_state(
@@ -52,6 +47,23 @@ class experiment(object):
                                      weight_decay=args.weight_decay)
             self._load_state(load_from=state_from,
                              model=model, optimizer=optimizer)
+        else:
+            model, optimizer = self._init_state(
+                                     model_from=args.model_from,
+                                     optimizer_name=args.optimizer,
+                                     learning_rate=args.learning_rate,
+                                     opt_kwargs=args.opt_kwargs,
+                                     weight_decay=args.weight_decay)
+            if args.weights_from is not None:
+                # Load weights from specified checkpoint.
+                self._load_state(load_from=args.weights_from, model=model)
+                self._epoch[0] = 0
+            with open(os.path.join(args.path, "args.txt"), 'w') as f:
+                f.write('\n'.join(sys.argv))
+            with open(os.path.join(args.path, "config.py"), 'w') as f:
+                f.write(self.model_as_str)
+        
+        # Initialization complete. Store ojbects, etc.
         self.args = args
         self.model = model
         self.optimizer = optimizer
@@ -172,12 +184,8 @@ class experiment(object):
             def parse(arg):
                 # Helper function for args when passed as dict, with
                 # model names as keys.
-                if isinstance(arg, dict):
-                    if key in arg:
-                        return arg[key]
-                    else:
-                        raise ValueError("Missing entry for {} in optimizer "
-                                         "setup.".format(key))
+                if isinstance(arg, dict) and key in arg:
+                    return arg[key]
                 return arg
             model[key].cuda()
             optimizer[key] = self._get_optimizer(
@@ -201,7 +209,7 @@ class experiment(object):
                                    saved_dict[key]['optimizer_state'])
         
         # Experiment metadata.
-        self._epoch[0] = saved_dict['epoch'][0]+1
+        self._epoch[0] = saved_dict['epoch'][0]
         self.model_as_str = saved_dict['model_as_str']
     
     def load_last_state(self):
@@ -262,17 +270,6 @@ class experiment(object):
         args = parser.parse_args(namespace=args)
         
         return args
-
-    def _setup_experiment_directory(self, path):
-        if not os.path.exists(path):
-            os.makedirs(path)
-        else:
-            raise ValueError("Specified save path already exists ({})"
-                             "".format(path))
-        with open(os.path.join(path, "args.txt"), 'w') as f:
-            f.write('\n'.join(sys.argv))
-        with open(os.path.join(path, "config.py"), 'w') as f:
-            f.write(self.model_as_str)
 
 
 def count_params(module, trainable_only=True):

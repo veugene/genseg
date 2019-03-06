@@ -10,8 +10,14 @@ Requires:
 - h5py
 - imageio
 - natsort
-- tqdm
+- numpy
+- python-daemon
 - SimpleITK
+- scikit-image
+- scipy
+- tensorboardx
+- torch
+- tqdm
 - zarr
 
 ## Models
@@ -40,7 +46,8 @@ def build_model():
 ## Tasks
 
 `brats_segmentation.py` : BRATS  
-`cluttered_mnist_segmentation.py` : Cluttered MNIST
+`cluttered_mnist_segmentation.py` : Cluttered MNIST  
+`ddsm_segmentation.py` : DDSM
 
 Task launchers are used to start/resume an experiment.
 
