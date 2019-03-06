@@ -6,19 +6,19 @@ Run `git submodule init` to initialize submodules.
 Run `git submodule update` to download submodules.  
 Run `source link_submodules.sh` from *within the root directory of the source tree* to set up submodule links and add then to the PYTHONPATH.  
 
-Requires:
-- h5py
-- imageio
-- natsort
-- numpy
-- python-daemon
-- SimpleITK
-- scikit-image
-- scipy
-- tensorboardx
-- torch
-- tqdm
-- zarr
+Requires:  
+- h5py  
+- imageio  
+- natsort  
+- numpy  
+- python-daemon  
+- SimpleITK  
+- scikit-image  
+- scipy  
+- tensorboardx  
+- torch  
+- tqdm  
+- zarr  
 
 ## Models
 
@@ -28,7 +28,7 @@ Requires:
 
 A model is a pytorch module that determines compute and update rules. It takes sub-network definitions as initialization arguments (eg. encoder, decoders, discriminators, etc.).
 
-A model is instantiated in a *configuration file* with a `build_model()` function. Any other code/functions could exist in the file to help with building all sub-networks, etc. The `build_model()` function must return one of the following:
+A model is instantiated in a *configuration file* with a `build_model()` function. Any other code/functions could exist in the file to help with building all sub-networks, etc. The `build_model()` function must return one of the following:  
 1. An instantiated model.  
 2. A dictionary containing the instantiated model and any other models.  
 
@@ -79,3 +79,57 @@ python3 brats_segmentation.py --path "experiments/brats_2017/bds3/bds3_003_xid50
 ```
 
 Upon resuming, the model configuration file is loaded from the saved checkpoint. All arguments passed upon initializing the experiment are loaded as well. **Any of these can be over-ridden by simply passing them again with the resuming command.**
+
+## Dispatching on a compute cluster
+
+To launch an experiment on a cluster, simply run the launcher with the appropriate `dispatch` argument and the task launcher will set up and queue the job on the cluster. Each cluster has cluster-specific arguments that can be set (see `--help`).
+
+### Nvidia DGX ###
+
+The task launcher could be run on any system that has DGX interface tools set up and will set up and queue the job on the remote DGX cluster.
+
+To the task arguments, add the argument `--dispatch_dgx`, along with any aditional DGX-specific arguments:
+
+`--cluster_id` : the integer ID of the cluster (default=425)  
+`--docker_id` : the registered docker image containing the environment  
+`--gdx_gpu` : number of GPUs to request  
+`--gdx_cpu` : number of CPU cores to request  
+`--gdx_mem` : memory in GB to request  
+`--nfs_host` : the domain of the NFS share to mount, containing code and data  
+`--nfs_path` : the path (on the host) of the NFS share to mount  
+
+### Nvidia NGC ###
+
+The task launcher could be run on any system that has NGC interface tools set up and will set up and queue the job on the remote NGC cluster.
+
+To the task arguments, add the argument `--dispatch_dgx`, along with any aditional NGC-specific arguments:
+
+`--ace` : the specific cluster to use (default=nv-us-west-2)  
+`--instance` : the resource configuration (ngcv1, ngcv2, ngcv4, ngcv8 for 1, 2, 4, or 8 GPUs)  
+`--image` : the registered docker image containing the environment  
+`--source_id` : the dataset ID containing the source code (read only)  
+`--dataset_id` : the dataset ID containing the dataset (read only)  
+`--workspace` : the workspace ID and mountpoint (read, write)  
+`--result` : the mountpoint of the working directory for writes  
+
+NGC provides read only, write only, and read/write storage. Read only storage is "datasets" (`source_id` and `dataset_id`); write only storage is automatically created for each experiment (`result`); and read/write storage is the slowest and the only storage that can be mounted outside of the NGC job (`workspace`).
+
+If the source code is stored in a dataset, it should be mounted on "/repo" with `--source_id "<source code dataset id>:/repo"`.
+
+If the source code is stored in a workspace, the workspace should be mounted on "/repo" with `--workspace "<workspace id>:/repo"`.
+
+### Compute Canada ###
+
+Experiments should be launched from one of the login nodes of a compute canada cluster. The launcher then sets up and queues the job on the cluster.
+
+Note: SLURM setup for compute canada could be easily extended to other SLURM based clusters.
+
+To the task arguments, add the argument `--dispatch_dgx`, along with any aditional DGX-specific arguments:
+
+`--account` : the compute canada account to use for requesting resources  
+`--cca_gpu` : number of GPUs to request  
+`--cca_cpu` : number of CPU cores to request  
+`--cca_mem` : amount of memory to request, as a string (eg. '12G')  
+`--time` : the amount of time to request the job for (see `sbatch` time syntax)  
+
+When dispatching on a compute canada cluster, a daemon is created that requeues any jobs that time out, allowing them to resume. This allows requesting a short run time which makes it much more likely to get high priority resources; an optimal run time request is for 3h (`--time "3:0:0"`).
