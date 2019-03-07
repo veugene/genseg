@@ -63,12 +63,13 @@ class segmentation_model(nn.Module):
     """
     def __init__(self, encoder, decoder_common, decoder_residual, segmenter,
                  disc_A, disc_B, shape_sample, mutual_information=None,
-                 classifier_A=None, classifier_B=None, loss_rec=mae,
-                 loss_seg=None, loss_gan='hinge', num_disc_updates=1,
-                 relativistic=False, grad_penalty=None, disc_clip_norm=None,
-                 gen_clip_norm=None,  lambda_disc=1, lambda_x_id=10,
-                 lambda_z_id=1, lambda_f_id=1, lambda_seg=1, lambda_cyc=0,
-                 lambda_mi=0, lambda_slice=0., debug_ac_gan=False, rng=None):
+                 decoder_autoencode=None, classifier_A=None, classifier_B=None,
+                 loss_rec=mae, loss_seg=None, loss_gan='hinge',
+                 num_disc_updates=1, relativistic=False, grad_penalty=None,
+                 disc_clip_norm=None,gen_clip_norm=None,  lambda_disc=1,
+                 lambda_x_id=10, lambda_z_id=1, lambda_f_id=1, lambda_seg=1,
+                 lambda_cyc=0,lambda_mi=0, lambda_slice=0., debug_ac_gan=False,
+                 rng=None):
         super(segmentation_model, self).__init__()
         lambdas = OrderedDict((
             ('lambda_disc',       lambda_disc),
@@ -85,6 +86,7 @@ class segmentation_model(nn.Module):
             ('encoder',           encoder),
             ('decoder_common',    decoder_common),
             ('decoder_residual',  decoder_residual),
+            ('decoder_autoencode',decoder_autoencode),
             ('shape_sample',      shape_sample),
             ('loss_rec',          loss_rec),
             ('loss_seg',          loss_seg if loss_seg else dice_loss()),
@@ -276,9 +278,9 @@ class segmentation_model(nn.Module):
 
 class _forward(nn.Module):
     def __init__(self, encoder, decoder_common, decoder_residual, segmenter,
-                 shape_sample, lambda_disc=1, lambda_x_id=10, lambda_z_id=1,
-                 lambda_f_id=1, lambda_seg=1, lambda_cyc=0, lambda_mi=0,
-                 lambda_slice=0, rng=None):
+                 shape_sample, decoder_autoencode=None, lambda_disc=1,
+                 lambda_x_id=10, lambda_z_id=1, lambda_f_id=1, lambda_seg=1,
+                 lambda_cyc=0, lambda_mi=0, lambda_slice=0, rng=None):
         super(_forward, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.encoder            = encoder
@@ -286,6 +288,7 @@ class _forward(nn.Module):
         self.decoder_residual   = decoder_residual
         self.segmenter          = [segmenter]   # Separate params.
         self.shape_sample       = shape_sample
+        self.decoder_autoencode = decoder_autoencode
         self.lambda_disc        = lambda_disc
         self.lambda_x_id        = lambda_x_id
         self.lambda_z_id        = lambda_z_id
@@ -370,6 +373,12 @@ class _forward(nn.Module):
             x_BB, x_BB_list = unpack(x_BB)
             x_BA_residual, _= unpack(x_BA_residual)
         
+        # Optional separate autoencoder.
+        x_AA_ae = x_BB_ae = None
+        if self.decoder_autoencode is not None:
+            x_AA_ae = self.decoder_autoencode(s_A, **info_AB)
+            x_BB_ae = self.decoder_autoencode(s_B, **info_BA)
+        
         # Segment.
         x_AM = None
         if self.lambda_seg:
@@ -416,6 +425,8 @@ class _forward(nn.Module):
             ('x_BA_residual', x_BA_residual),
             ('x_BB',          x_BB),
             ('x_BAB',         x_BAB),
+            ('x_AA_ae',       x_AA_ae),
+            ('x_BB_ae',       x_BB_ae),
             ))
         hidden = OrderedDict((
             ('s_BA',          s_BA),
@@ -538,7 +549,7 @@ class _loss_G(nn.Module):
     def forward(self, x_AM, x_A, x_AB, x_AA, x_B, x_BA, x_BB, x_BAB,
                 s_BA, s_AA, c_AB, c_BB, z_BA, s_A, c_A, u_A, c_B, c_BA, u_BA,
                 x_AA_list, x_BB_list, skip_A, skip_B,
-                class_A=None, class_B=None):
+                x_AA_ae=None, x_BB_ae=None, class_A=None, class_B=None):
         # Mutual information loss for generator.
         loss_mi_gen = defaultdict(int)
         if self.net['mi'] is not None and self.lambda_mi:
@@ -576,6 +587,10 @@ class _loss_G(nn.Module):
         if self.lambda_x_id:
             loss_rec['AA'] = self.lambda_x_id*self.loss_rec(x_AA, x_A)
             loss_rec['BB'] = self.lambda_x_id*self.loss_rec(x_BB, x_B)
+        if self.lambda_x_id and x_AA_ae is not None:
+            loss_rec['AA'] += self.lambda_x_id*self.loss_rec(x_AA_ae, x_A)
+        if self.lambda_x_id and x_BB_ae is not None:
+            loss_rec['BB'] += self.lambda_x_id*self.loss_rec(x_BB_ae, x_B)
         if self.lambda_x_id and self.lambda_cyc:
             loss_rec['BB'] += self.lambda_cyc*self.loss_rec(x_BAB, x_B)
         if self.lambda_z_id:
