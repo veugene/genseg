@@ -72,8 +72,6 @@ class setup_mnist_data(object):
         if not self.gen_train_online:
             # Pre-generate training data.
             indices_seg = self._indices_seg
-            if self.yield_only_labeled:
-                indices_seg = None  # Training set already truncated, use all.
             self._training_set = \
                 self._generate_cluttered(len(self._x['train']),
                                          fold='train',
@@ -124,6 +122,7 @@ class setup_mnist_data(object):
         if self.yield_only_labeled:
             x_train = x_train[list(self._indices_seg)]
             y_train = y_train[list(self._indices_seg)]
+            self._indices_seg = None  # Dataset truncated; use all indices.
         
         self._x = {'train': x_train,
                    'valid': x_valid,
