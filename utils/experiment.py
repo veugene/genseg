@@ -23,6 +23,7 @@ class experiment(object):
     def __init__(self, parser):
         self._epoch = [0]
         args = parser.parse_args()
+        self.experiment_path = args.path
         
         # Make experiment directory, if necessary.
         if not os.path.exists(args.path):
@@ -35,6 +36,7 @@ class experiment(object):
         
         # If yes, resume; else, initialize a new experiment.
         if os.path.exists(args.path) and len(state_file_list):
+            # RESUME old experiment
             args = self._load_and_merge_args(parser)
             state_file = state_file_list[-1]
             state_from = os.path.join(args.path, state_file)
@@ -48,6 +50,7 @@ class experiment(object):
             self._load_state(load_from=state_from,
                              model=model, optimizer=optimizer)
         else:
+            # INIT new experiment
             model, optimizer = self._init_state(
                                      model_from=args.model_from,
                                      optimizer_name=args.optimizer,
@@ -63,24 +66,13 @@ class experiment(object):
             with open(os.path.join(args.path, "config.py"), 'w') as f:
                 f.write(self.model_as_str)
         
-        # Initialization complete. Store ojbects, etc.
+        # Initialization complete. Store objects, etc.
         self.args = args
         self.model = model
         self.optimizer = optimizer
-        self.experiment_path = args.path
         print("Number of parameters\n"+
               "\n".join([" {} : {}".format(key, count_params(self.model[key]))
                          for key in self.model.keys()]))
-    
-    def get_model_save_dict(self):
-        # For checkpoints.
-        model_save_dict = {'dict': {'epoch'        : self._epoch,
-                                    'model_as_str' : self.model_as_str}}
-        for key in self.model.keys():
-            model_save_dict['dict'][key] = {
-                'model_state'    : self.model[key].state_dict(),
-                'optimizer_state': self.optimizer[key].state_dict()}
-        return model_save_dict
     
     def setup_engine(self, function,
                      append=True, prefix=None, epoch_length=None):
@@ -94,8 +86,7 @@ class experiment(object):
         progress.attach(engine)
         return engine
     
-    def setup_checkpoints(self, trainer, evaluator=None,
-                          score_function=None, n_saved=2):
+    def setup_checkpoints(self, trainer, evaluator, score_function, n_saved=2):
         # Checkpoint at every epoch and increment epoch in
         # `self.model_save_dict`.
         checkpoint_last_handler = ModelCheckpoint(
@@ -106,47 +97,91 @@ class experiment(object):
                                     atomic=True,
                                     create_dir=True,
                                     require_empty=False)
-        checkpoint_last_handler._iteration = self._epoch[0]
         
-        # Function to update state dicts, call checkpoint handlers, and
-        # increment epoch count.
-        def checkpoint_handler_train(engine):
-            model_save_dict = self.get_model_save_dict()
-            checkpoint_last_handler(engine, model_save_dict)
-        trainer.add_event_handler(Events.EPOCH_COMPLETED,
-                                  checkpoint_handler_train)
+        # Checkpoint for best model performance.
+        checkpoint_best_handler = ModelCheckpoint(
+                                    dirname=self.experiment_path,
+                                    filename_prefix='best_state',
+                                    n_saved=1,
+                                    score_function=score_function,
+                                    atomic=True,
+                                    create_dir=True,
+                                    require_empty=False)
         
-        # Setup initial epoch in the training engine.
+        # Save checkpoint histories in a lightweight checkpoint.
+        # If experiment state is resumed, so are these histories.
+        checkpoint_hist_handler = ModelCheckpoint(
+                                    dirname=self.experiment_path,
+                                    filename_prefix='checkpoint_history',
+                                    n_saved=n_saved,
+                                    save_interval=1,
+                                    atomic=True,
+                                    create_dir=True,
+                                    require_empty=False)
+        
+        # The lists of saved checkpoints is stored in the experiment object.
+        # If experiment state is resumed, so are these lists.
+        # 
+        # Monkey-patch the checkpoint handlers to use _these_ lists rather
+        # than their own which are always initialized empty, even when
+        # resuming an experiment.
+        checkpoint_last_handler._saved = self._checkpoint_saved_last
+        checkpoint_best_handler._saved = self._checkpoint_saved_best
+        
+        # Track epoch in the experiment object, the training engine state,
+        # and the checkpoint handlers.
+        # 
+        # This allows the correct epoch to be reported, training to stop after
+        # the correct number of epochs, resumed experiments to start on the
+        # correct epoch, and saved states to be enumerated with the correct
+        # epoch.
         trainer.add_event_handler(Events.STARTED,
                                   lambda engine: setattr(engine.state,
                                                          "epoch",
                                                          self._epoch[0]))
+        checkpoint_last_handler._iteration = self._epoch[0]
+        checkpoint_best_handler._iteration = self._epoch[0]
+        checkpoint_hist_handler._iteration = self._epoch[0]
         
-        # Checkpoint for best model performance.
-        checkpoint_best_handler = None
-        if evaluator is not None:
-            checkpoint_best_handler = ModelCheckpoint(
-                                        dirname=self.experiment_path,
-                                        filename_prefix='best_state',
-                                        n_saved=1,
-                                        score_function=score_function,
-                                        atomic=True,
-                                        create_dir=True,
-                                        require_empty=False)
-            checkpoint_best_handler._iteration = self._epoch[0]
-            def checkpoint_handler_valid(engine):
-                model_save_dict = self.get_model_save_dict()
-                checkpoint_best_handler(engine, model_save_dict)
-                self._increment_epoch(engine)
-            evaluator.add_event_handler(Events.EPOCH_COMPLETED,
-                                        checkpoint_handler_valid)
-
+        # Function to update state dicts, call checkpoint handler, and
+        # increment epoch count. Runs at the end of each epoch.
+        # 
+        # Also stores the '_saved' list of previous checkpoints from all
+        # checkpoint handlers, so that previous checkpoints could be cleaned
+        # up when an experiment is resumed.
+        # 
+        # To support saving some problematic layers (eg. layer normalization),
+        # `state_dict()` is called every time a state dict is needed (every
+        # time that a state is saved).
+        # 
+        # NOTE: `checkpoint_handler` only uses `engine` by applying
+        # `score_function` to it -- so only the `checkpoint_best_handler`
+        # needs an enginer (the `evaluator` engine). This engine can safely
+        # be passed to the `checkpoint_last_handler`, too, since it will not
+        # be used there.
+        def call_checkpoint_handlers(engine):
+            self._epoch[0] = trainer.state.epoch  # Update the epoch count.
+            model_save_dict = {'dict': {
+                'epoch'        : self._epoch,
+                'model_as_str' : self.model_as_str
+                }}
+            for key in self.model.keys():
+                model_save_dict['dict'][key] = {
+                    'model_state'     : self.model[key].state_dict(),
+                    'optimizer_state' : self.optimizer[key].state_dict()}
+            checkpoint_last_handler(engine, model_save_dict)                
+            checkpoint_best_handler(engine, model_save_dict)
+            hist_save_dict = {'dict': {
+                'last_checkpoint' : checkpoint_last_handler._saved,
+                'best_checkpoint' : checkpoint_best_handler._saved
+                }}
+            checkpoint_hist_handler(engine, hist_save_dict)
+        evaluator.add_event_handler(Events.EPOCH_COMPLETED,
+                                    call_checkpoint_handlers)
+        
+    
     def get_epoch(self):
         return self._epoch[0]
-        
-    def _increment_epoch(self, engine):
-        self._epoch[0] += 1
-        engine.epoch = self._epoch
     
     def _init_state(self, model_from, optimizer_name, learning_rate=0.,
                     opt_kwargs=None, weight_decay=0.):
@@ -195,6 +230,11 @@ class experiment(object):
                                             opt_kwargs=parse(opt_kwargs),
                                             weight_decay=weight_decay)
         
+        # Store the lists of past checkpoints in the experiment object.
+        # (checkpoint handler internals -- used for resuming handler state).
+        self._checkpoint_saved_last = []
+        self._checkpoint_saved_best = []
+        
         return model, optimizer
     
     def _load_state(self, load_from, model, optimizer=None):
@@ -211,6 +251,25 @@ class experiment(object):
         # Experiment metadata.
         self._epoch[0] = saved_dict['epoch'][0]
         self.model_as_str = saved_dict['model_as_str']
+        
+        # Store the lists of past checkpoints in the experiment object.
+        # (checkpoint handler internals -- used for resuming handler state).
+        def clean(checkpoint_list):
+            # Keep only the paths that exist.
+            valid_checkpoint_list = []
+            for priority, paths in checkpoint_list:
+                if np.all([os.path.exists(p) for p in paths]):
+                    valid_checkpoint_list.append((priority, paths))   
+            return valid_checkpoint_list
+        hist_file_list = natsorted(
+            [fn for fn in os.listdir(self.experiment_path)
+             if fn.startswith('checkpoint_history_dict_')
+             and fn.endswith('.pth')])
+        if len(hist_file_list):
+            hist_path = os.path.join(self.experiment_path, hist_file_list[-1])
+            hist_dict = torch.load(hist_path)
+            self._checkpoint_saved_last = clean(hist_dict['last_checkpoint'])
+            self._checkpoint_saved_best = clean(hist_dict['best_checkpoint'])
     
     def load_last_state(self):
         state_file = natsorted([fn for fn in os.listdir(self.experiment_path)
