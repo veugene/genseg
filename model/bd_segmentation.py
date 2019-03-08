@@ -67,12 +67,14 @@ class segmentation_model(nn.Module):
                  loss_rec=mae, loss_seg=None, loss_gan='hinge',
                  num_disc_updates=1, relativistic=False, grad_penalty=None,
                  disc_clip_norm=None,gen_clip_norm=None,  lambda_disc=1,
-                 lambda_x_id=10, lambda_z_id=1, lambda_f_id=1, lambda_seg=1,
-                 lambda_cyc=0,lambda_mi=0, lambda_slice=0., debug_ac_gan=False,
+                 lambda_x_ae=10, lambda_x_id=10, lambda_z_id=1, lambda_f_id=1,
+                 lambda_seg=1, lambda_cyc=0,lambda_mi=0, lambda_slice=0.,
+                 debug_ac_gan=False,
                  rng=None):
         super(segmentation_model, self).__init__()
         lambdas = OrderedDict((
             ('lambda_disc',       lambda_disc),
+            ('lambda_x_ae',       lambda_x_ae),
             ('lambda_x_id',       lambda_x_id),
             ('lambda_z_id',       lambda_z_id),
             ('lambda_f_id',       lambda_f_id),
@@ -125,7 +127,8 @@ class segmentation_model(nn.Module):
         # Module to compute all network outputs (except discriminator) on GPU.
         # Outputs are placed on CPU when there are multiple GPUs.
         keys_forward = ['encoder', 'decoder_common', 'decoder_residual',
-                        'segmenter', 'shape_sample', 'rng']
+                        'decoder_autoencode',  'segmenter', 'shape_sample',
+                        'rng']
         kwargs_forward = dict([(key, val) for key, val in kwargs.items()
                                if key in keys_forward])
         self._forward = _forward(**kwargs_forward, **lambdas)
@@ -219,6 +222,8 @@ class segmentation_model(nn.Module):
                                     x_BA=visible['x_BA'],
                                     x_BB=visible['x_BB'],
                                     x_BAB=visible['x_BAB'],
+                                    x_AA_ae=visible['x_AA_ae'],
+                                    x_BB_ae=visible['x_BB_ae'],
                                     **hidden,
                                     **intermediates)
         
@@ -279,8 +284,9 @@ class segmentation_model(nn.Module):
 class _forward(nn.Module):
     def __init__(self, encoder, decoder_common, decoder_residual, segmenter,
                  shape_sample, decoder_autoencode=None, lambda_disc=1,
-                 lambda_x_id=10, lambda_z_id=1, lambda_f_id=1, lambda_seg=1,
-                 lambda_cyc=0, lambda_mi=0, lambda_slice=0, rng=None):
+                 lambda_x_ae=10, lambda_x_id=10, lambda_z_id=1, lambda_f_id=1,
+                 lambda_seg=1, lambda_cyc=0, lambda_mi=0, lambda_slice=0,
+                 rng=None):
         super(_forward, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.encoder            = encoder
@@ -290,6 +296,7 @@ class _forward(nn.Module):
         self.shape_sample       = shape_sample
         self.decoder_autoencode = decoder_autoencode
         self.lambda_disc        = lambda_disc
+        self.lambda_x_ae        = lambda_x_ae
         self.lambda_x_id        = lambda_x_id
         self.lambda_z_id        = lambda_z_id
         self.lambda_f_id        = lambda_f_id
@@ -314,6 +321,7 @@ class _forward(nn.Module):
         s_A, skip_A = self.encoder(x_A)
         s_B = skip_B = None
         if (   self.lambda_disc
+            or self.lambda_x_ae
             or self.lambda_x_id
             or self.lambda_z_id):
                 s_B, skip_B = self.encoder(x_B)
@@ -375,9 +383,9 @@ class _forward(nn.Module):
         
         # Optional separate autoencoder.
         x_AA_ae = x_BB_ae = None
-        if self.decoder_autoencode is not None:
-            x_AA_ae = self.decoder_autoencode(s_A, **info_AB)
-            x_BB_ae = self.decoder_autoencode(s_B, **info_BA)
+        if self.lambda_x_ae and self.decoder_autoencode is not None:
+            x_AA_ae, _ = self.decoder_autoencode(s_A, skip_info=skip_A)
+            x_BB_ae, _ = self.decoder_autoencode(s_B, skip_info=skip_B)
         
         # Segment.
         x_AM = None
@@ -453,12 +461,13 @@ class _forward(nn.Module):
 class _loss_D(nn.Module):
     def __init__(self, gan_objective, disc_A, disc_B, classifier_A=None, 
                  classifier_B=None, mi_estimator=None, lambda_disc=1,
-                 lambda_x_id=10, lambda_z_id=1, lambda_f_id=1, lambda_seg=1,
-                 lambda_cyc=0, lambda_mi=0, lambda_slice=0,
+                 lambda_x_ae=10, lambda_x_id=10, lambda_z_id=1, lambda_f_id=1,
+                 lambda_seg=1, lambda_cyc=0, lambda_mi=0, lambda_slice=0,
                  debug_ac_gan=False):
         super(_loss_D, self).__init__()
         self._gan               = gan_objective
         self.lambda_disc        = lambda_disc
+        self.lambda_x_ae        = lambda_x_ae
         self.lambda_x_id        = lambda_x_id
         self.lambda_z_id        = lambda_z_id
         self.lambda_f_id        = lambda_f_id
@@ -525,13 +534,14 @@ class _loss_D(nn.Module):
 class _loss_G(nn.Module):
     def __init__(self, gan_objective, disc_A, disc_B, classifier_A=None, 
                  classifier_B=None, mi_estimator=None, loss_rec=mae,
-                 lambda_disc=1, lambda_x_id=10, lambda_z_id=1, lambda_f_id=1,
-                 lambda_seg=1, lambda_cyc=0, lambda_mi=0, lambda_slice=0,
-                 debug_ac_gan=False):
+                 lambda_disc=1, lambda_x_ae=10, lambda_x_id=10, lambda_z_id=1,
+                 lambda_f_id=1, lambda_seg=1, lambda_cyc=0, lambda_mi=0,
+                 lambda_slice=0, debug_ac_gan=False):
         super(_loss_G, self).__init__()
         self._gan               = gan_objective
         self.loss_rec           = loss_rec
         self.lambda_disc        = lambda_disc
+        self.lambda_x_ae        = lambda_x_ae
         self.lambda_x_id        = lambda_x_id
         self.lambda_z_id        = lambda_z_id
         self.lambda_f_id        = lambda_f_id
@@ -587,10 +597,10 @@ class _loss_G(nn.Module):
         if self.lambda_x_id:
             loss_rec['AA'] = self.lambda_x_id*self.loss_rec(x_AA, x_A)
             loss_rec['BB'] = self.lambda_x_id*self.loss_rec(x_BB, x_B)
-        if self.lambda_x_id and x_AA_ae is not None:
-            loss_rec['AA'] += self.lambda_x_id*self.loss_rec(x_AA_ae, x_A)
-        if self.lambda_x_id and x_BB_ae is not None:
-            loss_rec['BB'] += self.lambda_x_id*self.loss_rec(x_BB_ae, x_B)
+        if self.lambda_x_ae and x_AA_ae is not None:
+            loss_rec['AA_ae'] = self.lambda_x_ae*self.loss_rec(x_AA_ae, x_A)
+        if self.lambda_x_ae and x_BB_ae is not None:
+            loss_rec['BB_ae'] = self.lambda_x_ae*self.loss_rec(x_BB_ae, x_B)
         if self.lambda_x_id and self.lambda_cyc:
             loss_rec['BB'] += self.lambda_cyc*self.loss_rec(x_BAB, x_B)
         if self.lambda_z_id:
@@ -624,6 +634,8 @@ class _loss_G(nn.Module):
             ('l_rec',         _reduce([loss_rec['AA'], loss_rec['BB']])),
             ('l_rec_AA',      _reduce([loss_rec['AA']])),
             ('l_rec_BB',      _reduce([loss_rec['BB']])),
+            ('l_rec_AA_ae',   _reduce([loss_rec['AA_ae']])),
+            ('l_rec_BB_ae',   _reduce([loss_rec['BB_ae']])),
             ('l_rec_c',       _reduce([loss_rec['z_AB'], loss_rec['z_BB']])),
             ('l_rec_s',       _reduce([loss_rec['z_BA'], loss_rec['z_AA']])),
             ('l_rec_z_BA',    _reduce([loss_rec['z_BA']])),
