@@ -250,7 +250,6 @@ class experiment(object):
         
         # Experiment metadata.
         self._epoch[0] = saved_dict['epoch'][0]
-        self.model_as_str = saved_dict['model_as_str']
         
         # Store the lists of past checkpoints in the experiment object.
         # (checkpoint handler internals -- used for resuming handler state).
