@@ -122,20 +122,26 @@ def _dispatch_dgx(args):
 
 
 def _dispatch_ngc(args):
-    pre_cmd = ("cd /repo; "
+    import re
+    pre_cmd = ("cd /scratch/TRANSLATION_project/iccv2019/; "
                "source register_submodules.sh;")
-    cmd = subprocess.list2cmdline(sys.argv)       # Shell executable.
-    cmd = cmd.replace(" --_dispatch_ngc", "")     # Remove recursion.
+
+    cmd = subprocess.list2cmdline(sys.argv)  # Shell executable.
+    cmd = cmd.replace(" --dispatch_ngc", "")  # Remove recursion.
     cmd = "bash -c '{} python3 {};'".format(pre_cmd, cmd)  # Combine.
+
+    job_name = args.path[args.path.rfind("/") + 1:]
+    job_name = re.sub(r'[^\w]', '_', job_name)
+
     subprocess.run(["ngc", "batch", "run",
                     "--image", args.image,
+                    "--name", job_name,
                     "--ace", args.ace,
                     "--instance", args.instance,
                     "--commandline", cmd,
                     "--datasetid", args.dataset_id,
-                    "--datasetid", args.source_id,
                     "--workspace", args.workspace,
-                    "--result", args.result])
+                    "--result", "\\results"])
 
 
 def _dispatch_canada(args):
