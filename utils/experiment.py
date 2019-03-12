@@ -51,6 +51,7 @@ class experiment(object):
                              model=model, optimizer=optimizer)
         else:
             # INIT new experiment
+            args = self._load_and_merge_args(parser)
             model, optimizer = self._init_state(
                                      model_from=args.model_from,
                                      optimizer_name=args.optimizer,
@@ -195,6 +196,11 @@ class experiment(object):
         '''
         
         # Build the model.
+        if os.path.isdir(model_from):
+            ##we have a directory, need to grab .py file
+            import glob
+            model_from = glob.glob(os.path.join(model_from, "*.py"))[0]
+
         if model_from.endswith(".py"):
             self.model_as_str = open(model_from).read()
         else:
@@ -323,6 +329,18 @@ class experiment(object):
             _args = arg_file.read().split('\n')[1:]
             args_from_file = parser.parse_args(_args)
             args = args_from_file
+
+        # If loading config file and getting args from there, merge with loaded arguments (newly passed arguments
+        # override loaded arguments).
+        path_for_args = os.path.join(args.model_from, "args.txt")
+        if os.path.exists(path_for_args):
+            with open(path_for_args, 'r') as f:
+                saved_args = f.read().split('\n')[1:]
+                saved_args = [s for s in saved_args if s != '']
+                args = parser.parse_args(args=saved_args)
+
+            args = parser.parse_args(namespace=args)
+
             
         # Override loaded arguments with any provided anew.
         args = parser.parse_args(namespace=args)

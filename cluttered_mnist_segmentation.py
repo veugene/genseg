@@ -5,7 +5,6 @@ import json
 from utils.dispatch import (dispatch,
                             dispatch_argument_parser)
 
-
 '''
 Process arguments.
 '''
@@ -284,4 +283,6 @@ def run():
 
 if __name__ == '__main__':
     parser = get_parser()
+    import sys
+    print("command: "," ".join(sys.argv))
     dispatch(parser, run)

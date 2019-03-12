@@ -78,7 +78,7 @@ def dispatch(parser, run):
             saved_args = f.read().split('\n')[1:]
             args = parser.parse_args(args=saved_args)
         args = parser.parse_args(namespace=args)
-    
+
     # Dispatch on a cluster (or run locally if none specified).
     if args.dispatch_dgx:
         _dispatch_dgx(args)
