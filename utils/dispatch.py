@@ -141,7 +141,7 @@ def _dispatch_ngc(args):
                     "--commandline", cmd,
                     "--datasetid", args.dataset_id,
                     "--workspace", args.workspace,
-                    "--result", "\\results"])
+                    "--result", "/results"])
 
 
 def _dispatch_canada(args):

@@ -85,7 +85,9 @@ def run():
     args = experiment_state.args
     assert args.labeled_fraction > 0
     torch.manual_seed(args.init_seed)
-    
+
+    print("args.size_output",args.size_output)
+
     # Data augmentation settings.
     da_kwargs = {'rotation_range': 3.,
                  'zoom_range': 0.1,

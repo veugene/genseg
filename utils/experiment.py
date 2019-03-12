@@ -323,12 +323,13 @@ class experiment(object):
         any set anew.
         '''
         args = parser.parse_args()
-        initial_epoch = 0        
-        with open(os.path.join(args.path, "args.txt"), 'r') as arg_file:
-            # Remove first word when parsing arguments from file.
-            _args = arg_file.read().split('\n')[1:]
-            args_from_file = parser.parse_args(_args)
-            args = args_from_file
+        initial_epoch = 0
+        if os.path.exists(os.path.join(args.path, "args.txt")):
+            with open(os.path.join(args.path, "args.txt"), 'r') as arg_file:
+                # Remove first word when parsing arguments from file.
+                _args = arg_file.read().split('\n')[1:]
+                args_from_file = parser.parse_args(_args)
+                args = args_from_file
 
         # If loading config file and getting args from there, merge with loaded arguments (newly passed arguments
         # override loaded arguments).

@@ -15,6 +15,16 @@ from .common.losses import (bce,
                             mse)
 from .common.mine import mine
 
+'''
+Parameter explanation:
+
+lambda_x_id - weight for the loss A->(B, dA)->A and B->(B, dA)->A
+lambda_z_id - weight for the loss on having consistent latent representation for translations
+lambda_seg  - weight for the loss on segmentation, done via MLP to adjust AdaIN parameters
+
+
+
+'''
 
 def clear_grad(optimizer):
     # Sets `grad` to None instead of zeroing it.
