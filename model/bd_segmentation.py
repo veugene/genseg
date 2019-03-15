@@ -168,13 +168,12 @@ class segmentation_model(nn.Module):
                                                            rng=rng)
         
         # Evaluate discriminator loss and update.
-        loss_disc = defaultdict(int)
-        loss_D = gradnorm_D = 0
+        gradnorm_D = 0
         if self.lambda_disc:
             for i in range(self.num_disc_updates):
                 # Evaluate.
                 with torch.set_grad_enabled(do_updates_bool):
-                    loss_disc, loss_slice_est, loss_mi_est = self._loss_D(
+                    losses_D = self._loss_D(
                         x_A=x_A,
                         x_B=x_B,
                         class_A=class_A,
@@ -185,15 +184,14 @@ class segmentation_model(nn.Module):
                         u_A=hidden['u_A'],
                         c_BA=hidden['c_BA'],
                         u_BA=hidden['u_BA'])
-                    loss_D = _reduce(loss_disc.values())
                 # Update discriminator (and slice classifiers).
                 disc_A = self.separate_networks['disc_A']
                 disc_B = self.separate_networks['disc_B']
                 if do_updates_bool:
                     clear_grad(optimizer['D'])
-                    loss_D.mean().backward()
+                    losses_D['l_D'].mean().backward()
                     if self.lambda_slice:
-                        _reduce(loss_slice_est.values()).mean().backward()
+                        losses_D['l_slice_est'].mean().backward()
                     if self.disc_clip_norm:
                         nn.utils.clip_grad_norm_(disc_A.parameters(),
                                                  max_norm=self.disc_clip_norm)
@@ -205,8 +203,7 @@ class segmentation_model(nn.Module):
                 mi_estimator = self.separate_networks['mi_estimator']
                 if do_updates_bool and mi_estimator is not None:
                     clear_grad(optimizer['E'])
-                    _reduce([loss_mi_est['A'],
-                             loss_mi_est['BA']]).mean().backward()
+                    losses_D['l_mi_est'].mean().backward()
                     optimizer['E'].step()
         
         # Evaluate generator losses.
@@ -272,9 +269,9 @@ class segmentation_model(nn.Module):
         outputs.update(visible)
         outputs['x_AM'] = x_AM_packed
         outputs.update(losses_G)
-        outputs['l_D']  = loss_D
-        outputs['l_DA'] = _reduce([loss_disc['A']])
-        outputs['l_DB'] = _reduce([loss_disc['B']])
+        outputs['l_D']  = losses_D['l_D']
+        outputs['l_DA'] = losses_D['l_DA']
+        outputs['l_DB'] = losses_D['l_DB']
         outputs['l_gradnorm_D'] = gradnorm_D
         outputs['l_gradnorm_G'] = gradnorm_G
         
@@ -466,6 +463,11 @@ class _loss_D(nn.Module):
                  debug_ac_gan=False):
         super(_loss_D, self).__init__()
         self._gan               = gan_objective
+        self.disc_A             = disc_A
+        self.disc_B             = disc_B
+        self.class_A            = classifier_A
+        self.class_B            = classifier_B
+        self.mi                 = mi_estimator
         self.lambda_disc        = lambda_disc
         self.lambda_x_ae        = lambda_x_ae
         self.lambda_x_id        = lambda_x_id
@@ -476,11 +478,6 @@ class _loss_D(nn.Module):
         self.lambda_mi          = lambda_mi
         self.lambda_slice       = lambda_slice
         self.debug_ac_gan       = debug_ac_gan
-        self.net = {'disc_A'    : disc_A,
-                    'disc_B'    : disc_B,
-                    'class_A'   : classifier_A,
-                    'class_B'   : classifier_B,
-                    'mi'        : mi_estimator}  # Separate params.
     
     def forward(self, x_A, x_B, x_BA, x_AB, c_A, u_A, c_BA, u_BA,
                 class_A=None, class_B=None):
@@ -494,14 +491,14 @@ class _loss_D(nn.Module):
         kwargs_real = None if class_A is None else {'class_info': class_A}
         kwargs_fake = None if class_B is None else {'class_info': class_B}
         loss_disc = OrderedDict()
-        loss_disc_A = self._gan.D(self.net['disc_A'],
+        loss_disc_A = self._gan.D(self.disc_A,
                                   fake=x_BA.detach(), real=x_A,
                                   kwargs_real=kwargs_real,
                                   kwargs_fake=kwargs_fake)
         loss_disc['A'] = self.lambda_disc*loss_disc_A
         kwargs_real = None if class_A is None else {'class_info': class_B}
         kwargs_fake = None if class_B is None else {'class_info': class_A}
-        loss_disc_B = self._gan.D(self.net['disc_B'],
+        loss_disc_B = self._gan.D(self.disc_B,
                                   fake=x_AB.detach(), real=x_B,
                                   kwargs_real=kwargs_real,
                                   kwargs_fake=kwargs_fake)
@@ -510,25 +507,35 @@ class _loss_D(nn.Module):
         # Slice number classification.
         loss_slice_est = defaultdict(int)
         if self.lambda_slice and class_A is not None:
-            loss_slice_est['A'] = _cce(self.net['class_A'](x_A), class_A)
+            loss_slice_est['A'] = _cce(self.class_A(x_A), class_A)
             if self.debug_ac_gan:
-                loss_slice_est['BA'] = _cce(self.net['class_A'](x_BA.detach()), 
+                loss_slice_est['BA'] = _cce(self.class_A(x_BA.detach()), 
                                             class_A)
         if self.lambda_slice and class_B is not None:
-            loss_slice_est['B'] = _cce(self.net['class_B'](x_B), class_B)
+            loss_slice_est['B'] = _cce(self.class_B(x_B), class_B)
             if self.debug_ac_gan:
-                loss_slice_est['AB'] = _cce(self.net['class_B'](x_AB.detach()),
+                loss_slice_est['AB'] = _cce(self.class_B(x_AB.detach()),
                                             class_B)
         
         # Mutual information estimate.
         loss_mi_est = defaultdict(int)
-        if self.net['mi'] is not None:
-            loss_mi_est['A'] = self.net['mi'](c_A.detach(), u_A.detach())
+        if self.mi is not None:
+            loss_mi_est['A'] = self.mi(c_A.detach(), u_A.detach())
             if self.lambda_cyc:
-                loss_mi_est['BA'] = self.net['mi'](c_BA.detach(),
-                                                   u_BA.detach())
+                loss_mi_est['BA'] = self.mi(c_BA.detach(), u_BA.detach())
         
-        return loss_disc, loss_slice_est, loss_mi_est
+        # Compile outputs and return.
+        losses = OrderedDict((
+            ('l_DA',          _reduce([loss_disc['A']])),
+            ('l_DB',          _reduce([loss_disc['B']])),
+            ('l_D',           _reduce(loss_disc.values())),
+            ('l_slice_est',   _reduce(loss_slice_est.values())),
+            ('l_mi_est',      _reduce(loss_mi_est.values())),
+        ))
+        for key, val in losses.items():
+            if not isinstance(val, torch.Tensor) and val==0:
+                losses[key] = None  # For gather_map in DataParallel
+        return losses
 
 
 class _loss_G(nn.Module):
@@ -539,6 +546,11 @@ class _loss_G(nn.Module):
                  lambda_slice=0, debug_ac_gan=False):
         super(_loss_G, self).__init__()
         self._gan               = gan_objective
+        self.disc_A             = disc_A
+        self.disc_B             = disc_B
+        self.class_A            = classifier_A
+        self.class_B            = classifier_B
+        self.mi                 = mi_estimator
         self.loss_rec           = loss_rec
         self.lambda_disc        = lambda_disc
         self.lambda_x_ae        = lambda_x_ae
@@ -550,11 +562,6 @@ class _loss_G(nn.Module):
         self.lambda_mi          = lambda_mi
         self.lambda_slice       = lambda_slice
         self.debug_ac_gan       = debug_ac_gan
-        self.net = {'disc_A'    : disc_A,
-                    'disc_B'    : disc_B,
-                    'class_A'   : classifier_A,
-                    'class_B'   : classifier_B,
-                    'mi'        : mi_estimator}  # Separate params.
     
     def forward(self, x_AM, x_A, x_AB, x_AA, x_B, x_BA, x_BB, x_BAB,
                 s_BA, s_AA, c_AB, c_BB, z_BA, s_A, c_A, u_A, c_B, c_BA, u_BA,
@@ -562,17 +569,17 @@ class _loss_G(nn.Module):
                 x_AA_ae=None, x_BB_ae=None, class_A=None, class_B=None):
         # Mutual information loss for generator.
         loss_mi_gen = defaultdict(int)
-        if self.net['mi'] is not None and self.lambda_mi:
-            loss_mi_gen['A']  = -self.lambda_mi*self.net['mi'](c_A, u_A)
+        if self.mi is not None and self.lambda_mi:
+            loss_mi_gen['A']  = -self.lambda_mi*self.mi(c_A, u_A)
             if self.lambda_cyc:
-                loss_mi_gen['BA'] = -self.lambda_mi*self.net['mi'](c_BA, u_BA)
+                loss_mi_gen['BA'] = -self.lambda_mi*self.mi(c_BA, u_BA)
         
         # Slice number classification.
         loss_slice_gen = defaultdict(int)
         if self.lambda_slice and class_A is not None:
-            loss_slice_gen['BA'] = _cce(self.net['class_A'](x_BA), class_A)
+            loss_slice_gen['BA'] = _cce(self.class_A(x_BA), class_A)
         if self.lambda_slice and class_B is not None:
-            loss_slice_gen['AB'] = _cce(self.net['class_B'](x_AB), class_B)
+            loss_slice_gen['AB'] = _cce(self.class_B(x_AB), class_B)
         
         # Generator loss.
         loss_gen = defaultdict(int)
@@ -580,14 +587,14 @@ class _loss_G(nn.Module):
             kwargs_real = None if class_A is None else {'class_info': class_B}
             kwargs_fake = None if class_B is None else {'class_info': class_A}
             loss_gen['AB'] = self.lambda_disc*self._gan.G(
-                                    self.net['disc_B'],
+                                    self.disc_B,
                                     fake=x_AB, real=x_B,
                                     kwargs_real=kwargs_real,
                                     kwargs_fake=kwargs_fake)
             kwargs_real = None if class_A is None else {'class_info': class_A}
             kwargs_fake = None if class_B is None else {'class_info': class_B}
             loss_gen['BA'] = self.lambda_disc*self._gan.G(
-                                    self.net['disc_A'],
+                                    self.disc_A,
                                     fake=x_BA, real=x_A,
                                     kwargs_real=kwargs_real,
                                     kwargs_fake=kwargs_fake)
@@ -650,4 +657,7 @@ class _loss_G(nn.Module):
             ('l_slice_BA',    _reduce([loss_slice_gen['BA']])),
             ('l_slice_AB',    _reduce([loss_slice_gen['AB']]))
             ))
+        for key, val in losses.items():
+            if not isinstance(val, torch.Tensor) and val==0:
+                losses[key] = None  # For gather_map in DataParallel
         return losses
