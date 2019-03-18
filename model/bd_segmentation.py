@@ -26,49 +26,51 @@ def clear_grad(optimizer):
 
 def _reduce(loss):
     def _mean(x):
-        if not isinstance(x, torch.Tensor) or x.dim()<=1:
+        if not isinstance(x, torch.Tensor) or x.dim() <= 1:
             return x
         else:
             return x.view(x.size(0), -1).mean(1)
+
     if not hasattr(loss, '__len__'): loss = [loss]
-    if len(loss)==0: return 0
+    if len(loss) == 0: return 0
     return sum([_mean(v) for v in loss])
 
 
 def _cce(p, t):
     # Cross entropy loss that can handle multi-scale classifiers.
-    # 
+    #
     # If p is a list, process every element (and reduce to batch dim).
     # Each tensor is reduced by `mean` and reduced tensors are averaged
     # together.
     # (For multi-scale classifiers. Each scale is given equal weight.)
     if not isinstance(p, torch.Tensor):
-        return sum([_cce(elem, t) for elem in p])/float(len(p))
+        return sum([_cce(elem, t) for elem in p]) / float(len(p))
     # Convert target list to torch tensor (batch_size, 1, 1, 1).
-    t = torch.Tensor(t).reshape(-1,1,1).expand(-1,p.size(2),p.size(3)).long()
+    t = torch.Tensor(t).reshape(-1, 1, 1).expand(-1, p.size(2), p.size(3)).long()
     if p.is_cuda:
         t = t.to(p.device)
     # Cross-entropy.
     out = F.cross_entropy(p, t)
     # Return if no dimensions beyond batch dim.
-    if out.dim()<=1:
+    if out.dim() <= 1:
         return out
     # Else, return after reducing to batch dim.
-    return out.view(out.size(0), -1).mean(1)    # Reduce to batch dim.
+    return out.view(out.size(0), -1).mean(1)  # Reduce to batch dim.
 
 
 class segmentation_model(nn.Module):
     """
     Interface wrapper around the `DataParallel` parts of the model.
     """
+
     def __init__(self, encoder, decoder_common, decoder_residual, segmenter,
                  disc_A, disc_B, shape_sample, mutual_information=None,
                  decoder_autoencode=None, classifier_A=None, classifier_B=None,
                  loss_rec=mae, loss_seg=None, loss_gan='hinge',
                  num_disc_updates=1, relativistic=False, grad_penalty=None,
-                 disc_clip_norm=None,gen_clip_norm=None,  lambda_disc=1,
+                 disc_clip_norm=None, gen_clip_norm=None, lambda_disc=1,
                  lambda_x_ae=10, lambda_x_id=10, lambda_z_id=1, lambda_f_id=1,
-                 lambda_seg=1, lambda_cyc=0,lambda_mi=0, lambda_slice=0.,
+                 lambda_seg=1, lambda_cyc=0, lambda_mi=0, lambda_slice=0.,
                  debug_ac_gan=False,
                  rng=None):
         super(segmentation_model, self).__init__()
@@ -123,18 +125,18 @@ class segmentation_model(nn.Module):
         # Separate networks not stored directly as attributes.
         # -> Separate parameters, separate optimizers.
         kwargs.update(self.separate_networks)
-        
+
         # Module to compute all network outputs (except discriminator) on GPU.
         # Outputs are placed on CPU when there are multiple GPUs.
         keys_forward = ['encoder', 'decoder_common', 'decoder_residual',
-                        'decoder_autoencode',  'segmenter', 'shape_sample',
+                        'decoder_autoencode', 'segmenter', 'shape_sample',
                         'rng']
         kwargs_forward = dict([(key, val) for key, val in kwargs.items()
                                if key in keys_forward])
         self._forward = _forward(**kwargs_forward, **lambdas)
-        if torch.cuda.device_count()>1:
+        if torch.cuda.device_count() > 1:
             self._forward = nn.DataParallel(self._forward, output_device=-1)
-        
+
         # Module to compute discriminator losses on GPU.
         # Outputs are placed on CPU when there are multiple GPUs.
         keys_D = ['gan_objective', 'disc_A', 'disc_B', 'mi_estimator',
@@ -142,9 +144,9 @@ class segmentation_model(nn.Module):
         kwargs_D = dict([(key, val) for key, val in kwargs.items()
                          if key in keys_D])
         self._loss_D = _loss_D(**kwargs_D, **lambdas)
-        if torch.cuda.device_count()>1:
+        if torch.cuda.device_count() > 1:
             self._loss_D = nn.DataParallel(self._loss_D, output_device=-1)
-        
+
         # Module to compute generator updates on GPU.
         # Outputs are placed on CPU when there are multiple GPUs.
         keys_G = ['gan_objective', 'disc_A', 'disc_B', 'mi_estimator',
@@ -152,21 +154,21 @@ class segmentation_model(nn.Module):
         kwargs_G = dict([(key, val) for key, val in kwargs.items()
                          if key in keys_G])
         self._loss_G = _loss_G(**kwargs_G, **lambdas)
-        if torch.cuda.device_count()>1:
+        if torch.cuda.device_count() > 1:
             self._loss_G = nn.DataParallel(self._loss_G, output_device=-1)
-        
+
     def forward(self, x_A, x_B, mask=None, class_A=None, class_B=None,
                 optimizer=None, disc=None, rng=None):
         # Compute gradients and update?
         do_updates_bool = True if optimizer is not None else False
-        
+
         # Compute all outputs.
         with torch.set_grad_enabled(do_updates_bool):
             visible, hidden, intermediates = self._forward(x_A, x_B,
                                                            class_A=class_A,
                                                            class_B=class_B,
                                                            rng=rng)
-        
+
         # Evaluate discriminator loss and update.
         gradnorm_D = 0
         if self.lambda_disc:
@@ -198,14 +200,14 @@ class segmentation_model(nn.Module):
                         nn.utils.clip_grad_norm_(disc_B.parameters(),
                                                  max_norm=self.disc_clip_norm)
                     optimizer['D'].step()
-                    gradnorm_D = grad_norm(disc_A)+grad_norm(disc_B)
+                    gradnorm_D = grad_norm(disc_A) + grad_norm(disc_B)
                 # Update MI estimator.
                 mi_estimator = self.separate_networks['mi_estimator']
                 if do_updates_bool and mi_estimator is not None:
                     clear_grad(optimizer['E'])
                     losses_D['l_mi_est'].mean().backward()
                     optimizer['E'].step()
-        
+
         # Evaluate generator losses.
         gradnorm_G = 0
         with torch.set_grad_enabled(do_updates_bool):
@@ -223,7 +225,7 @@ class segmentation_model(nn.Module):
                                     x_BB_ae=visible['x_BB_ae'],
                                     **hidden,
                                     **intermediates)
-        
+
         # Compute segmentation loss outside of DataParallel modules,
         # avoiding various issues:
         # - scatter of small batch sizes can lead to empty tensors
@@ -235,7 +237,7 @@ class segmentation_model(nn.Module):
             mask_indices = [i for i, m in enumerate(mask) if m is not None]
             mask_packed = np.array([mask[i] for i in mask_indices])
             mask_packed = Variable(torch.from_numpy(mask_packed))
-            if torch.cuda.device_count()==1:
+            if torch.cuda.device_count() == 1:
                 # `DataParallel` does not respect `output_device` when
                 # there is only one GPU. So it returns outputs on GPU rather
                 # than CPU, as requested. When this happens, putting mask
@@ -244,8 +246,8 @@ class segmentation_model(nn.Module):
         loss_seg = 0.
         if self.lambda_seg and mask_packed is not None and len(mask_packed):
             x_AM_packed = visible['x_AM'][mask_indices]
-            loss_seg = self.lambda_seg*self.loss_seg(x_AM_packed, mask_packed)
-        
+            loss_seg = self.lambda_seg * self.loss_seg(x_AM_packed, mask_packed)
+
         # Include segmentation loss with generator losses and update.
         losses_G['l_seg'] = _reduce([loss_seg])
         losses_G['l_G'] += losses_G['l_seg']
@@ -262,7 +264,7 @@ class segmentation_model(nn.Module):
             if 'S' in optimizer:
                 optimizer['S'].step()
             gradnorm_G = grad_norm(self)
-        
+
         # Compile ouputs.
         outputs = OrderedDict()
         outputs['x_M'] = mask_packed
@@ -274,7 +276,7 @@ class segmentation_model(nn.Module):
         outputs['l_DB'] = losses_D['l_DB']
         outputs['l_gradnorm_D'] = gradnorm_D
         outputs['l_gradnorm_G'] = gradnorm_G
-        
+
         return outputs
 
 
@@ -309,30 +311,30 @@ class _forward(nn.Module):
         ret = Variable(torch.from_numpy(sample))
         ret = ret.to(torch.cuda.current_device())
         return ret
-    
+
     def forward(self, x_A, x_B, class_A=None, class_B=None, rng=None):
-        assert len(x_A)==len(x_B)
+        assert len(x_A) == len(x_B)
         batch_size = len(x_A)
-        
+
         # Encode inputs.
         s_A, skip_A = self.encoder(x_A)
         s_B = skip_B = None
-        if (   self.lambda_disc
-            or self.lambda_x_ae
-            or self.lambda_x_id
-            or self.lambda_z_id):
-                s_B, skip_B = self.encoder(x_B)
-        
+        if (self.lambda_disc
+                or self.lambda_x_ae
+                or self.lambda_x_id
+                or self.lambda_z_id):
+            s_B, skip_B = self.encoder(x_B)
+
         # Helper function for summing either two tensors or pairs of tensors
         # across two lists of tensors.
         def add(a, b):
             if isinstance(a, torch.Tensor) and isinstance(b, torch.Tensor):
-                return a+b
+                return a + b
             else:
                 assert not isinstance(a, torch.Tensor)
                 assert not isinstance(b, torch.Tensor)
-                return [elem_a+elem_b for elem_a, elem_b in zip(a, b)]
-        
+                return [elem_a + elem_b for elem_a, elem_b in zip(a, b)]
+
         # Helper function to split an output into the final image output
         # tensor and a list of intermediate tensors.
         def unpack(x):
@@ -340,21 +342,24 @@ class _forward(nn.Module):
             if not isinstance(x, torch.Tensor):
                 x, x_list = x[-1], x[:-1]
             return x, x_list
-        
+
         # A->(B, dA)->A
         x_AB = x_AB_residual = x_AA = x_AA_list = None
         if (self.lambda_seg
-         or self.lambda_disc or self.lambda_x_id or self.lambda_z_id):
+                or self.lambda_disc or self.lambda_x_id or self.lambda_z_id):
             info_AB = {'skip_info': skip_A}
             if class_A is not None:
                 info_AB['class_info'] = class_A
             x_AB_residual, skip_AM = self.decoder_residual(s_A, **info_AB)
-        c_A, u_A = torch.split(s_A, [s_A.size(1)-self.shape_sample[0],
+        c_A, u_A = torch.split(s_A, [s_A.size(1) - self.shape_sample[0],
                                      self.shape_sample[0]], dim=1)
+        c_A = c_A.contiguous() if not c_A.is_contiguous() else c_A
+        u_A = u_A.contiguous() if not u_A.is_contiguous() else u_A
+
         if self.lambda_disc or self.lambda_x_id or self.lambda_z_id:
             x_AB, _ = self.decoder_common(c_A, **info_AB)
             x_AA = add(x_AB, x_AB_residual)
-            
+
             # Unpack.
             x_AA, x_AA_list = unpack(x_AA)
             x_AB, _         = unpack(x_AB)
@@ -367,23 +372,25 @@ class _forward(nn.Module):
             if class_A is not None:
                 info_BA['class_info'] = class_B
             u_BA = self._z_sample(batch_size, rng=rng)
-            c_B  = s_B[:,:s_B.size(1)-self.shape_sample[0]]
+            c_B = s_B[:, :s_B.size(1) - self.shape_sample[0]]
             z_BA = torch.cat([c_B, u_BA], dim=1)
             x_BB, _ = self.decoder_common(c_B, **info_BA)
             x_BA_residual, _ = self.decoder_residual(z_BA, **info_BA)
             x_BA = add(x_BB, x_BA_residual)
-            
+
             # Unpack.
             x_BA, _         = unpack(x_BA)
             x_BB, x_BB_list = unpack(x_BB)
-            x_BA_residual, _= unpack(x_BA_residual)
-        
+            x_BA_residual, _ = unpack(x_BA_residual)
+
+            c_B = c_B.contiguous() if not c_B.is_contiguous() else c_B
+
         # Optional separate autoencoder.
         x_AA_ae = x_BB_ae = None
         if self.lambda_x_ae and self.decoder_autoencode is not None:
             x_AA_ae, _ = self.decoder_autoencode(s_A, skip_info=skip_A)
             x_BB_ae, _ = self.decoder_autoencode(s_B, skip_info=skip_B)
-        
+
         # Segment.
         x_AM = None
         if self.lambda_seg:
@@ -396,28 +403,33 @@ class _forward(nn.Module):
                     info_AM['class_info'] = class_A
                 x_AM = self.decoder_residual(s_A, **info_AM, mode=1)
                 x_AM, _ = unpack(x_AM)
-        
+
         # Reconstruct latent codes.
         s_BA = s_AA = c_AB = c_BB = None
         if self.lambda_z_id or self.lambda_cyc:
             s_BA, skip_BA = self.encoder(x_BA)
-            s_AA, _       = self.encoder(x_AA)
-            s_AB, _       = self.encoder(x_AB)
-            s_BB, _       = self.encoder(x_BB)
-            c_AB = s_AB[:,:s_AB.size(1)-self.shape_sample[0]]
-            c_BB = s_BB[:,:s_BB.size(1)-self.shape_sample[0]]
-        
+            s_AA, _ = self.encoder(x_AA)
+            s_AB, _ = self.encoder(x_AB)
+            s_BB, _ = self.encoder(x_BB)
+            c_AB = s_AB[:, :s_AB.size(1) - self.shape_sample[0]]
+            c_BB = s_BB[:, :s_BB.size(1) - self.shape_sample[0]]
+            c_AB = c_AB.contiguous() if not c_AB.is_contiguous() else c_AB
+            c_BB = c_BB.contiguous() if not c_BB.is_contiguous() else c_BB
+
         # Cycle.
         x_BAB = c_BA = u_BA = None
         if self.lambda_cyc:
             info_BAB = {'skip_info': skip_BA}
             if class_A is not None:
                 info_BAB['class_info'] = class_B
-            c_BA, u_BA = torch.split(s_BA, [s_BA.size(1)-self.shape_sample[0],
+            c_BA, u_BA = torch.split(s_BA, [s_BA.size(1) - self.shape_sample[0],
                                             self.shape_sample[0]], dim=1)
+            c_BA = c_BA.contiguous() if not c_BA.is_contiguous() else c_BA
+            u_BA = u_BA.contiguous() if not u_BA.is_contiguous() else u_BA
+
             x_BAB, _ = self.decoder_common(c_BA, **info_BAB)
             x_BAB, _ = unpack(x_BAB)
-        
+
         # Compile outputs and return.
         visible = OrderedDict((
             ('x_AM',          x_AM),
@@ -486,7 +498,7 @@ class _loss_D(nn.Module):
             x_BA = x_BA[-1]
         if not isinstance(x_AB, torch.Tensor):
             x_AB = x_AB[-1]
-        
+
         # Discriminators.
         kwargs_real = None if class_A is None else {'class_info': class_A}
         kwargs_fake = None if class_B is None else {'class_info': class_B}
@@ -495,35 +507,35 @@ class _loss_D(nn.Module):
                                   fake=x_BA.detach(), real=x_A,
                                   kwargs_real=kwargs_real,
                                   kwargs_fake=kwargs_fake)
-        loss_disc['A'] = self.lambda_disc*loss_disc_A
+        loss_disc['A'] = self.lambda_disc * loss_disc_A
         kwargs_real = None if class_A is None else {'class_info': class_B}
         kwargs_fake = None if class_B is None else {'class_info': class_A}
         loss_disc_B = self._gan.D(self.disc_B,
                                   fake=x_AB.detach(), real=x_B,
                                   kwargs_real=kwargs_real,
                                   kwargs_fake=kwargs_fake)
-        loss_disc['B'] = self.lambda_disc*loss_disc_B
-        
+        loss_disc['B'] = self.lambda_disc * loss_disc_B
+
         # Slice number classification.
         loss_slice_est = defaultdict(int)
         if self.lambda_slice and class_A is not None:
             loss_slice_est['A'] = _cce(self.class_A(x_A), class_A)
             if self.debug_ac_gan:
-                loss_slice_est['BA'] = _cce(self.class_A(x_BA.detach()), 
+                loss_slice_est['BA'] = _cce(self.class_A(x_BA.detach()),
                                             class_A)
         if self.lambda_slice and class_B is not None:
             loss_slice_est['B'] = _cce(self.class_B(x_B), class_B)
             if self.debug_ac_gan:
                 loss_slice_est['AB'] = _cce(self.class_B(x_AB.detach()),
                                             class_B)
-        
+
         # Mutual information estimate.
         loss_mi_est = defaultdict(int)
         if self.mi is not None:
             loss_mi_est['A'] = self.mi(c_A.detach(), u_A.detach())
             if self.lambda_cyc:
                 loss_mi_est['BA'] = self.mi(c_BA.detach(), u_BA.detach())
-        
+
         # Compile outputs and return.
         losses = OrderedDict((
             ('l_DA',          _reduce([loss_disc['A']])),
@@ -533,13 +545,13 @@ class _loss_D(nn.Module):
             ('l_mi_est',      _reduce(loss_mi_est.values())),
         ))
         for key, val in losses.items():
-            if not isinstance(val, torch.Tensor) and val==0:
+            if not isinstance(val, torch.Tensor) and val == 0:
                 losses[key] = None  # For gather_map in DataParallel
         return losses
 
 
 class _loss_G(nn.Module):
-    def __init__(self, gan_objective, disc_A, disc_B, classifier_A=None, 
+    def __init__(self, gan_objective, disc_A, disc_B, classifier_A=None,
                  classifier_B=None, mi_estimator=None, loss_rec=mae,
                  lambda_disc=1, lambda_x_ae=10, lambda_x_id=10, lambda_z_id=1,
                  lambda_f_id=1, lambda_seg=1, lambda_cyc=0, lambda_mi=0,
@@ -570,17 +582,17 @@ class _loss_G(nn.Module):
         # Mutual information loss for generator.
         loss_mi_gen = defaultdict(int)
         if self.mi is not None and self.lambda_mi:
-            loss_mi_gen['A']  = -self.lambda_mi*self.mi(c_A, u_A)
+            loss_mi_gen['A'] = -self.lambda_mi * self.mi(c_A, u_A)
             if self.lambda_cyc:
-                loss_mi_gen['BA'] = -self.lambda_mi*self.mi(c_BA, u_BA)
-        
+                loss_mi_gen['BA'] = -self.lambda_mi * self.mi(c_BA, u_BA)
+
         # Slice number classification.
         loss_slice_gen = defaultdict(int)
         if self.lambda_slice and class_A is not None:
             loss_slice_gen['BA'] = _cce(self.class_A(x_BA), class_A)
         if self.lambda_slice and class_B is not None:
             loss_slice_gen['AB'] = _cce(self.class_B(x_AB), class_B)
-        
+
         # Generator loss.
         loss_gen = defaultdict(int)
         if self.lambda_disc:
@@ -602,31 +614,31 @@ class _loss_G(nn.Module):
         # Reconstruction loss.
         loss_rec = defaultdict(int)
         if self.lambda_x_id:
-            loss_rec['AA'] = self.lambda_x_id*self.loss_rec(x_AA, x_A)
-            loss_rec['BB'] = self.lambda_x_id*self.loss_rec(x_BB, x_B)
+            loss_rec['AA'] = self.lambda_x_id * self.loss_rec(x_AA, x_A)
+            loss_rec['BB'] = self.lambda_x_id * self.loss_rec(x_BB, x_B)
         if self.lambda_x_ae and x_AA_ae is not None:
-            loss_rec['AA_ae'] = self.lambda_x_ae*self.loss_rec(x_AA_ae, x_A)
+            loss_rec['AA_ae'] = self.lambda_x_ae * self.loss_rec(x_AA_ae, x_A)
         if self.lambda_x_ae and x_BB_ae is not None:
-            loss_rec['BB_ae'] = self.lambda_x_ae*self.loss_rec(x_BB_ae, x_B)
+            loss_rec['BB_ae'] = self.lambda_x_ae * self.loss_rec(x_BB_ae, x_B)
         if self.lambda_x_id and self.lambda_cyc:
-            loss_rec['BB'] += self.lambda_cyc*self.loss_rec(x_BAB, x_B)
+            loss_rec['BB'] += self.lambda_cyc * self.loss_rec(x_BAB, x_B)
         if self.lambda_z_id:
-            loss_rec['z_BA'] = self.lambda_z_id*self.loss_rec(s_BA, z_BA)
-            loss_rec['z_AB'] = self.lambda_z_id*self.loss_rec(c_AB, c_A)
-            loss_rec['z_AA'] = self.lambda_z_id*self.loss_rec(s_AA, s_A)
-            loss_rec['z_BB'] = self.lambda_z_id*self.loss_rec(c_BB, c_B)
-        
+            loss_rec['z_BA'] = self.lambda_z_id * self.loss_rec(s_BA, z_BA)
+            loss_rec['z_AB'] = self.lambda_z_id * self.loss_rec(c_AB, c_A)
+            loss_rec['z_AA'] = self.lambda_z_id * self.loss_rec(s_AA, s_A)
+            loss_rec['z_BB'] = self.lambda_z_id * self.loss_rec(c_BB, c_B)
+
         # Reconstruction of intermediate features.
         if self.lambda_f_id:
             loss_rec['AA'] = _reduce([loss_rec['AA']])
             loss_rec['BB'] = _reduce([loss_rec['BB']])
             for s, t in zip(x_AA_list, skip_A[::-1]):
-                loss_rec['AA'] += _reduce([ self.lambda_f_id
-                                           *self.loss_rec(s, t)])
+                loss_rec['AA'] += _reduce([self.lambda_f_id
+                                           * self.loss_rec(s, t)])
             for s, t in zip(x_BB_list, skip_B[::-1]):
-                loss_rec['BB'] += _reduce([ self.lambda_f_id
-                                           *self.loss_rec(s, t)])
-        
+                loss_rec['BB'] += _reduce([self.lambda_f_id
+                                           * self.loss_rec(s, t)])
+
         # All generator losses combined.
         loss_G = ( _reduce(loss_gen.values())
                   +_reduce(loss_rec.values())
@@ -658,6 +670,6 @@ class _loss_G(nn.Module):
             ('l_slice_AB',    _reduce([loss_slice_gen['AB']]))
             ))
         for key, val in losses.items():
-            if not isinstance(val, torch.Tensor) and val==0:
+            if not isinstance(val, torch.Tensor) and val == 0:
                 losses[key] = None  # For gather_map in DataParallel
         return losses
