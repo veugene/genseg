@@ -200,6 +200,12 @@ class experiment(object):
         else:
             saved_dict = torch.load(model_from)
             self.model_as_str = saved_dict['model_as_str']
+        if 1:
+            self.model_as_str = self.model_as_str.replace("from torch.nn.utils import remove_spectral_norm",
+                                                          "from model.common.network.spectral_norm_class import remove_spectral_norm")
+            self.model_as_str = self.model_as_str.replace("from torch.nn.utils import spectral_norm",
+                                                          "from model.common.network.spectral_norm_class import spectral_norm")
+
         module = imp.new_module('module')
         exec(self.model_as_str, module.__dict__)
         model = getattr(module, 'build_model')()
