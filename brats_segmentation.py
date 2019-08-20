@@ -14,7 +14,7 @@ def get_parser():
     g_exp = parser.add_argument_group('Experiment')
     g_exp.add_argument('--dataset', type=str, default='brats13s',
                        choices=['brats13s', 'brats17'])
-    g_exp.add_argument('--data_dir', type=str, default='./data/brats/2013')
+    g_exp.add_argument('--data', type=str, default='./data/brats/2013')
     g_exp.add_argument('--slice_conditional', action='store_true')
     g_exp.add_argument('--path', type=str, default='./experiments')
     g_exp.add_argument('--model_from', type=str, default=None)
@@ -39,7 +39,7 @@ def get_parser():
     return parser
 
 
-def run():
+def run(args):
     from collections import OrderedDict
     from functools import partial
     import os
@@ -80,7 +80,7 @@ def run():
     torch.backends.cudnn.benchmark = True
     
     # Set up experiment.
-    experiment_state = experiment(parser=get_parser())
+    experiment_state = experiment(args)
     args = experiment_state.args
     assert args.labeled_fraction > 0
     torch.manual_seed(args.init_seed)
@@ -107,8 +107,8 @@ def run():
         target_class = [4,5]
     else:
         raise ValueError("`dataset` must only be 'brats17' or 'brats13s'")
-    data = prepare_data_brats(path_hgg=os.path.join(args.data_dir, "hgg.h5"),
-                              path_lgg=os.path.join(args.data_dir, "lgg.h5"),
+    data = prepare_data_brats(path_hgg=os.path.join(args.data, "hgg.h5"),
+                              path_lgg=os.path.join(args.data, "lgg.h5"),
                               masked_fraction=1.-args.labeled_fraction,
                               drop_masked=args.yield_only_labeled,
                               rng=np.random.RandomState(args.data_seed))

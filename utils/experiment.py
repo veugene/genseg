@@ -20,9 +20,9 @@ class experiment(object):
 
     In args, expecting `model_from` and `path`.
     """
-    def __init__(self, parser):
+    def __init__(self, args):
+        self.args = args
         self._epoch = [0]
-        args = parser.parse_args()
         self.experiment_path = args.path
         
         # Make experiment directory, if necessary.
@@ -37,7 +37,6 @@ class experiment(object):
         # If yes, resume; else, initialize a new experiment.
         if os.path.exists(args.path) and len(state_file_list):
             # RESUME old experiment
-            args = self._load_and_merge_args(parser)
             state_file = state_file_list[-1]
             state_from = os.path.join(args.path, state_file)
             print("Resuming from {}.".format(state_from))
@@ -67,7 +66,6 @@ class experiment(object):
                 f.write(self.model_as_str)
         
         # Initialization complete. Store objects, etc.
-        self.args = args
         self.model = model
         self.optimizer = optimizer
         print("Number of parameters\n"+
@@ -310,24 +308,6 @@ class experiment(object):
         else:
             raise ValueError("Optimizer {} not supported.".format(name))
         return optimizer
-    
-    def _load_and_merge_args(self, parser):
-        '''
-        Loads args from the saved experiment data. Overrides saved args with
-        any set anew.
-        '''
-        args = parser.parse_args()
-        initial_epoch = 0        
-        with open(os.path.join(args.path, "args.txt"), 'r') as arg_file:
-            # Remove first word when parsing arguments from file.
-            _args = arg_file.read().split('\n')[1:]
-            args_from_file = parser.parse_args(_args)
-            args = args_from_file
-            
-        # Override loaded arguments with any provided anew.
-        args = parser.parse_args(namespace=args)
-        
-        return args
 
 
 def count_params(module, trainable_only=True):

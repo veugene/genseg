@@ -37,7 +37,7 @@ def get_parser():
     return parser
 
 
-def run():
+def run(args):
     from collections import OrderedDict
     from functools import partial
     import os
@@ -75,7 +75,7 @@ def run():
     torch.backends.cudnn.benchmark = True
     
     # Set up experiment.
-    experiment_state = experiment(parser=get_parser())
+    experiment_state = experiment(args)
     args = experiment_state.args
     assert args.labeled_fraction > 0
     torch.manual_seed(args.init_seed)

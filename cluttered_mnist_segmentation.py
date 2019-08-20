@@ -2,6 +2,7 @@ from __future__ import (print_function,
                         division)
 import argparse
 import json
+import psutil
 from utils.dispatch import (dispatch,
                             dispatch_argument_parser)
 
@@ -12,7 +13,7 @@ Process arguments.
 def get_parser():
     parser = dispatch_argument_parser(description="Cluttered MNIST seg.")
     g_exp = parser.add_argument_group('Experiment')
-    g_exp.add_argument('--data_dir', type=str, default='./data/mnist')
+    g_exp.add_argument('--data', type=str, default='./data/mnist')
     g_exp.add_argument('--path', type=str, default='./experiments')
     g_exp.add_argument('--model_from', type=str, default=None)
     g_exp.add_argument('--weights_from', type=str, default=None)
@@ -47,7 +48,7 @@ def get_parser():
     return parser
 
 
-def run():
+def run(args):
     from collections import OrderedDict
     import os
 
@@ -82,7 +83,7 @@ def run():
     torch.backends.cudnn.benchmark = True
     
     # Set up experiment.
-    experiment_state = experiment(parser=get_parser())
+    experiment_state = experiment(args)
     args = experiment_state.args
     assert args.labeled_fraction > 0
     torch.manual_seed(args.init_seed)
@@ -125,7 +126,7 @@ def run():
     
     # Prepare data.
     data = setup_mnist_data(
-        data_dir=args.data_dir,
+        data_dir=args.data,
         n_valid=args.n_valid,
         n_clutter=args.n_clutter,
         size_clutter=args.size_clutter,

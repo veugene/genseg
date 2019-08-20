@@ -2,9 +2,11 @@ import argparse
 from datetime import datetime
 import os 
 import re
+import shutil
 import subprocess
 import sys
 import time
+import warnings
 
 
 """
@@ -15,12 +17,9 @@ def dispatch_argument_parser(*args, **kwargs):
     parser = argparse.ArgumentParser(*args, **kwargs)
     g_sel = parser.add_argument_group('Cluster select.')
     mutex_cluster = g_sel.add_mutually_exclusive_group()
-    mutex_cluster.add_argument('--dispatch_dgx', default=False,
-                               action='store_true')
-    mutex_cluster.add_argument('--dispatch_ngc', default=False,
-                               action='store_true')
-    mutex_cluster.add_argument('--dispatch_canada', default=False,
-                               action='store_true')
+    mutex_cluster.add_argument('--dispatch_dgx', action='store_true')
+    mutex_cluster.add_argument('--dispatch_ngc', action='store_true')
+    mutex_cluster.add_argument('--dispatch_canada', action='store_true')
     g_dgx = parser.add_argument_group('DGX cluster')
     g_dgx.add_argument('--cluster_id', type=int, default=425)
     g_dgx.add_argument('--docker_id', type=str,
@@ -55,6 +54,8 @@ def dispatch_argument_parser(*args, **kwargs):
     g_cca.add_argument('--time', type=str, default='1-00:00',
                        help="Max run time (DD-HH:MM). Shorter times get "
                             "higher priority.")
+    g_cca.add_argument('--copy_local', action='store_true',
+                       help="Copy \'data\' to the local scratch space.")
     return parser
 
 
@@ -97,7 +98,17 @@ def dispatch(parser, run):
     elif args.model_from is None and not os.path.exists(args.path):
         parser.print_help()
     else:
-        run()
+        if args.copy_local:
+            # Copy 'data' to local scratch space.
+            assert hasattr(args, 'data')
+            target = os.path.join(os.environ["SLURM_TMPDIR"],
+                                  os.path.basename(args.data))
+            if os.path.exists(target):
+                warnings.warn("{} exists - not copying".format(target))
+            else:
+                shutil.copytree(args.data, target)
+                args.data = target
+        run(args)
 
 
 def _dispatch_dgx(args):
