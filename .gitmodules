@@ -7,3 +7,6 @@
 [submodule "submodules/ignite"]
 	path = submodules/ignite
 	url = https://github.com/pytorch/ignite.git
+[submodule "submodules/tensorboardX"]
+	path = submodules/tensorboardX
+	url = https://github.com/veugene/tensorboardX.git
