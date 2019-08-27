@@ -94,7 +94,8 @@ class experiment(object):
                                     save_interval=1,
                                     atomic=True,
                                     create_dir=True,
-                                    require_empty=False)
+                                    require_empty=False,
+                                    save_as_state_dict=False)
         
         # Checkpoint for best model performance.
         checkpoint_best_handler = ModelCheckpoint(
@@ -104,7 +105,8 @@ class experiment(object):
                                     score_function=score_function,
                                     atomic=True,
                                     create_dir=True,
-                                    require_empty=False)
+                                    require_empty=False,
+                                    save_as_state_dict=False)
         
         # Save checkpoint histories in a lightweight checkpoint.
         # If experiment state is resumed, so are these histories.
@@ -115,7 +117,8 @@ class experiment(object):
                                     save_interval=1,
                                     atomic=True,
                                     create_dir=True,
-                                    require_empty=False)
+                                    require_empty=False,
+                                    save_as_state_dict=False)
         
         # The lists of saved checkpoints is stored in the experiment object.
         # If experiment state is resumed, so are these lists.
