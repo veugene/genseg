@@ -50,6 +50,8 @@ class experiment(object):
                              model=model, optimizer=optimizer)
         else:
             # INIT new experiment
+            with open(os.path.join(args.path, "args.txt"), 'w') as f:
+                f.write('\n'.join(sys.argv))
             model, optimizer = self._init_state(
                                      model_from=args.model_from,
                                      optimizer_name=args.optimizer,
@@ -60,8 +62,6 @@ class experiment(object):
                 # Load weights from specified checkpoint.
                 self._load_state(load_from=args.weights_from, model=model)
                 self._epoch[0] = 0
-            with open(os.path.join(args.path, "args.txt"), 'w') as f:
-                f.write('\n'.join(sys.argv))
             with open(os.path.join(args.path, "config.py"), 'w') as f:
                 f.write(self.model_as_str)
         
