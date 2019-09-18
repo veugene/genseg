@@ -17,6 +17,7 @@ def get_parser():
     g_exp.add_argument('--path', type=str, default='./experiments')
     g_exp.add_argument('--model_from', type=str, default=None)
     g_exp.add_argument('--weights_from', type=str, default=None)
+    g_exp.add_argument('--remove_spectral_norm', action='store_true')
     g_exp.add_argument('--weight_decay', type=float, default=1e-4)
     g_exp.add_argument('--labeled_fraction', type=float, default=0.1)
     g_exp.add_argument('--unlabeled_digits', type=int, default=None,
@@ -75,6 +76,7 @@ def run(args):
                                summary_tracker)
     from model import configs
     from model.ae_segmentation import segmentation_model as model_ae
+    from model.common.network.basic import recursive_remove_spectral_norm
 
     import itertools
 
@@ -84,6 +86,10 @@ def run(args):
     
     # Set up experiment.
     experiment_state = experiment(args)
+    if args.remove_spectral_norm:
+        for name, submodel in experiment_state.model.items():
+            print("DEBUG removing spectral norm:", name)
+            recursive_remove_spectral_norm(submodel)
     args = experiment_state.args
     assert args.labeled_fraction > 0
     torch.manual_seed(args.init_seed)

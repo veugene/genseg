@@ -1,6 +1,7 @@
 import torch
 from torch import nn
-from torch.nn.utils import spectral_norm
+from torch.nn.utils import (spectral_norm,
+                            remove_spectral_norm)
 from torch.nn import functional as F
 import numpy as np
 from fcn_maker.blocks import (adjust_to_size,
@@ -971,3 +972,22 @@ def recursive_spectral_norm(module, types=None):
             if not hasattr(m, '_has_spectral_norm'):
                 spectral_norm(m)
             setattr(m, '_has_spectral_norm', True)
+
+
+def recursive_remove_spectral_norm(module, types=None):
+    """
+    Recursively traverse submodules in a module and remove spectral norm from
+    all convolutional layers.
+    """
+    if types is None:
+        types = tuple()
+    for m in module.modules():
+        if isinstance(m, (nn.Conv1d,
+                          nn.Conv2d,
+                          nn.Conv3d,
+                          nn.ConvTranspose1d,
+                          nn.ConvTranspose2d,
+                          nn.ConvTranspose3d)+types):
+            if not hasattr(m, '_has_spectral_norm'):
+                remove_spectral_norm(m)
+            setattr(m, '_has_spectral_norm', False)
