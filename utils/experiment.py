@@ -28,6 +28,26 @@ class experiment(object):
         # Make experiment directory, if necessary.
         if not os.path.exists(args.path):
             os.makedirs(args.path)
+
+        # Get model config.
+        # 
+        # NOTE: assuming that this always exists. Currently, dispatch
+        # reloads all initial arguments on resume, so `model_from` is
+        # defined even on resume. Taking `model_from` always from args
+        # instead of from saved state allows it to be overriden on resume
+        # by passing the argument anew.
+        # 
+        # NOTE: the model config file has to exist in its original location
+        # when resuming an experiment.
+        with open(args.model_from) as f:
+            self.model_as_str = f.read()
+
+        # Initialize model and optimizer.
+        model, optimizer = self._init_state(
+                                     optimizer_name=args.optimizer,
+                                     learning_rate=args.learning_rate,
+                                     opt_kwargs=args.opt_kwargs,
+                                     weight_decay=args.weight_decay)
             
         # Does the experiment directory already contain state files?
         state_file_list = natsorted([fn for fn in os.listdir(args.path)
@@ -40,24 +60,12 @@ class experiment(object):
             state_file = state_file_list[-1]
             state_from = os.path.join(args.path, state_file)
             print("Resuming from {}.".format(state_from))
-            model, optimizer = self._init_state(
-                                     model_from=state_from,
-                                     optimizer_name=args.optimizer,
-                                     learning_rate=args.learning_rate,
-                                     opt_kwargs=args.opt_kwargs,
-                                     weight_decay=args.weight_decay)
             self._load_state(load_from=state_from,
                              model=model, optimizer=optimizer)
         else:
             # INIT new experiment
             with open(os.path.join(args.path, "args.txt"), 'w') as f:
                 f.write('\n'.join(sys.argv))
-            model, optimizer = self._init_state(
-                                     model_from=args.model_from,
-                                     optimizer_name=args.optimizer,
-                                     learning_rate=args.learning_rate,
-                                     opt_kwargs=args.opt_kwargs,
-                                     weight_decay=args.weight_decay)
             if args.weights_from is not None:
                 # Load weights from specified checkpoint.
                 self._load_state(load_from=args.weights_from, model=model)
@@ -184,23 +192,15 @@ class experiment(object):
     def get_epoch(self):
         return self._epoch[0]
     
-    def _init_state(self, model_from, optimizer_name, learning_rate=0.,
+    def _init_state(self, optimizer_name, learning_rate=0.,
                     opt_kwargs=None, weight_decay=0.):
         '''
         Initialize the model, its state, and the optimizer's state.
-
-        If `model_from` is a .py file, then it is expected to contain a 
-        `build_model()` function which is then used to prepare the model.
-        If it is not a .py file, it is assumed to be a checkpoint; the model
-        saved in the checkpoint is then constructed anew.
+        
+        Requires the model to be defined in `self.model_as_str`.
         '''
         
         # Build the model.
-        if model_from.endswith(".py"):
-            self.model_as_str = open(model_from).read()
-        else:
-            saved_dict = torch.load(model_from)
-            self.model_as_str = saved_dict['model_as_str']
         module = imp.new_module('module')
         exec(self.model_as_str, module.__dict__)
         model = getattr(module, 'build_model')()
@@ -248,6 +248,11 @@ class experiment(object):
             if optimizer is not None:
                 optimizer[key].load_state_dict(
                                    saved_dict[key]['optimizer_state'])
+
+        # Check if the model config was the same as what is initialized now.
+        if saved_dict['model_as_str'] != self.model_as_str:
+            print("NOTE : model configuration differs from the one used with "
+                  "the last saved state. Using the new configuration.")
         
         # Experiment metadata.
         self._epoch[0] = saved_dict['epoch'][0]
