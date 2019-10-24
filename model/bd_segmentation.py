@@ -171,6 +171,14 @@ class segmentation_model(nn.Module):
         loss_disc = defaultdict(int)
         loss_D = gradnorm_D = 0
         if self.lambda_disc:
+            if intermediates['x_BA_list'] is None:
+                out_BA = visible['x_BA']
+            else:
+                out_BA = intermediates['x_BA_list']+[visible['x_BA']]
+            if intermediates['x_AB_list'] is None:
+                out_AB = visible['x_AB']
+            else:
+                out_AB = intermediates['x_AB_list']+[visible['x_AB']]
             for i in range(self.num_disc_updates):
                 # Evaluate.
                 with torch.set_grad_enabled(do_updates_bool):
@@ -179,8 +187,8 @@ class segmentation_model(nn.Module):
                         x_B=x_B,
                         class_A=class_A,
                         class_B=class_B,
-                        x_BA=visible['x_BA'],
-                        x_AB=visible['x_AB'],
+                        out_BA=out_BA,
+                        out_AB=out_AB,
                         c_A=hidden['c_A'],
                         u_A=hidden['u_A'],
                         c_BA=hidden['c_BA'],
@@ -345,7 +353,7 @@ class _forward(nn.Module):
             return x, x_list
         
         # A->(B, dA)->A
-        x_AB = x_AB_residual = x_AA = x_AA_list = None
+        x_AB = x_AB_residual = x_AA = x_AB_list = x_AA_list = None
         if (self.lambda_seg
          or self.lambda_disc or self.lambda_x_id or self.lambda_z_id):
             info_AB = {'skip_info': skip_A}
@@ -360,11 +368,12 @@ class _forward(nn.Module):
             
             # Unpack.
             x_AA, x_AA_list = unpack(x_AA)
-            x_AB, _         = unpack(x_AB)
+            x_AB, x_AB_list = unpack(x_AB)
             x_AB_residual, _= unpack(x_AB_residual)
         
         # B->(B, dA)->A
-        x_BA = x_BA_residual = x_BB = z_BA = x_BB_list = u_BA = c_B = None
+        x_BA = x_BA_residual = x_BB = z_BA = u_BA = c_B = None
+        x_BA_list = x_BB_list = None
         if self.lambda_disc or self.lambda_x_id or self.lambda_z_id:
             info_BA = {'skip_info': skip_B}
             if class_A is not None:
@@ -377,7 +386,7 @@ class _forward(nn.Module):
             x_BA = add(x_BB, x_BA_residual)
             
             # Unpack.
-            x_BA, _         = unpack(x_BA)
+            x_BA, x_BA_list = unpack(x_BA)
             x_BB, x_BB_list = unpack(x_BB)
             x_BA_residual, _= unpack(x_BA_residual)
         
@@ -451,7 +460,9 @@ class _forward(nn.Module):
             ))
         intermediates = OrderedDict((
             ('x_AA_list',     x_AA_list),
+            ('x_AB_list',     x_AB_list),
             ('x_BB_list',     x_BB_list),
+            ('x_BA_list',     x_BA_list),
             ('skip_A',        skip_A),
             ('skip_B',        skip_B)
             ))
@@ -482,27 +493,45 @@ class _loss_D(nn.Module):
                     'class_B'   : classifier_B,
                     'mi'        : mi_estimator}  # Separate params.
     
-    def forward(self, x_A, x_B, x_BA, x_AB, c_A, u_A, c_BA, u_BA,
+    def forward(self, x_A, x_B, out_BA, out_AB, c_A, u_A, c_BA, u_BA,
                 class_A=None, class_B=None):
+        # Detach all tensors; updating discriminator, not generator.
+        if isinstance(out_BA, list):
+            out_BA = [x.detach() for x in out_BA]
+        else:
+            out_BA = out_BA.detach()
+        if isinstance(out_AB, list):
+            out_AB = [x.detach() for x in out_AB]
+        else:
+            out_AB = out_AB.detach()
+        c_A = c_A.detach()
+        u_A = u_A.detach()
+        c_BA = c_BA.detach()
+        u_BA = u_BA.detach()
+        
         # If outputs are lists, get the last item (image).
+        x_BA = out_BA
+        x_AB = out_AB
         if not isinstance(x_BA, torch.Tensor):
-            x_BA = x_BA[-1]
+            x_BA = out_BA[-1]
         if not isinstance(x_AB, torch.Tensor):
-            x_AB = x_AB[-1]
+            x_AB = out_AB[-1]
         
         # Discriminators.
         kwargs_real = None if class_A is None else {'class_info': class_A}
         kwargs_fake = None if class_B is None else {'class_info': class_B}
         loss_disc = OrderedDict()
         loss_disc_A = self._gan.D(self.net['disc_A'],
-                                  fake=x_BA.detach(), real=x_A,
+                                  fake=out_BA,
+                                  real=x_A,
                                   kwargs_real=kwargs_real,
                                   kwargs_fake=kwargs_fake)
         loss_disc['A'] = self.lambda_disc*loss_disc_A
         kwargs_real = None if class_A is None else {'class_info': class_B}
         kwargs_fake = None if class_B is None else {'class_info': class_A}
         loss_disc_B = self._gan.D(self.net['disc_B'],
-                                  fake=x_AB.detach(), real=x_B,
+                                  fake=out_AB,
+                                  real=x_B,
                                   kwargs_real=kwargs_real,
                                   kwargs_fake=kwargs_fake)
         loss_disc['B'] = self.lambda_disc*loss_disc_B
@@ -512,21 +541,20 @@ class _loss_D(nn.Module):
         if self.lambda_slice and class_A is not None:
             loss_slice_est['A'] = _cce(self.net['class_A'](x_A), class_A)
             if self.debug_ac_gan:
-                loss_slice_est['BA'] = _cce(self.net['class_A'](x_BA.detach()), 
+                loss_slice_est['BA'] = _cce(self.net['class_A'](x_BA), 
                                             class_A)
         if self.lambda_slice and class_B is not None:
             loss_slice_est['B'] = _cce(self.net['class_B'](x_B), class_B)
             if self.debug_ac_gan:
-                loss_slice_est['AB'] = _cce(self.net['class_B'](x_AB.detach()),
+                loss_slice_est['AB'] = _cce(self.net['class_B'](x_AB),
                                             class_B)
         
         # Mutual information estimate.
         loss_mi_est = defaultdict(int)
         if self.net['mi'] is not None:
-            loss_mi_est['A'] = self.net['mi'](c_A.detach(), u_A.detach())
+            loss_mi_est['A'] = self.net['mi'](c_A, u_A)
             if self.lambda_cyc:
-                loss_mi_est['BA'] = self.net['mi'](c_BA.detach(),
-                                                   u_BA.detach())
+                loss_mi_est['BA'] = self.net['mi'](c_BA, u_BA)
         
         return loss_disc, loss_slice_est, loss_mi_est
 
@@ -558,7 +586,7 @@ class _loss_G(nn.Module):
     
     def forward(self, x_AM, x_A, x_AB, x_AA, x_B, x_BA, x_BB, x_BAB,
                 s_BA, s_AA, c_AB, c_BB, z_BA, s_A, c_A, u_A, c_B, c_BA, u_BA,
-                x_AA_list, x_BB_list, skip_A, skip_B,
+                x_AA_list, x_AB_list, x_BB_list, x_BA_list, skip_A, skip_B,
                 x_AA_ae=None, x_BB_ae=None, class_A=None, class_B=None):
         # Mutual information loss for generator.
         loss_mi_gen = defaultdict(int)
