@@ -105,23 +105,26 @@ class gan_objective(object):
     
     def _D(self, x, disc, objective, grad_penalty, kwargs_disc=None):
         if kwargs_disc is None: kwargs_disc = {}
+        if torch.is_grad_enabled():
+            _set_requires_grad(x, True)
         disc_out = disc(x, **kwargs_disc)
         loss = self._foreach(objective, disc_out)
-        if grad_penalty is not None:
-            if isinstance(disc_out, torch.Tensor):
-                disc_out = [disc_out]
-            disc_out = sum([o.sum() for o in disc_out])
-            grad = torch.autograd.grad(disc_out,
-                                       x,
-                                       retain_graph=True,
-                                       create_graph=True,
-                                       only_inputs=True)[0]
-            norm2 = (grad.view(grad.size()[0],-1)**2).sum(-1)
-            if self.grad_penalty_mean:
-                penalty = (torch.sqrt(norm2)-self.grad_penalty_mean)**2
-            else:
-                penalty = norm2
-            loss = loss+grad_penalty*torch.mean(penalty)
+        if torch.is_grad_enabled():
+            if grad_penalty is not None:
+                if isinstance(disc_out, torch.Tensor):
+                    disc_out = [disc_out]
+                disc_out = sum([o.sum() for o in disc_out])
+                grad = torch.autograd.grad(disc_out,
+                                           x,
+                                           retain_graph=True,
+                                           create_graph=True,
+                                           only_inputs=True)[0]
+                norm2 = (grad.view(grad.size()[0],-1)**2).sum(-1)
+                if self.grad_penalty_mean:
+                    penalty = (torch.sqrt(norm2)-self.grad_penalty_mean)**2
+                else:
+                    penalty = norm2
+                loss = loss+grad_penalty*torch.mean(penalty)
         return loss
     
     def _D_relativistic(self, a, b, disc, objective,
@@ -130,8 +133,8 @@ class gan_objective(object):
         if kwargs_a is None: kwargs_a = {}
         if kwargs_b is None: kwargs_b = {}
         if torch.is_grad_enabled():
-            a.requires_grad = True
-            b.requires_grad = True
+            _set_requires_grad(a, True)
+            _set_requires_grad(b, True)
         disc_a = disc(a, **kwargs_a)
         disc_b = disc(b, **kwargs_b)
         loss = self._foreach(lambda x: objective(x[0]-x[1]), [disc_a, disc_b])
@@ -142,8 +145,13 @@ class gan_objective(object):
                 if isinstance(disc_b, torch.Tensor):
                     disc_b = [disc_b]
                 disc_out = sum([o.sum() for o in disc_a+disc_b])
+                if isinstance(a, torch.Tensor):
+                    a = (a,)
+                if isinstance(b, torch.Tensor):
+                    b = (b,)
+                a_and_b = a+b   # Tuple containing all tensors in a and in b.
                 grad_a, grad_b = torch.autograd.grad(disc_out,
-                                                     (a, b),
+                                                     a_and_b,
                                                      retain_graph=True,
                                                      create_graph=True,
                                                      only_inputs=True)
@@ -235,3 +243,15 @@ class dice_loss(torch.nn.Module):
                     (torch.sum(y_target)+torch.sum(y_pred_f)+self.smooth)
                     
         return dice_val
+
+
+def _set_requires_grad(x, mode=True):
+    """
+    If `x` is not a tensor, assume it's some iterable containing tensors and
+    recurse into it. Set `requires_grad` on every tensor.
+    """
+    if not isinstance(x, torch.Tensor):
+        for elem in x:
+            _set_requires_grad(elem)
+    else:
+        x.requires_grad = mode
