@@ -78,8 +78,8 @@ class gan_objective(object):
         if kwargs_real is None: kwargs_real = {}
         if self.relativistic:
             return self._foreach(lambda x: self._G(x[0]-x[1]),
-                                 [disc(fake, **kwargs_fake),
-                                  disc(real, **kwargs_real)])
+                                 disc(fake, **kwargs_fake),
+                                 disc(real, **kwargs_real))
         return self._foreach(self._G, disc(fake, **kwargs_fake))
     
     def D(self, disc, fake, real, kwargs_fake=None, kwargs_real=None):
@@ -137,7 +137,7 @@ class gan_objective(object):
             _set_requires_grad(b, True)
         disc_a = disc(a, **kwargs_a)
         disc_b = disc(b, **kwargs_b)
-        loss = self._foreach(lambda x: objective(x[0]-x[1]), [disc_a, disc_b])
+        loss = self._foreach(lambda x: objective(x[0]-x[1]), disc_a, disc_b)
         if torch.is_grad_enabled():
             if grad_penalty_a is not None or grad_penalty_b is not None:
                 if isinstance(disc_a, torch.Tensor):
@@ -169,11 +169,27 @@ class gan_objective(object):
                     loss = loss+grad_penalty_b*torch.mean(penalty_b)
         return loss
     
-    def _foreach(self, func, x):
+    def _foreach(self, func, *inputs):
+        # WARNING: this code is freaky.
+        # 
         # If x is a list, process every element (and reduce to batch dim).
         # Each tensor is reduced by `mean` and reduced tensors are averaged
         # together.
+        # 
         # (For multi-scale discriminators. Each scale is given equal weight.)
+        if len(inputs)>1:
+            # Stack the inputs together. For example, given two sets of 
+            # discriminator outputs, stack the tensor pairs from both.
+            if   all([not isinstance(x, torch.Tensor) for x in inputs]):
+                x = [torch.stack([x_tuple]) for x_tuple in zip(inputs)]
+            elif all([    isinstance(x, torch.Tensor) for x in inputs]):
+                x = torch.stack(inputs)
+            else:
+                raise AssertionError(
+                    "Either all or none of the discriminator outputs "
+                    "must be tensors.")
+        else:
+            x = inputs[0]
         if not isinstance(x, torch.Tensor):
             return sum([self._foreach(func, elem) for elem in x])/float(len(x))
         out = func(x)
