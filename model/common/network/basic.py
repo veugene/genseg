@@ -1,6 +1,7 @@
 import torch
 from torch import nn
-from torch.nn.utils import spectral_norm
+# from torch.nn.utils import spectral_norm
+from .spectral_norm_class import spectral_norm
 from torch.nn import functional as F
 import numpy as np
 from fcn_maker.blocks import (adjust_to_size,

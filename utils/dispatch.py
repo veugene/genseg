@@ -76,6 +76,8 @@ def dispatch(parser, run):
     if os.path.exists(os.path.join(args.path, "args.txt")):
         with open(os.path.join(args.path, "args.txt"), 'r') as f:
             saved_args = f.read().split('\n')[1:]
+            if saved_args[-1] == "":
+                del saved_args[-1]
             args = parser.parse_args(args=saved_args)
         args = parser.parse_args(namespace=args)
     

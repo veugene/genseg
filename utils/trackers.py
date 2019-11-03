@@ -107,7 +107,7 @@ class summary_tracker(object):
     
     path : path to save tensorboard event files to.
     """
-    def __init__(self, path, initial_epoch=0):
+    def __init__(self, path, initial_epoch=1):
         self.path = path
         self.initial_epoch = initial_epoch
         self.summary_writer = tb.SummaryWriter(path)
@@ -232,7 +232,7 @@ class image_logger(object):
     Expects `output` as a dictionary or list of image lists.
     """
     def __init__(self, num_vis=None, output_transform=lambda x:x,
-                 initial_epoch=0, directory=None, summary_tracker=None,
+                 initial_epoch=1, directory=None, summary_tracker=None,
                  suffix=None, min_val=None, max_val=None,
                  output_name='outputs',
                  fontname="LiberationSans-Regular.ttf", fontsize=24,
