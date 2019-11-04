@@ -526,7 +526,7 @@ class _loss_D(nn.Module):
                                   real=x_A,
                                   kwargs_real=kwargs_real,
                                   kwargs_fake=kwargs_fake)
-        loss_disc['A'] = self.lambda_disc*loss_disc_A
+        loss_disc['A'] = loss_disc_A
         kwargs_real = None if class_A is None else {'class_info': class_B}
         kwargs_fake = None if class_B is None else {'class_info': class_A}
         loss_disc_B = self._gan.D(self.net['disc_B'],
@@ -534,7 +534,7 @@ class _loss_D(nn.Module):
                                   real=x_B,
                                   kwargs_real=kwargs_real,
                                   kwargs_fake=kwargs_fake)
-        loss_disc['B'] = self.lambda_disc*loss_disc_B
+        loss_disc['B'] = loss_disc_B
         
         # Slice number classification.
         loss_slice_est = defaultdict(int)
