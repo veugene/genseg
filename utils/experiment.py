@@ -10,6 +10,7 @@ from ignite.engine import (Engine,
                            Events)
 from ignite.handlers import ModelCheckpoint
 
+from .radam import RAdam
 from .trackers import progress_report
 
 
@@ -306,6 +307,11 @@ class experiment(object):
             kwargs.update(opt_kwargs)
             optimizer = torch.optim.Adam(amsgrad=bool(name=='amsgrad'),
                                          **kwargs)
+        elif name=='radam':
+            if opt_kwargs is None:
+                opt_kwargs = {'betas': (0.5, 0.999)}
+            kwargs.update(opt_kwargs)
+            optimizer = RAdam(**kwargs)
         elif name=='rmsprop':
             if opt_kwargs is None:
                 opt_kwargs = {'alpha': 0.5}
