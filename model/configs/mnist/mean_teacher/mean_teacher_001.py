@@ -1,20 +1,22 @@
-#============================================================
-#
 #  Semi Supervised Segmentation using Mean Teacher Approach
 #  Implements: https://arxiv.org/abs/1807.04657
-#
-#  Models
-#
-#  author: Francisco Perdigon Romero
-#  github id: fperdigon
-#  MedICAL Lab
-#
-#============================================================
 
 import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from fcn_maker.loss import dice_loss
+from model.mean_teacher_segmentation import segmentation_model
+
+
+def build_model():
+    model = segmentation_model(
+        student=NoPoolNoBNASPP(),
+        teacher=NoPoolNoBNASPP(),
+        loss_seg=dice_loss(),
+        lambda_con=10.,
+        alpha_max=0.99)
+    return {'G': model}
 
 
 class NoPoolASPP(nn.Module):
@@ -29,7 +31,6 @@ class NoPoolASPP(nn.Module):
     """
 
     def __init__(self, drop_rate=0.4, bn_momentum=0.1):
-
         super(NoPoolASPP, self).__init__()
 
         self.conv1a = nn.Conv2d(1, 32, kernel_size=3, padding=1)
