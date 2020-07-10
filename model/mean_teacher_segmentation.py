@@ -5,9 +5,11 @@
 #
 # ============================================================
 
+from collections import OrderedDict
 import numpy as np
 import torch
 from torch import nn
+from torch.autograd import Variable
 import torch.nn.functional as F
 from fcn_maker.loss import dice_loss
 from .common.losses import mse
@@ -112,8 +114,8 @@ class segmentation_model(nn.Module):
         if self.lambda_con and len(mask_indices) < len(mask):
             x_AM_unsup_student = x_AM_student[no_mask_indices]
             x_AM_unsup_teacher = x_AM_teacher[no_mask_indices]
-            loss_con = _mean(F.mse_loss(F.softmax(x_AM_unsup_student),
-                                        F.softmax(x_AM_unsup_teacher)))
+            loss_con = _mean(F.mse_loss(x_AM_unsup_student,
+                                        x_AM_unsup_teacher))
         
         # Loss. Compute gradients, if requested.
         loss = loss_seg + self.lambda_con*loss_con
@@ -123,19 +125,20 @@ class segmentation_model(nn.Module):
         
         # Update teacher's parameters as exponential moving average of
         # student's parameters.
-        alpha = min(1 - 1./(global_step+1), alpha_max)
+        alpha = min(1 - 1./(self._iteration+1), self.alpha_max)
         for ema_param, param in zip(self.teacher.parameters(),
                                     self.student.parameters()):
-            ema_param.data.mul_(alpha_max).add_(1-alpha_max, param.data)
+            ema_param.data.mul_(self.alpha_max).add_(1-self.alpha_max,
+                                                     param.data)
         
         # Compile outputs and return.
         outputs = OrderedDict((
             ('l_all',   loss),
             ('l_seg',   loss_seg),
             ('l_con',   loss_con),
-            ('x_AM_sup_student',    x_AM_sup_student),
+            ('x_AM',                x_AM_sup_student),
             ('x_AM_sup_teacher',    x_AM_sup_teacher),
             ('x_AM_unsup_student',  x_AM_unsup_student),
             ('x_AM_unsup_teacher',  x_AM_unsup_teacher),
-            ('x_M',     mask_packed)))            )
+            ('x_M',     mask_packed)))
         return outputs
