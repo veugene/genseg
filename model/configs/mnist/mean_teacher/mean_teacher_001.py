@@ -316,7 +316,7 @@ class NoPoolNoBNASPP(nn.Module):
         amort = self.amort_drop(amort)
 
         predictions = self.prediction(amort)
-        predictions = F.sigmoid(predictions)
+        predictions = torch.sigmoid(predictions)
 
         return predictions
 
@@ -405,6 +405,6 @@ class Unet(nn.Module):
         x10 = self.up3(x9, x1)
 
         x11 = self.conv9(x10)
-        preds = F.sigmoid(x11)
+        preds = torch.sigmoid(x11)
 
         return preds
