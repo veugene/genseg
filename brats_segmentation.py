@@ -74,6 +74,7 @@ def run(args):
 
     from model import configs
     from model.ae_segmentation import segmentation_model as model_ae
+    from model.bd_segmentation import segmentation_model as model_bd
 
 
     # Disable buggy profiler.
@@ -177,7 +178,7 @@ def run(args):
         for key in filter(lambda x: x.startswith('x_'), outputs.keys()):
             if outputs['x_M'] is None:
                 outputs[key] = None
-            elif outputs[key] is not None and key not in ['x_M', 'x_AM']:
+            elif outputs[key] is not None and key!='x_M' and 'x_AM' not in key:
                 outputs[key] = outputs[key][indices]
         
         return outputs
@@ -231,12 +232,14 @@ def run(args):
                 target_class=c,
                 prediction_index=i+1,
                 output_transform=dice_transform_single)
-        metrics[key]['rec']  = batchwise_loss_accumulator(
-                            output_transform=lambda x: x['l_rec'])
         if isinstance(experiment_state.model['G'], model_ae):
+            metrics[key]['rec']  = batchwise_loss_accumulator(
+                            output_transform=lambda x: x['l_rec'])
             metrics[key]['loss'] = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_all'])
-        else:
+        elif isinstance(experiment_state.model['G'], model_bd):
+            metrics[key]['rec']  = batchwise_loss_accumulator(
+                            output_transform=lambda x: x['l_rec'])
             metrics[key]['G']    = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_G'])
             metrics[key]['DA']   = batchwise_loss_accumulator(
@@ -247,6 +250,8 @@ def run(args):
                             output_transform=lambda x: x['l_mi_A'])
             metrics[key]['miBA'] = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_mi_BA'])
+        else:
+            pass
         for name, m in metrics[key].items():
             m.attach(engines[key], name=name)
 
@@ -279,7 +284,7 @@ def run(args):
                 if k.startswith('x_') and v is not None and v.dim()==4:
                     k_new = k.replace('x_','')
                     v_new = v.cpu().numpy()
-                    if k_new in ['M', 'AM']:
+                    if k_new=='M' or k_new.startswith('AM'):
                         if v_new.shape[1]==1:
                             # 'M', or 'AM' with single class.
                             v_new = np.squeeze(v_new, axis=1)
