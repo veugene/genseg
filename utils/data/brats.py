@@ -10,40 +10,49 @@ from data_tools.data_augmentation import image_random_transform
 def prepare_data_brats17(path_hgg, path_lgg,
                          masked_fraction=0, drop_masked=False,
                          rng=None):
-    # Random 20% data split.
+    # Random 20% data split (10% validation, 10% testing).
     rnd_state = np.random.RandomState(0)
     hgg_indices = np.arange(0, 210)
     lgg_indices = np.arange(0, 75)
     rnd_state.shuffle(hgg_indices)
     rnd_state.shuffle(lgg_indices)
-    hgg_val = hgg_indices[0:int(0.2*210)]
-    lgg_val = lgg_indices[0:int(0.2*75)]
-    validation_indices = {'hgg': hgg_val, 'lgg': lgg_val}
+    hgg_val  = hgg_indices[0:21]
+    lgg_val  = lgg_indices[0:7]
+    hgg_test = hgg_indices[21:42]
+    lgg_test = lgg_indices[7:15]
+    validation_indices = {'hgg': hgg_val,  'lgg': lgg_val}
+    testing_indices    = {'hgg': hgg_test, 'lgg': lgg_test}
     return _prepare_data_brats(path_hgg, path_lgg,
                                masked_fraction=masked_fraction,
                                validation_indices=validation_indices,
+                               testing_indices=testing_indices,
                                drop_masked=drop_masked,
                                rng=rng)
 
 def prepare_data_brats13s(path_hgg, path_lgg,
                           masked_fraction=0, drop_masked=False,
                           rng=None):
+    # Random 28% data split (12% validation, 16% testing).
     rnd_state = np.random.RandomState(0)
     hgg_indices = np.arange(0, 25)
     lgg_indices = np.arange(0, 25)
     rnd_state.shuffle(hgg_indices)
     rnd_state.shuffle(lgg_indices)
-    hgg_val = hgg_indices[0:int(0.2*25)]
-    lgg_val = lgg_indices[0:int(0.2*25)]
-    validation_indices = {'hgg': hgg_val, 'lgg': lgg_val}
+    hgg_val  = hgg_indices[0:3]
+    lgg_val  = lgg_indices[0:3]
+    hgg_test = hgg_indices[3:7]
+    lgg_test = lgg_indices[3:7]
+    validation_indices = {'hgg': hgg_val,  'lgg': lgg_val}
+    testing_indices    = {'hgg': hgg_test, 'lgg': lgg_test}
     return _prepare_data_brats(path_hgg, path_lgg,
                                masked_fraction=masked_fraction,
                                validation_indices=validation_indices,
+                               testing_indices=testing_indices,
                                drop_masked=drop_masked,
                                rng=rng)
 
 def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
-                        masked_fraction=0, drop_masked=False,
+                        testing_indices, masked_fraction=0, drop_masked=False,
                         rng=None):
     """
     Convenience function to prepare brats data as multi_source_array objects,
@@ -57,9 +66,9 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
     rng (numpy RandomState) : Random number generator.
     
     NOTE: A constant random seed (0) is always used to determine the training/
-    validation split. The rng passed for data preparation is used to determine
-    which labels to mask out (if any); if none is passed, the default uses a
-    random seed of 0.
+    validation/testing split. The rng passed for data preparation is used to 
+    determine which labels to mask out (if any); if none is passed, the default
+    uses a random seed of 0.
     
     Returns six arrays: healthy slices, sick slices, and segmentations for 
     the training and validation subsets.
@@ -69,31 +78,14 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
         rng = np.random.RandomState(0)
     if masked_fraction < 0 or masked_fraction > 1:
         raise ValueError("`masked_fraction` must be in [0, 1].")
-        
-    # The rest is training data.
-    with h5py.File(path_lgg, 'r') as f:
-        num_lgg = len(f.keys())
-    with h5py.File(path_hgg, 'r') as f:
-        num_hgg = len(f.keys())
     
-    # Check if any of the validation indices exceeds
-    # the length of the # of examples.
-    max_hgg_idx = max(validation_indices['hgg'])
-    if max_hgg_idx >= num_hgg:
-        raise Exception("Max validation index is {} but len(hgg) is {}".
-                        format(max_hgg_idx, num_hgg))
-    max_lgg_idx = max(validation_indices['lgg'])
-    if max_lgg_idx >= num_lgg:
-        raise Exception("Max validation index is {} but len(lgg) is {}".
-                        format(max_lgg_idx, num_lgg))
-    
-    # Assemble volumes and corresponding segmentations; split train/valid.
+    # Assemble volumes and corresponding segmentations; split train/valid/test.
     path = OrderedDict((('hgg', path_hgg), ('lgg', path_lgg)))
-    volumes_h = {'train': [], 'valid': []}
-    volumes_s = {'train': [], 'valid': []}
-    volumes_m = {'train': [], 'valid': []}
-    indices_h = {'train': [], 'valid': []}
-    indices_s = {'train': [], 'valid': []}
+    volumes_h = {'train': [], 'valid': [], 'test': []}
+    volumes_s = {'train': [], 'valid': [], 'test': []}
+    volumes_m = {'train': [], 'valid': [], 'test': []}
+    indices_h = {'train': [], 'valid': [], 'test': []}
+    indices_s = {'train': [], 'valid': [], 'test': []}
     for key, path in path.items():
         try:
             h5py_file = h5py.File(path, mode='r')
@@ -104,6 +96,8 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
             f = h5py_file[case_id]
             if idx in validation_indices[key]:
                 split = 'valid'
+            elif idx in testing_indices[key]:
+                split = 'test'
             else:
                 split = 'train'
             volumes_h[split].append(f['healthy'])
@@ -173,7 +167,8 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
     
     # Merge all arrays in each list of arrays.
     data = OrderedDict([('train', OrderedDict()),
-                        ('valid', OrderedDict())])
+                        ('valid', OrderedDict()),
+                        ('test', OrderedDict())])
     for key in data.keys():
         # HACK: we may have a situation where the number of sick examples
         # is greater than the number of healthy. In that case, we should

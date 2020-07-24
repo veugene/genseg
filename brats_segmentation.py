@@ -112,12 +112,13 @@ def run(args):
                               masked_fraction=1.-args.labeled_fraction,
                               drop_masked=args.yield_only_labeled,
                               rng=np.random.RandomState(args.data_seed))
-    data_train = [data['train']['h'], data['train']['s'], data['train']['m'],
-                  data['train']['hi'], data['train']['si']]
-    data_valid = [data['valid']['h'], data['valid']['s'], data['valid']['m'],
-                  data['valid']['hi'], data['valid']['si']]
+    get_data_list = lambda key : [data[key]['h'],
+                                  data[key]['s'],
+                                  data[key]['m'],
+                                  data[key]['hi'],
+                                  data[key]['si']]
     loader = {
-        'train': data_flow_sampler(data_train,
+        'train': data_flow_sampler(get_data_list('train'),
                                    sample_random=True,
                                    batch_size=args.batch_size_train,
                                    preprocessor=preprocessor_brats(
@@ -125,7 +126,15 @@ def run(args):
                                    nb_io_workers=args.nb_io_workers,
                                    nb_proc_workers=args.nb_proc_workers,
                                    rng=np.random.RandomState(args.init_seed)),
-        'valid': data_flow_sampler(data_valid,
+        'valid': data_flow_sampler(get_data_list('valid'),
+                                   sample_random=True,
+                                   batch_size=args.batch_size_valid,
+                                   preprocessor=preprocessor_brats(
+                                       data_augmentation_kwargs=None),
+                                   nb_io_workers=args.nb_io_workers,
+                                   nb_proc_workers=args.nb_proc_workers,
+                                   rng=np.random.RandomState(args.init_seed)),
+        'test':  data_flow_sampler(get_data_list('test'),
                                    sample_random=True,
                                    batch_size=args.batch_size_valid,
                                    preprocessor=preprocessor_brats(
@@ -193,9 +202,14 @@ def run(args):
                                             validation_function,
                                             prefix='val',
                                             epoch_length=len(loader['valid']))
-    engines['valid'].add_event_handler(
-        Events.STARTED,
-        lambda engine: setattr(engine, 'rng', np.random.RandomState(0)))
+    engines['test'] = experiment_state.setup_engine(
+                                            validation_function,
+                                            prefix='test',
+                                            epoch_length=len(loader['test']))
+    for key in ['valid', 'test']:
+        engines[key].add_event_handler(
+            Events.STARTED,
+            lambda engine: setattr(engine, 'rng', np.random.RandomState(0)))
     
     
     # Set up metrics.
@@ -301,6 +315,15 @@ def run(args):
     Train.
     '''
     engines['train'].run(loader['train'], max_epochs=args.epochs)
+    
+    '''
+    Test.
+    '''
+    print("\nTESTING\n")
+    engines['test'].run(loader['test'])
+    print("\nTESTING ON BEST CHECKPOINT\n")
+    experiment_state.load_best_state()
+    engines['test'].run(loader['test'])
 
 
 if __name__ == '__main__':
