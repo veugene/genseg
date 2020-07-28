@@ -45,9 +45,9 @@ def dispatch_argument_parser(*args, **kwargs):
                        default='8CfEU-RDR_eu5BDfnMypNQ:/workspace')
     g_ngc.add_argument('--result', type=str, default="/results")
     g_cca = parser.add_argument_group('Compute Canada cluster')
-    g_cca.add_argument('--account', type=str, default='rpp-bengioy',
-                       choices=['rpp-bengioy', 'def-bengioy'],
-                       help="Use rpp on cedar, def on graham.")
+    g_cca.add_argument('--account', type=str, default='rrg-bengioy-ad',
+                       choices=['rrg-bengioy-ad', 'def-bengioy'],
+                       help="Prefer rrg over def for higher priority.")
     g_cca.add_argument('--cca_gpu', type=int, default=1)
     g_cca.add_argument('--cca_cpu', type=int, default=2)
     g_cca.add_argument('--cca_mem', type=str, default='12G')
