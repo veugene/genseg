@@ -86,6 +86,11 @@ def dispatch(parser, run):
     elif args.dispatch_ngc:
         _dispatch_ngc(args)
     elif args.dispatch_canada:
+        if _isrunning_canada(args.path):
+            # If a job is already running on this path, exit.
+            print("WARNING: aborting dispatch since there is already an "
+                  "active job ({}).".format(args.path))
+            return
         import daemon
         if not os.path.exists(args.path):
             os.makedirs(args.path)
@@ -241,3 +246,20 @@ def _get_status_canada(job_id):
             status = re.search('\s(\w+)\s*$', line).group(0).strip(' \t\n')
             break
     return status
+
+
+def _isrunning_canada(path):
+    # Read the daemon_log.txt to find all job IDs and check if at least one
+    # is active.
+    log_path = os.path.join(path, "daemon_log.txt")
+    if not os.path.exists(log_path):
+        return False
+    with open(log_path, 'r') as f:
+        for line in f:
+            match = re.search("[0-9].*[0-9]$", line)
+            if match:
+                job_id = match.group(0)
+                status = _get_status_canada(job_id)
+                if status in ['RUNNING', 'PENDING']:
+                    return True
+    return False
