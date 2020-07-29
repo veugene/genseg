@@ -49,8 +49,8 @@ def dispatch_argument_parser(*args, **kwargs):
                        choices=['rrg-bengioy-ad', 'def-bengioy'],
                        help="Prefer rrg over def for higher priority.")
     g_cca.add_argument('--cca_gpu', type=int, default=1)
-    g_cca.add_argument('--cca_cpu', type=int, default=2)
-    g_cca.add_argument('--cca_mem', type=str, default='12G')
+    g_cca.add_argument('--cca_cpu', type=int, default=8)
+    g_cca.add_argument('--cca_mem', type=str, default='32G')
     g_cca.add_argument('--time', type=str, default='1-00:00',
                        help="Max run time (DD-HH:MM). Shorter times get "
                             "higher priority.")
