@@ -10,3 +10,6 @@
 [submodule "submodules/tensorboardX"]
 	path = submodules/tensorboardX
 	url = https://github.com/veugene/tensorboardX.git
+[submodule "submodules/ddsm_normals"]
+	path = submodules/ddsm_normals
+	url = https://github.com/veugene/ddsm_normals
