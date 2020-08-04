@@ -1,173 +1,235 @@
 import argparse
-from collections import OrderedDict
+from collections import (defaultdict,
+                         OrderedDict)
+import os
+import re
+import tempfile
 
 import h5py
 import numpy as np
-from skimage import filters
-from skimage import transform
+import SimpleITK as sitk
 from tqdm import tqdm
 
 from data_tools.io import h5py_array_writer
+from data_tools.wrap import multi_source_array
+from ddsm_normals.make_dataset import make_data_set as convert_normals
 
 
 def get_parser():
-    parser = argparse.ArgumentParser(description="DDSM seg.")
-    parser.add_argument('--data_from', type=str, default='./data/ddsm/ddsm.h5')
-    parser.add_argument('--data_save', type=str,
-                        default='./data/ddsm/ddsm_simple.h5')
-    parser.add_argument('--image_size', type=int, default=128)
+    parser = argparse.ArgumentParser(description=""
+        "Create an HDF5 dataset with DDSM data by combining the CBIS-DDSM "
+        "dataset with normal (healthy) cases from the original DDSM "
+        "dataset.")
+    parser.add_argument('path_cbis', type=str,
+                        help="path to the CBIS-DDSM data directory")
+    parser.add_argument('path_healthy', type=str,
+                        help="path to the DDSM `normals` directory")
+    parser.add_argument('--healthy_is_processed', action='store_true',
+                        help="`path_healthy` points to a directory that "
+                             "contains the processed tiff files rather "
+                             "than the original raw files")
+    parser.add_argument('--path_create', type=str,
+                        default='./data/ddsm/ddsm.h5',
+                        help="path to save the HDF5 file to")
+    parser.add_argument('--validation_fraction', type=float, default=0.2,
+                        help="fraction of (sick, CBIS-DDSM) training data "
+                             "to use for the validation subset")
+    parser.add_argument('--resize', type=int, default=256)
     parser.add_argument('--batch_size', type=int, default=32)
-    parser.add_argument('--min_patch_size', type=int, default=0)
     return parser
 
 
-def prepare_data_ddsm(path):
-    """
-    Given an HDF5 file of DDSM data, create a simpler HDF5 file of image
-    patches resized to a constant size and split into training, validation,
-    and testing subsets.
+def prepare_data_ddsm(args):
     
-    path (string) : Path of the h5py file containing the DDSM data.
+    # Create HDF5 file to save dataset into.
+    dir_create = os.path.dirname(args.path_create)
+    if not os.path.exists(dir_create):
+        os.makedirs(dir_create)
+    f = h5py.File(args.path_create, 'w')
+    f.create_group('train')
+    f.create_group('valid')
+    f.create_group('test')
     
-    NOTE: A constant random seed (0) is always used to determine the training/
-    validation split.
+    # Create batch-wise writers for the HDF5 file.
+    writer = {'train': {}, 'valid': {}, 'test': {}}
+    writer_kwargs = {'data_element_shape': (args.resize, args.resize),
+                     'batch_size': args.batch_size,
+                     'filename': args.path_create,
+                     'append': True,
+                     'kwargs': {'chunks': (args.batch_size,
+                                           args.resize,
+                                           args.resize)}}
+    writer['train']['h'] = h5py_array_writer(array_name='train/h',
+                                             dtype=np.uint8,
+                                             **writer_kwargs)
+    for fold in ['train', 'valid', 'test']:
+        for key in ['s', 'm']:
+            writer[fold][key] = h5py_array_writer(
+                array_name='{}/{}'.format(fold, key),
+                dtype=np.uint16 if key=='s' else np.uint8,
+                **writer_kwargs)
     
-    Returns dictionary: healthy slices, sick slices, and segmentations for 
-    the training, validation, and testing subsets.
-    """
+    # Convert raw healthy cases to tiff.
+    if args.healthy_is_processed:
+        path_temp = args.path_healthy
+    else:
+        path_temp = tempfile.mkdtemp()
+        convert_normals(read_from=args.path_healthy,
+                        write_to=path_temp,
+                        resize=args.resize,
+                        force=False)
     
-    # Random 20% data split for validation, random 20% for testing.
-    # 
-    # First, split out a random sample of the sick patients into a
-    # validation/test set. Any sick patients in the validation/test set that 
-    # reoccur in the healthy set are placed in the validation/test set for 
-    # the healthy set, as well. The remainder of the healthy validation/test
-    # set is completed with a random sample.
-    case_id_h = {}
-    case_id_s = {}
-    try:
-        h5py_file = h5py.File(path, mode='r')
-    except:
-        print("Failed to open data: {}".format(path))
-        raise
-    rnd_state = np.random.RandomState(0)
-    indices = {'s': rnd_state.permutation(len(h5py_file['sick'].keys())),
-               'h': rnd_state.permutation(len(h5py_file['healthy'].keys()))}
-    def get(keys, indices): # Index into keys object.
-        return [k for i, k in enumerate(keys) if i in indices]
-    def split(n_cases):
-        indices_s_split = indices['s'][:n_cases]
-        case_id_s_split = get(h5py_file['sick'].keys(), indices_s_split)
-        indices_s_and_h = [i for i, k in enumerate(h5py_file['healthy'].keys())
-                           if k in case_id_s_split]
-        indices_h_only  = [i for i, k in enumerate(h5py_file['healthy'].keys())
-                           if i not in indices_s_and_h]
-        n_random = n_cases-len(indices_s_and_h)
-        indices_h_split = indices_s_and_h+indices_h_only[:n_random]
-        case_id_h_split = get(h5py_file['healthy'].keys(), indices_h_split)
-        indices['s'] = [i for i in indices['s'] if i not in indices_s_split]
-        indices['h'] = [i for i in indices['h'] if i not in indices_h_split]
-        return case_id_s_split, case_id_h_split
-    n_valid = int(0.2*len(indices['s']))
-    case_id_s['valid'], case_id_h['valid'] = split(n_valid)
-    case_id_s['test'],  case_id_h['test']  = split(n_valid)
+    # Collect and store healthy cases (resized).
+    print("Processing normals (healthy) from DDSM")
+    healthy = []
+    for root, dirs, files in os.walk(path_temp):
+        healthy.extend([os.path.join(root, fn) for fn in files])
+    for im_path in tqdm(healthy):
+        if not im_path.endswith('.tif'):
+            continue
+        im = sitk.ReadImage(im_path)
+        im = resize(im,
+                    size=(args.resize, args.resize),
+                    interpolator=sitk.sitkLinear)
+        im_np = sitk.GetArrayFromImage(im)
+        writer['train']['h'].buffered_write(im_np)
+    writer['train']['h'].flush_buffer()
     
-    # Remaining cases go in the training set. At this point, indices for
-    # cases in the validation and test sets have been removed.
-    case_id_s['train'] = get(h5py_file['sick'].keys(),    indices['s'])
-    case_id_h['train'] = get(h5py_file['healthy'].keys(), indices['h'])
-    indices = None  # Clear remaining indices.
+    # Clean up temporary path.
+    if not args.healthy_is_processed:
+        os.rmtree(path_temp)
     
-    # Assemble cases with corresponding segmentations; split train/valid.
-    cases_h = {'train': [], 'valid': [], 'test': []}
-    cases_s = {'train': [], 'valid': [], 'test': []}
-    cases_m = {'train': [], 'valid': [], 'test': []}
-    for split in ['train', 'valid', 'test']:
-        for case_id in case_id_s[split]:
-            f = h5py_file['sick'][case_id]
-            for view in f.keys():
-                for key in filter(lambda x:x.startswith('abnormality'),
-                                  f[view].keys()):
-                    cases_s[split].append(f[view][key]['cropped_image'])
-                    cases_m[split].append(f[view][key]['cropped_mask'])
-        for case_id in case_id_h[split]:
-            f = h5py_file['healthy'][case_id]
-            for view in f.keys():
-                cases_h[split].append(f[view]['patch'])
+    # Collect sick cases.
+    dirs_image = {'train': [], 'test': []}
+    dirs_mask  = {'train': defaultdict(list), 'test': defaultdict(list)}
+    for d in sorted(os.listdir(args.path_cbis)):
+        if not os.path.isdir(os.path.join(args.path_cbis, d)):
+            continue
+        if   re.search("^Mass-Training.*(CC|MLO)$", d):
+            dirs_image['train'].append(d)
+        elif re.search("^Mass-Test.*(CC|MLO)$", d):
+            dirs_image['test'].append(d)
+        elif re.search("^Mass-Training.*[1-9]$", d):
+            key = re.search("^Mass-Training.*(CC|MLO)", d).group(0)
+            dirs_mask['train'][key].append(d)
+        elif re.search("^Mass-Test.*[1-9]$", d):
+            key = re.search("^Mass-Test.*(CC|MLO)", d).group(0)
+            dirs_mask['test'][key].append(d)
+        else:
+            pass
     
-    # Merge all arrays in each list of arrays.
-    data = OrderedDict([('train', OrderedDict()),
-                        ('valid', OrderedDict()),
-                        ('test',  OrderedDict())])
-    for key in data.keys():
-        data[key]['h'] = _list(cases_h[key], np.uint16)
-        data[key]['s'] = _list(cases_s[key], np.uint16)
-        data[key]['m'] = _list(cases_m[key], np.uint8)
-    return data
+    # Split sick training cases into training and validation subsets.
+    keys = sorted(dirs_image['train'])
+    rng = np.random.RandomState(0)
+    rng.shuffle(keys)
+    n_valid = int(args.validation_fraction*len(keys))
+    keys_valid, keys_train = keys[:n_valid], keys[n_valid:]
+    
+    # Create new sick cases dicts with validation subset.
+    dirs_image_split = {
+        'train': keys_train,
+        'valid': keys_valid,
+        'test': dirs_image['test']
+        }
+    dirs_mask_split = {
+        'train': dict([(key, dirs_mask['train'][key]) for key in keys_train]),
+        'valid': dict([(key, dirs_mask['train'][key]) for key in keys_valid]),
+        'test': dirs_mask['test']
+        }
+    
+    # For each case, combine all lesions into one mask; process image 
+    # and mask and store in HDF5 file.
+    for fold in ['train', 'valid', 'test']:
+        print("Processing cases with masses (sick) from CBIS-DDSM : '{}' fold"
+              "".format(fold))
+        fail_list = []
+        for im_dir in tqdm(sorted(dirs_image_split[fold])):
+            mask_dir_list = dirs_mask_split[fold][im_dir]
+            
+            # Function to get path for every dcm image in a directory tree.
+            def get_all_dcm(path):
+                dcm_list = []
+                for root, dirs, files in os.walk(path):
+                    for fn in files:
+                        if fn.endswith('.dcm'):
+                            dcm_list.append(os.path.join(root, fn))
+                return dcm_list
+            
+            # Load image, resize, and store in HDF5.
+            im_path = get_all_dcm(os.path.join(args.path_cbis, im_dir))
+            assert len(im_path)==1  # there should only be one dcm file
+            im_path = im_path[0]
+            im = sitk.ReadImage(im_path)
+            im_size = im.GetSize()
+            im = resize(im,
+                        size=(args.resize, args.resize, 1),
+                        interpolator=sitk.sitkLinear)
+            im_np = sitk.GetArrayFromImage(im)
+            im_np = np.squeeze(im_np)
+            
+            # Load all masks, merge them together, resize, and store in HDF5.
+            mask_np = None
+            for d in mask_dir_list:
+                mask_path = get_all_dcm(os.path.join(args.path_cbis, d))
+                assert len(mask_path)==2  # there should be two dcm files
+                m_np = None
+                for path in mask_path:
+                    m = sitk.ReadImage(path)
+                    if m.GetSize()==im_size:
+                        # Of the two files, the mask is the one with the same
+                        # image size as the full xray image.
+                        m_np = sitk.GetArrayFromImage(m)
+                if m_np is None:
+                    # Could not find a mask matching the image dimensions!
+                    # Don't bother looking at the other masks. Just fail this
+                    # case.
+                    break
+                m_np = np.squeeze(m_np)
+                if mask_np is None:
+                    mask_np = m_np
+                else:
+                    mask_np = np.logical_or(m_np, mask_np).astype(np.uint8)
+            if mask_np is None:
+                # One or more masks does not match the image dimensions.
+                # Skip this case and add it to the fail list.
+                fail_list.append(im_dir)
+                continue
+            mask_np = resize(mask_np,
+                             size=(args.resize, args.resize),
+                             interpolator=sitk.sitkNearestNeighbor)
+            writer[fold]['s'].buffered_write(im_np)
+            writer[fold]['m'].buffered_write(mask_np)
+        writer[fold]['s'].flush_buffer()
+        writer[fold]['m'].flush_buffer()
+    
+        # Report failed cases.
+        if len(fail_list):
+            print("Skipped {} cases due to issues with their masks (missing "
+                  "mask or incorrect size):\n{}"
+                  "".format(len(fail_list),
+                            "\n".join(fail_list)))
 
 
-class _list(object):
-    def __init__(self, indexable, dtype):
-        self._items = indexable
-        self.dtype = dtype
-    def __getitem__(self, idx):
-        elem = self._items[idx]
-        if elem is not None:
-            elem = elem[...]
-        return elem
-    def __len__(self):
-        return len(self._items)
-
-
-def resize(image, size, order=1):
-    image = image.copy()
-    out_image = np.zeros(image.shape[:-2]+size, dtype=image.dtype)
-    for idx in np.ndindex(image.shape[:-2]):
-        if any([a<b for a,b in zip(size, image.shape[-2:])]) and order>0:
-            # Downscaling - smooth, first.
-            s = [(1-float(a)/b)/2. if a<b else 0
-                 for a,b in zip(size, image.shape[-2:])]
-            image[idx] = filters.gaussian(image[idx], sigma=s)
-        out_image[idx] = transform.resize(image[idx],
-                                          output_shape=size,
-                                          mode='constant',
-                                          order=order,
-                                          cval=0,
-                                          clip=False,
-                                          preserve_range=True)
-    return out_image
+def resize(image, size, interpolator=sitk.sitkLinear):
+    sitk_image = image
+    if isinstance(image, np.ndarray):
+        sitk_image = sitk.GetImageFromArray(image)
+    sitk_out = sitk.Resample(sitk_image,
+                             size,
+                             sitk.Transform(),
+                             interpolator,
+                             sitk_image.GetOrigin(),
+                             sitk_image.GetSpacing(),
+                             sitk_image.GetDirection(),
+                             0,
+                             sitk_image.GetPixelID())
+    if isinstance(image, np.ndarray):
+        out = sitk.GetArrayFromImage(sitk_out)
+        return out
+    return sitk_out
 
 
 if __name__ == '__main__':
     parser = get_parser()
     args = parser.parse_args()
-    data = prepare_data_ddsm(args.data_from)
-    
-    # Create hdf5 file and groups.
-    f = h5py.File(args.data_save, 'w')
-    g_train = f.create_group('train')
-    g_valid = f.create_group('valid')
-    g_test  = f.create_group('test')
-    
-    # Create arrays.
-    for fold in ['train', 'valid', 'test']:
-        for key in ['h', 's', 'm']:
-            print("Writing {}/{}".format(fold, key))
-            dtype = np.uint8 if key=='m' else np.float32
-            order = 0 if key=='m' else 1
-            shape = (args.image_size, args.image_size)
-            if np.any(np.less(shape, args.min_patch_size)):
-                continue    # Patch is too small - skip.
-            writer = h5py_array_writer(
-                data_element_shape=shape,
-                dtype=dtype,
-                batch_size=args.batch_size,
-                filename=args.data_save,
-                array_name="{}/{}".format(fold, key),
-                append=True,
-                kwargs={'chunks': (1,)+shape})
-            for case in tqdm(data[fold][key]):
-                case_resized = resize(case.astype(dtype),
-                                      size=shape, order=order)
-                writer.buffered_write(case_resized)
-            writer.flush_buffer()
+    data = prepare_data_ddsm(args)
