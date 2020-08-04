@@ -51,6 +51,30 @@ def build_model():
 
 Task launchers are used to start/resume an experiment.
 
+### BRATS
+
+This is the 2017 version of the BRATS (brain tumour segmentation) data from https://www.med.upenn.edu/sbia/brats2017/data.html. Once downloaded to `<download_dir>`, this data can be prepared for training using a provided script, as follows:
+```
+python scripts/data_preparation/prepare_brats_data_hemispheres.py --data_dir <download_dir>/HGG --save_to data/brats_2017_b0.25_t0.01/hgg.h5 --min_tumor_fraction 0.01 --min_brain_fraction 0.25
+```
+```
+python scripts/data_preparation/prepare_brats_data_hemispheres.py --data_dir <download_dir>/LGG --save_to data/brats_2017_b0.25_t0.01/lgg.h5 --min_tumor_fraction 0.01 --min_brain_fraction 0.25
+```
+Data preparation creates a new dataset based on BRATS that contains 2D hemispheres, split into sick and healthy subsets.
+
+### MNIST
+
+The cluttered MNIST digit data is created automatically by the MNIST task launcher from MNIST data that is also downloaded automatically.
+
+### DDSM
+
+The DDSM breast cancer data consists of CBIS-DDSM (https://wiki.cancerimagingarchive.net/display/Public/CBIS-DDSM) data for sick cases and the "normals" set of cases from the original DDSM data (http://www.eng.usf.edu/cvprg/Mammography/Database.html) for healthy cases. To prepare DDSM data for training, these two sets of data need to be downloaded to `<cbis_download_dir>` and `<healthy_download_dir>`, respectively. Once downloaded, they can be prepared with a provided script, as follows:
+```
+python scripts/data_preparation/prepare_ddsm_data.py --path_cbis <cbis_download_dir> --path_healthy <healthy_download_dir> --path_create data/ddsm/ddsm.h5 --resize 256 --batch_size 20
+```
+
+### Launching
+
 #### Example: launching a BRATS experiment
 
 In this example, the following model configuration is used:
@@ -64,7 +88,7 @@ Adaptive instance normalization uses parameters predicted by an MLP when the dec
 
 An example of an experiment launched with this config is:
 ```
-python3 brats_segmentation.py` --path "experiments/brats_2017/bds3/bds3_003_xid50_cyc50 (f0.01, D_lr 0.001) [b0.3]" --model_from model/configs/brats_2017/bds3/bds3_003_xid50_cyc50.py --batch_size_train 20 --batch_size_valid 20 --epochs 1000000 --rseed 1234 --optimizer '{"G": "amsgrad", "D": "amsgrad"}' --opt_kwargs '{"G": {"betas": [0.5, 0.999], "lr": 0.001}, "D": {"betas": [0.5, 0.999], "lr": 0.01}}' --n_vis 8 --weight_decay 0.0001 --dataset brats17 --orientation 1 --data_dir=./data/brats/2017/hemispheres_b0.3_t0.01/ --labeled_fraction 0.01 --augment_data --nb_proc_workers 2
+python brats_segmentation.py --path "experiments/brats_2017/bds3/bds3_003_xid50_cyc50 (f0.01, D_lr 0.001) [b0.3]" --model_from model/configs/brats_2017/bds3/bds3_003_xid50_cyc50.py --batch_size_train 20 --batch_size_valid 20 --epochs 1000000 --rseed 1234 --optimizer '{"G": "amsgrad", "D": "amsgrad"}' --opt_kwargs '{"G": {"betas": [0.5, 0.999], "lr": 0.001}, "D": {"betas": [0.5, 0.999], "lr": 0.01}}' --n_vis 8 --weight_decay 0.0001 --dataset brats17 --orientation 1 --data_dir=./data/brats/2017/hemispheres_b0.3_t0.01/ --labeled_fraction 0.01 --augment_data --nb_proc_workers 2
 ```
 
 Optimizer arguments are passed as a JSON string through the `--opt_kwargs` argument.
@@ -75,7 +99,7 @@ Note that if `CUDA_VISIBLE_DEVICES` is not set to specify which GPUs to use, the
 
 Resuming the above experiment could be done with:
 ```
-python3 brats_segmentation.py --path "experiments/brats_2017/bds3/bds3_003_xid50_cyc50 (f0.01, D_lr 0.001) [b0.3]"
+python brats_segmentation.py --path "experiments/brats_2017/bds3/bds3_003_xid50_cyc50 (f0.01, D_lr 0.001) [b0.3]"
 ```
 
 Upon resuming, the model configuration file is loaded from the saved checkpoint. All arguments passed upon initializing the experiment are loaded as well. **Any of these can be over-ridden by simply passing them again with the resuming command.**
