@@ -30,14 +30,13 @@ class folder_indexer(object):
     """
     def __init__(self, path):
         self.path = path
-        self.convert_rgb = convert_rgb
         self.fn_list = sorted(os.listdir(path))
         self.shape = (len(self.fn_list),)
         self.dtype = 'strings'
       
     def __getitem__(self, index):
         fn = self.fn_list[index]
-        return imageio.imread(os.path.join(path, img_fn))
+        return imageio.imread(os.path.join(self.path, fn))
     
     def __len__(self):
         return len(self.fn_list)
