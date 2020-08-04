@@ -12,7 +12,6 @@ from torch import nn
 from torch.autograd import Variable
 import torch.nn.functional as F
 from fcn_maker.loss import dice_loss
-from .common.losses import mse
 
 
 # TODO: necessary? (Yes if any part of the model is not to be updated during
