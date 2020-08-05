@@ -2,6 +2,7 @@ import argparse
 from collections import (defaultdict,
                          OrderedDict)
 import os
+import shutil
 import re
 import tempfile
 
@@ -69,35 +70,38 @@ def prepare_data_ddsm(args):
                 dtype=np.uint16 if key=='s' else np.uint8,
                 **writer_kwargs)
     
-    # Convert raw healthy cases to tiff.
-    if args.healthy_is_processed:
-        path_temp = args.path_healthy
-    else:
-        path_temp = tempfile.mkdtemp()
-        convert_normals(read_from=args.path_healthy,
-                        write_to=path_temp,
-                        resize=args.resize,
-                        force=False)
+    try:
+        # Convert raw healthy cases to tiff.
+        if args.healthy_is_processed:
+            path_temp = args.path_healthy
+        else:
+            path_temp = tempfile.mkdtemp()
+            convert_normals(read_from=args.path_healthy,
+                            write_to=path_temp,
+                            resize=args.resize,
+                            force=False)
     
-    # Collect and store healthy cases (resized).
-    print("Processing normals (healthy) from DDSM")
-    healthy = []
-    for root, dirs, files in os.walk(path_temp):
-        healthy.extend([os.path.join(root, fn) for fn in files])
-    for im_path in tqdm(healthy):
-        if not im_path.endswith('.tif'):
-            continue
-        im = sitk.ReadImage(im_path)
-        im = resize(im,
-                    size=(args.resize, args.resize),
-                    interpolator=sitk.sitkLinear)
-        im_np = sitk.GetArrayFromImage(im)
-        writer['train']['h'].buffered_write(im_np)
-    writer['train']['h'].flush_buffer()
-    
-    # Clean up temporary path.
-    if not args.healthy_is_processed:
-        os.rmtree(path_temp)
+        # Collect and store healthy cases (resized).
+        print("Processing normals (healthy) from DDSM")
+        healthy = []
+        for root, dirs, files in os.walk(path_temp):
+            healthy.extend([os.path.join(root, fn) for fn in files])
+        for im_path in tqdm(healthy):
+            if not im_path.endswith('.tif'):
+                continue
+            im = sitk.ReadImage(im_path)
+            im = resize(im,
+                        size=(args.resize, args.resize),
+                        interpolator=sitk.sitkLinear)
+            im_np = sitk.GetArrayFromImage(im)
+            writer['train']['h'].buffered_write(im_np)
+        writer['train']['h'].flush_buffer()
+    except:
+        raise
+    finally:
+        # Clean up temporary path.
+        if not args.healthy_is_processed:
+            shutil.rmtree(path_temp)
     
     # Collect sick cases.
     dirs_image = {'train': [], 'test': []}
