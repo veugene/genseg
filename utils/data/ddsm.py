@@ -108,7 +108,7 @@ class _list(object):
         return len(self._items)
 
 
-def preprocessor_ddsm(data_augmentation_kwargs=None):
+def preprocessor_ddsm(crop_to=None, data_augmentation_kwargs=None):
     """
     Preprocessor function to pass to a data_flow, for DDSM data.
     
