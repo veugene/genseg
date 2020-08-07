@@ -20,7 +20,8 @@ def get_parser():
     parser = argparse.ArgumentParser(description=""
         "Create an HDF5 dataset with DDSM data by combining the CBIS-DDSM "
         "dataset with normal (healthy) cases from the original DDSM "
-        "dataset.")
+        "dataset. All images are cropped to remove irrelevant background "
+        "and resized to a square.")
     parser.add_argument('path_cbis', type=str,
                         help="path to the CBIS-DDSM data directory")
     parser.add_argument('path_healthy', type=str,
@@ -78,7 +79,6 @@ def prepare_data_ddsm(args):
             path_temp = tempfile.mkdtemp()
             convert_normals(read_from=args.path_healthy,
                             write_to=path_temp,
-                            resize=args.resize,
                             force=False)
     
         # Collect and store healthy cases (resized).
@@ -90,10 +90,11 @@ def prepare_data_ddsm(args):
             if not im_path.endswith('.tif'):
                 continue
             im = sitk.ReadImage(im_path)
-            im = resize(im,
-                        size=(args.resize, args.resize),
-                        interpolator=sitk.sitkLinear)
             im_np = sitk.GetArrayFromImage(im)
+            im_np = trim(im_np)
+            im_np = resize(im_np,
+                           size=(args.resize, args.resize),
+                           interpolator=sitk.sitkLinear)
             writer['train']['h'].buffered_write(im_np)
         writer['train']['h'].flush_buffer()
     except:
@@ -164,12 +165,9 @@ def prepare_data_ddsm(args):
             assert len(im_path)==1  # there should only be one dcm file
             im_path = im_path[0]
             im = sitk.ReadImage(im_path)
-            im_size = im.GetSize()
-            im = resize(im,
-                        size=(args.resize, args.resize, 1),
-                        interpolator=sitk.sitkLinear)
             im_np = sitk.GetArrayFromImage(im)
             im_np = np.squeeze(im_np)
+            im_size = im.GetSize()
             
             # Load all masks, merge them together, resize, and store in HDF5.
             mask_np = None
@@ -198,6 +196,11 @@ def prepare_data_ddsm(args):
                 # Skip this case and add it to the fail list.
                 fail_list.append(im_dir)
                 continue
+            im_np, mask_np = trim(im_np, mask_np)
+            im_np = resize(im_np,
+                           size=(args.resize, args.resize, 1),
+                           interpolator=sitk.sitkLinear)
+            im_np = np.squeeze(im_np)
             mask_np = resize(mask_np,
                              size=(args.resize, args.resize),
                              interpolator=sitk.sitkNearestNeighbor)
@@ -235,6 +238,58 @@ def resize(image, size, interpolator=sitk.sitkLinear):
         out = sitk.GetArrayFromImage(sitk_out)
         return out
     return sitk_out
+
+
+def trim(image, mask=None):
+    if mask is not None:
+        assert np.all(mask.shape==image.shape)
+    
+    # Normalize.
+    x = (image-image.min())
+    if x.dtype==np.uint8:
+        x = (x-63)/(2**8 - 1)
+    elif x.dtype==np.uint16:
+        x = 2**16 - 1
+    else:
+        raise TypeError("Unexpected image type: {}".format(x.dtype))
+    
+    # Align breast to left (find breast direction).
+    # Check first 5% of image from left and first 5% from right. The breast
+    # is aligned to the side with the highest cumulative intensity.
+    l = max(int(image.shape[1]*0.05), 1)
+    if image[:,-5:].sum() > image[:,:5].sum():
+        image = np.fliplr(image)
+    
+    # Crop out background outside of breast (columns) : start with left side,
+    # move right. Start crop when mean intensity falls below threshold.
+    threshold = 0.02
+    crop_col = image.shape[1]
+    for col in range(image.shape[1]):
+        if image[:,col].mean() < threshold:
+            crop_col = col
+            break
+    
+    # Crop out background outside of breast (row) : start at middle, move
+    # outward. Start crop when mean intensity falls below threshold.
+    threshold = 0.02
+    crop_row_top = 0
+    crop_row_bot = image.shape[0]
+    for row in range(image.shape[0]//2, -1, -1):
+        if image[row,:].mean() < threshold:
+            crop_row_top = row
+            break
+    for row in range(image.shape[0]//2, image.shape[0], 1):
+        if image[row,:].mean() < threshold:
+            crop_row_bot = row
+            break
+    
+    # Apply crop.
+    image = image[crop_row_top:crop_row_bot,:crop_col]
+    if mask is not None:
+        mask = mask[crop_row_top:crop_row_bot,:crop_col]
+        return image, mask
+    
+    return image
 
 
 if __name__ == '__main__':
