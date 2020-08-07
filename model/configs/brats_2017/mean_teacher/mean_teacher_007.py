@@ -46,7 +46,7 @@ def build_model():
     model = segmentation_model(
         student=encoder_decoder(**kwargs),
         teacher=encoder_decoder(**kwargs),
-        loss_seg=dice_loss(),
+        loss_seg=dice_loss([1,2,4]),
         lambda_con=10.,
         alpha_max=0.99)
     return {'G': model}
