@@ -218,12 +218,16 @@ def resize(image, size, interpolator=sitk.sitkLinear):
     sitk_image = image
     if isinstance(image, np.ndarray):
         sitk_image = sitk.GetImageFromArray(image)
+    new_spacing = [x*y/z for x, y, z in zip(
+                   sitk_image.GetSpacing(),
+                   sitk_image.GetSize(),
+                   size)]
     sitk_out = sitk.Resample(sitk_image,
                              size,
                              sitk.Transform(),
                              interpolator,
                              sitk_image.GetOrigin(),
-                             sitk_image.GetSpacing(),
+                             new_spacing,
                              sitk_image.GetDirection(),
                              0,
                              sitk_image.GetPixelID())
