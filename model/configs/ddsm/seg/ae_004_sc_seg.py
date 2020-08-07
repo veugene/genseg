@@ -24,7 +24,7 @@ from model.ae_segmentation import segmentation_model
 
 def build_model():
     N = 512 # Number of features at the bottleneck.
-    image_size = (1, 128, 128)
+    image_size = (1, 256, 256)
     
     encoder_kwargs = {
         'input_shape'         : image_size,
@@ -73,7 +73,7 @@ def build_model():
                                    num_classes=1,
                                    **decoder_kwargs),
                                loss_rec=mae,
-                               loss_seg=dice_loss([1,2,4]),
+                               loss_seg=dice_loss(),
                                lambda_rec=0.,
                                lambda_seg=1.,
                                rng=np.random.RandomState(1234))

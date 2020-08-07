@@ -61,10 +61,10 @@ def prepare_data_ddsm(path, masked_fraction=0, drop_masked=False, rng=None):
     data['train']['h'] = h5py_file['train']['h']
     data['train']['s'] = []
     data['train']['m'] = []
-    data['valid']['h'] = h5py_file['valid']['h']
+    data['valid']['h'] = h5py_file['train']['h']
     data['valid']['s'] = h5py_file['valid']['s']
     data['valid']['m'] = h5py_file['valid']['m']
-    data['test']['h']  = h5py_file['test']['h']
+    data['test']['h']  = h5py_file['train']['h']
     data['test']['s']  = h5py_file['test']['s']
     data['test']['m']  = h5py_file['test']['m']
     for i in range(num_cases_total):
@@ -108,7 +108,7 @@ class _list(object):
         return len(self._items)
 
 
-def preprocessor_ddsm(crop_to=None, data_augmentation_kwargs=None):
+def preprocessor_ddsm(data_augmentation_kwargs=None):
     """
     Preprocessor function to pass to a data_flow, for DDSM data.
     
@@ -121,11 +121,13 @@ def preprocessor_ddsm(crop_to=None, data_augmentation_kwargs=None):
     def process_element(inputs):
         h, s, m = inputs
 
-        # Float, rescale, center.
+        # Float, rescale.
         h = h.astype(np.float32)
         s = s.astype(np.float32)
-        h = h/2**15 - 1
-        s = s/2**15 - 1
+        h = h/(2**8  -1)    # uint8     -> [0, 1]
+        s = s/(2**16 -1)    # uint16    -> [0, 1]
+        if m is not None:
+            m = m/255
         
         # Expand dims.
         h = np.expand_dims(h, 0)
@@ -152,7 +154,7 @@ def preprocessor_ddsm(crop_to=None, data_augmentation_kwargs=None):
             h = h[:, x:x+crop_to, y:y+crop_to]
             s = s[:, x:x+crop_to, y:y+crop_to]
             m = m[:, x:x+crop_to, y:y+crop_to]
-        
+                
         return h, s, m
     
     def process_batch(batch):

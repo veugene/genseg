@@ -19,7 +19,6 @@ def get_parser():
     g_exp.add_argument('--weight_decay', type=float, default=1e-4)
     g_exp.add_argument('--labeled_fraction', type=float, default=0.1)
     g_exp.add_argument('--yield_only_labeled', action='store_true')
-    g_exp.add_argument('--output_size', type=int, default=128)
     g_exp.add_argument('--augment_data', action='store_true')
     g_exp.add_argument('--batch_size_train', type=int, default=20)
     g_exp.add_argument('--batch_size_valid', type=int, default=20)
@@ -89,8 +88,7 @@ def run(args):
                  'fill_mode': 'reflect',
                  'spline_warp': True,
                  'warp_sigma': 5,
-                 'warp_grid_size': 3,
-                 'crop_size': (args.output_size, args.output_size)}
+                 'warp_grid_size': 3}
     if not args.augment_data:
         da_kwargs=None
     
@@ -114,7 +112,6 @@ def run(args):
                                    sample_random=True,
                                    batch_size=args.batch_size_valid,
                                    preprocessor=preprocessor_ddsm(
-                                       crop_to=args.output_size,
                                        data_augmentation_kwargs=None),
                                    nb_io_workers=args.nb_io_workers,
                                    nb_proc_workers=args.nb_proc_workers,

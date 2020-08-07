@@ -30,7 +30,7 @@ from model.bd_segmentation import segmentation_model
 def build_model():
     N = 512 # Number of features at the bottleneck.
     n = 128 # Number of features to sample at the bottleneck.
-    image_size = (1, 128, 128)
+    image_size = (1, 256, 256)
     lambdas = {
         'lambda_disc'       : 3,
         'lambda_x_id'       : 50,
@@ -129,7 +129,7 @@ def build_model():
     model = segmentation_model(**submodel,
                                shape_sample=z_shape,
                                loss_gan='hinge',
-                               loss_seg=dice_loss([1,2,4]),
+                               loss_seg=dice_loss(),
                                relativistic=False,
                                rng=np.random.RandomState(1234),
                                **lambdas)
