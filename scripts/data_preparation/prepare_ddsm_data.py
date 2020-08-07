@@ -245,48 +245,58 @@ def trim(image, mask=None):
         assert np.all(mask.shape==image.shape)
     
     # Normalize.
-    x = (image-image.min())
+    x = image.copy()
     if x.dtype==np.uint8:
         x = (x-63)/(2**8 - 1)
     elif x.dtype==np.uint16:
-        x = 2**16 - 1
+        x = x/(2**16 - 1)
     else:
         raise TypeError("Unexpected image type: {}".format(x.dtype))
     
     # Align breast to left (find breast direction).
-    # Check first 5% of image from left and first 5% from right. The breast
+    # Check first 10% of image from left and first 10% from right. The breast
     # is aligned to the side with the highest cumulative intensity.
-    l = max(int(image.shape[1]*0.05), 1)
-    if image[:,-5:].sum() > image[:,:5].sum():
+    l = max(int(x.shape[1]*0.1), 1)
+    if x[:,-l:].sum() > x[:,:l].sum():
         image = np.fliplr(image)
+        x = np.fliplr(x)
     
-    # Crop out background outside of breast (columns) : start with left side,
-    # move right. Start crop when mean intensity falls below threshold.
+    # Crop out background outside of breast (columns) : start 10% in from the
+    # left side since some cases start with an empty border and move left to
+    # remove the border, then move right to find the end of the breast.
+    # Start crop when mean intensity falls below threshold.
     threshold = 0.02
-    crop_col = image.shape[1]
-    for col in range(image.shape[1]):
-        if image[:,col].mean() < threshold:
-            crop_col = col
+    threshold_left = 0.1
+    l = max(int(x.shape[1]*0.1), 1)
+    crop_col_left  = 0
+    crop_col_right = x.shape[1]
+    for col in range(l, -1, -1):
+        if x[:,col].mean() < threshold_left:
+            crop_col_left = col
+            break
+    for col in range(l, x.shape[1]):
+        if x[:,col].mean() < threshold:
+            crop_col_right = col
             break
     
     # Crop out background outside of breast (row) : start at middle, move
     # outward. Start crop when mean intensity falls below threshold.
     threshold = 0.02
     crop_row_top = 0
-    crop_row_bot = image.shape[0]
-    for row in range(image.shape[0]//2, -1, -1):
-        if image[row,:].mean() < threshold:
+    crop_row_bot = x.shape[0]
+    for row in range(x.shape[0]//2, -1, -1):
+        if x[row,:].mean() < threshold:
             crop_row_top = row
             break
-    for row in range(image.shape[0]//2, image.shape[0], 1):
-        if image[row,:].mean() < threshold:
+    for row in range(x.shape[0]//2, x.shape[0], 1):
+        if x[row,:].mean() < threshold:
             crop_row_bot = row
             break
     
     # Apply crop.
-    image = image[crop_row_top:crop_row_bot,:crop_col]
+    image = image[crop_row_top:crop_row_bot,crop_col_left:crop_col_right]
     if mask is not None:
-        mask = mask[crop_row_top:crop_row_bot,:crop_col]
+        mask = mask[crop_row_top:crop_row_bot,crop_col_left:crop_col_right]
         return image, mask
     
     return image
