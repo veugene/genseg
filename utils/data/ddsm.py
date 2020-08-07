@@ -127,7 +127,7 @@ def preprocessor_ddsm(crop_to=None, data_augmentation_kwargs=None):
         h = h/(2**8  -1)    # uint8     -> [0, 1]
         s = s/(2**16 -1)    # uint16    -> [0, 1]
         if m is not None:
-            m = m/255
+            m[m>0] = 1
         
         # Expand dims.
         h = np.expand_dims(h, 0)
