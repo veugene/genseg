@@ -121,13 +121,9 @@ def preprocessor_ddsm(crop_to=None, data_augmentation_kwargs=None):
     def process_element(inputs):
         h, s, m = inputs
 
-        # Float, rescale.
+        # Float.
         h = h.astype(np.float32)
         s = s.astype(np.float32)
-        h = h/(2**8  -1)    # uint8     -> [0, 1]
-        s = s/(2**16 -1)    # uint16    -> [0, 1]
-        if m is not None:
-            m[m>0] = 1
         
         # Expand dims.
         h = np.expand_dims(h, 0)
@@ -145,6 +141,16 @@ def preprocessor_ddsm(crop_to=None, data_augmentation_kwargs=None):
                 s, m = _
             else:
                 s = _
+        
+        # Normalize.
+        h -= h.mean()
+        h /= h.std()
+        s -= s.mean()
+        s /= s.std()
+        
+        # Change mask values from 255 to 1.
+        if m is not None:
+            m[m>0] = 1
         
         # Crop images (centered) -- for validation.
         if crop_to is not None:
