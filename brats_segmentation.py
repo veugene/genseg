@@ -75,6 +75,7 @@ def run(args):
     from model import configs
     from model.ae_segmentation import segmentation_model as model_ae
     from model.bd_segmentation import segmentation_model as model_bd
+    from model.mean_teacher_segmentation import segmentation_model as model_mt
 
 
     # Disable buggy profiler.
@@ -227,6 +228,8 @@ def run(args):
         metrics[key] = OrderedDict()
         metrics[key]['dice'] = dice_global(target_class=target_class,
                                            output_transform=dice_transform_all)
+        metrics[key]['loss'] = batchwise_loss_accumulator(
+                            output_transform=lambda x: x['l_all'])
         for i, c in enumerate(target_class):
             metrics[key]['dice{}'.format(c)] = dice_global(
                 target_class=c,
@@ -235,8 +238,6 @@ def run(args):
         if isinstance(experiment_state.model['G'], model_ae):
             metrics[key]['rec']  = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_rec'])
-            metrics[key]['loss'] = batchwise_loss_accumulator(
-                            output_transform=lambda x: x['l_all'])
         elif isinstance(experiment_state.model['G'], model_bd):
             metrics[key]['rec']  = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_rec'])
@@ -250,6 +251,11 @@ def run(args):
                             output_transform=lambda x: x['l_mi_A'])
             metrics[key]['miBA'] = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_mi_BA'])
+        elif isinstance(experiment_state.model['G'], model_mt):
+            metrics[key]['seg']  = batchwise_loss_accumulator(
+                            output_transform=lambda x: x['l_seg'])
+            metrics[key]['con']  = batchwise_loss_accumulator(
+                            output_transform=lambda x: x['l_con'])
         else:
             pass
         for name, m in metrics[key].items():

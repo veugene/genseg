@@ -76,6 +76,7 @@ def run(args):
     from model import configs
     from model.ae_segmentation import segmentation_model as model_ae
     from model.bd_segmentation import segmentation_model as model_bd
+    from model.mean_teacher_segmentation import segmentation_model as model_mt
     from model.common.network.basic import recursive_remove_spectral_norm
 
     import itertools
@@ -221,11 +222,11 @@ def run(args):
         metrics[key] = {}
         metrics[key]['dice'] = dice_global(target_class=1,
                         output_transform=lambda x: (x['x_AM'], x['x_M']))
+        metrics[key]['loss'] = batchwise_loss_accumulator(
+                            output_transform=lambda x: x['l_all'])
         if isinstance(experiment_state.model['G'], model_ae):
             metrics[key]['rec']  = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_rec'])
-            metrics[key]['loss'] = batchwise_loss_accumulator(
-                            output_transform=lambda x: x['l_all'])
         elif isinstance(experiment_state.model['G'], model_bd):
             metrics[key]['rec']  = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_rec'])
@@ -239,6 +240,11 @@ def run(args):
                             output_transform=lambda x: x['l_mi_A'])
             metrics[key]['miBA'] = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_mi_BA'])
+        elif isinstance(experiment_state.model['G'], model_mt):
+            metrics[key]['seg']  = batchwise_loss_accumulator(
+                            output_transform=lambda x: x['l_seg'])
+            metrics[key]['con']  = batchwise_loss_accumulator(
+                            output_transform=lambda x: x['l_con'])
         else:
             pass
         for name, m in metrics[key].items():
