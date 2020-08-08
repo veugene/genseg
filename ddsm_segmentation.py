@@ -142,16 +142,7 @@ def run(args):
         B, A, M = prepare_batch(batch)
         outputs = experiment_state.model['G'](A, B, M,
                                          optimizer=experiment_state.optimizer)
-        outputs = detach(outputs)
-        
-        # Drop images without labels, for visualization.
-        indices = [i for i, m in enumerate(M) if m is not None]
-        for key in filter(lambda x: x.startswith('x_'), outputs.keys()):
-            if outputs['x_M'] is None:
-                outputs[key] = None
-            elif outputs[key] is not None and key not in ['x_M', 'x_AM']:
-                outputs[key] = outputs[key][indices]
-        
+        outputs = detach(outputs)        
         return outputs
     
     # Validation loop.

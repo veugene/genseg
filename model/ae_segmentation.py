@@ -93,6 +93,7 @@ class segmentation_model(nn.Module):
             ('l_all',   loss),
             ('l_seg',   loss_seg),
             ('l_rec',   loss_rec),
+            ('x_sup',   x[mask_indices]),
             ('x_AA',    x_AA),
             ('x_AM',    x_AM_packed),
             ('x_M',     mask_packed)))
