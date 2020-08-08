@@ -113,10 +113,7 @@ def build_model():
         'decoder_common'    : decoder(**decoder_common_kwargs),
         'decoder_residual'  : decoder(**decoder_residual_kwargs),
         'segmenter'         : None,
-        'mutual_information': mi_estimation_network(
-                                            x_size=np.product(x_shape),
-                                            z_size=np.product(z_shape),
-                                            n_hidden=1000),
+        'mutual_information': None,
         'disc_A'            : munit_discriminator(**discriminator_kwargs),
         'disc_B'            : munit_discriminator(**discriminator_kwargs)}
     for m in submodel.values():
@@ -138,7 +135,6 @@ def build_model():
         ('G', model),
         ('D', nn.ModuleList([model.separate_networks['disc_A'],
                              model.separate_networks['disc_B']])),
-        ('E', model.separate_networks['mi_estimator'])
         ))
 
 
