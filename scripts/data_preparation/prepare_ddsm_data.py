@@ -297,11 +297,12 @@ def trim(image, mask=None):
             break
     
     # Adjust crop to not crop mask (find mask bounding box).
-    slice_row, slice_col = ndimage.find_objects(mask>0, max_label=1)[0]    
-    crop_col_left  = min(crop_col_left,  slice_col.start)
-    crop_col_right = max(crop_col_right, slice_col.stop)
-    crop_row_top   = min(crop_row_top,   slice_row.start)
-    crop_row_bot   = max(crop_row_bot,   slice_row.stop)
+    if mask is not None:
+        slice_row, slice_col = ndimage.find_objects(mask>0, max_label=1)[0]    
+        crop_col_left  = min(crop_col_left,  slice_col.start)
+        crop_col_right = max(crop_col_right, slice_col.stop)
+        crop_row_top   = min(crop_row_top,   slice_row.start)
+        crop_row_bot   = max(crop_row_bot,   slice_row.stop)
     
     # Apply crop (unless image is reduced to less than 10% of its side 
     # on either axis).
