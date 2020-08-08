@@ -8,6 +8,7 @@ import tempfile
 
 import h5py
 import numpy as np
+from scipy import ndimage
 import SimpleITK as sitk
 from tqdm import tqdm
 
@@ -259,6 +260,8 @@ def trim(image, mask=None):
     l = max(int(x.shape[1]*0.1), 1)
     if x[:,-l:].sum() > x[:,:l].sum():
         image = np.fliplr(image)
+        if mask is not None:
+            mask = np.fliplr(mask)
         x = np.fliplr(x)
     
     # Crop out background outside of breast (columns) : start 10% in from the
@@ -276,7 +279,7 @@ def trim(image, mask=None):
             break
     for col in range(l, x.shape[1]):
         if x[:,col].mean() < threshold:
-            crop_col_right = col
+            crop_col_right = col+1
             break
     
     # Crop out background outside of breast (row) : start at middle, move
@@ -290,14 +293,24 @@ def trim(image, mask=None):
             break
     for row in range(x.shape[0]//2, x.shape[0], 1):
         if x[row,:].mean() < threshold:
-            crop_row_bot = row
+            crop_row_bot = row+1
             break
     
-    # Apply crop.
-    image = image[crop_row_top:crop_row_bot,crop_col_left:crop_col_right]
-    if mask is not None:
-        mask = mask[crop_row_top:crop_row_bot,crop_col_left:crop_col_right]
-        return image, mask
+    # Adjust crop to not crop mask (find mask bounding box).
+    slice_row, slice_col = ndimage.find_objects(mask>0, max_label=1)[0]    
+    crop_col_left  = min(crop_col_left,  slice_col.start)
+    crop_col_right = max(crop_col_right, slice_col.stop)
+    crop_row_top   = min(crop_row_top,   slice_row.start)
+    crop_row_bot   = max(crop_row_bot,   slice_row.stop)
+    
+    # Apply crop (unless image is reduced to less than 10% of its side 
+    # on either axis).
+    if (    crop_col_right-crop_col_left > 0.1*x.shape[1]
+        and crop_row_bot  -crop_row_top  > 0.1*x.shape[0]):
+        image = image[crop_row_top:crop_row_bot,crop_col_left:crop_col_right]
+        if mask is not None:
+            mask = mask[crop_row_top:crop_row_bot,crop_col_left:crop_col_right]
+            return image, mask
     
     return image
 
