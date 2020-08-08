@@ -143,10 +143,12 @@ def preprocessor_ddsm(crop_to=None, data_augmentation_kwargs=None):
                 s = _
         
         # Normalize.
-        h -= h.mean()
-        h /= h.std()
-        s -= s.mean()
-        s /= s.std()
+        h_non_background = h>h.min()
+        s_non_background = s>s.min()
+        h -= h[h_non_background].mean()
+        h /= h[h_non_background].std()
+        s -= s[s_non_background].mean()
+        s /= s[s_non_background].std()
         
         # Change mask values from 255 to 1.
         if m is not None:
