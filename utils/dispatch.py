@@ -111,7 +111,10 @@ def dispatch(parser, run):
             if os.path.exists(target):
                 warnings.warn("{} exists - not copying".format(target))
             else:
-                shutil.copytree(args.data, target)
+                if os.path.isdir(args.data):
+                    shutil.copytree(args.data, target)
+                else:
+                    shutil.copyfile(args.data, target)
                 args.data = target
         run(args)
 
