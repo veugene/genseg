@@ -37,6 +37,9 @@ def get_parser():
     parser.add_argument('--validation_fraction', type=float, default=0.2,
                         help="fraction of (sick, CBIS-DDSM) training data "
                              "to use for the validation subset")
+    parser.add_argument('--clip_noise', type=bool, default=True,
+                        help="clip out low and high values of image after "
+                             "conversion from raw for 'noise reduction'")
     parser.add_argument('--resize', type=int, default=256)
     parser.add_argument('--batch_size', type=int, default=32)
     return parser
@@ -63,7 +66,7 @@ def prepare_data_ddsm(args):
                                            args.resize,
                                            args.resize)}}
     writer['train']['h'] = h5py_array_writer(array_name='train/h',
-                                             dtype=np.uint8,
+                                             dtype=np.uint16,
                                              **writer_kwargs)
     for fold in ['train', 'valid', 'test']:
         for key in ['s', 'm']:
@@ -80,6 +83,7 @@ def prepare_data_ddsm(args):
             path_temp = tempfile.mkdtemp()
             convert_normals(read_from=args.path_healthy,
                             write_to=path_temp,
+                            clip_noise=args.clip_noise,
                             force=False)
     
         # Collect and store healthy cases (resized).
