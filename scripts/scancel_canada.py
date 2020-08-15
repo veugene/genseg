@@ -19,7 +19,7 @@ if __name__=='__main__':
             raise ValueError("path not found: {}".format(path))
         daemon_path = os.path.join(path, 'daemon_log.txt')
         if not os.path.exists(daemon_path):
-            print("daemon_log.txt not found in {}")
+            print("daemon_log.txt not found in {}".format(daemon_path))
             continue
         f = open(daemon_path, 'r')
         job_id_list = []
