@@ -80,7 +80,7 @@ def prepare_data_ddsm(args):
         if args.healthy_is_processed:
             path_temp = args.path_healthy
         else:
-            path_temp = tempfile.mkdtemp()
+            path_temp = tempfile.mkdtemp(dir=dir_create)
             convert_normals(read_from=args.path_healthy,
                             write_to=path_temp,
                             clip_noise=args.clip_noise,
