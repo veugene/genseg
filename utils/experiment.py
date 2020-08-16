@@ -48,7 +48,8 @@ class experiment(object):
                                      optimizer_name=args.optimizer,
                                      learning_rate=args.learning_rate,
                                      opt_kwargs=args.opt_kwargs,
-                                     weight_decay=args.weight_decay)
+                                     weight_decay=args.weight_decay,
+                                     model_kwargs=args.model_kwargs)
             
         # Does the experiment directory already contain state files?
         state_file_list = natsorted([fn for fn in os.listdir(args.path)
@@ -194,7 +195,7 @@ class experiment(object):
         return self._epoch[0]
     
     def _init_state(self, optimizer_name, learning_rate=0.,
-                    opt_kwargs=None, weight_decay=0.):
+                    opt_kwargs=None, weight_decay=0., model_kwargs=None):
         '''
         Initialize the model, its state, and the optimizer's state.
         
@@ -202,9 +203,11 @@ class experiment(object):
         '''
         
         # Build the model.
+        if model_kwargs is None:
+            model_kwargs = {}
         module = imp.new_module('module')
         exec(self.model_as_str, module.__dict__)
-        model = getattr(module, 'build_model')()
+        model = getattr(module, 'build_model')(**model_kwargs)
         if not isinstance(model, dict):
             model = {'model': model}
         

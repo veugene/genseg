@@ -18,6 +18,7 @@ def get_parser():
     g_exp.add_argument('--slice_conditional', action='store_true')
     g_exp.add_argument('--path', type=str, default='./experiments')
     g_exp.add_argument('--model_from', type=str, default=None)
+    g_exp.add_argument('--model_kwargs', type=json.loads, default=None)
     g_exp.add_argument('--weights_from', type=str, default=None)
     g_exp.add_argument('--weight_decay', type=float, default=1e-4)
     g_exp.add_argument('--labeled_fraction', type=float, default=0.1)
