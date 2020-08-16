@@ -1,0 +1,8 @@
+001 : published model
+002 : dropout 0.1
+003 : dropout 0
+004 : no GAP
+005 : no GAP, dropout 0.1
+006 : like bds3_003_dice0.01
+007 : like 006, dropout 0.4
+008 : like 006, dropout 0.4, no normalization 

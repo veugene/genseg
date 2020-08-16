@@ -1,0 +1,27 @@
+300 : bds3_003 with dropout 0.4
+301 : bds3_203 (guide blocks) with dropout 0.4, no normalization (even in disc)
+026 : separate decoder
+100 : switching instance norm (doesn't work)
+102 : switching layer norm (works)
+201 : skip pooling indices
+202 : like 102 but residual decoder has short skip and 3x3 conv
+203 : like 102 but with guide blocks
+204 : 203 but with 3x3 conv, short skip on residual
+205 : 203 but with short skip on residual
+206 : 204 with SN only on discriminator
+207 : 204 but with non-zero guide block init
+208 : basic_block instead of conv_block in 204
+209 : like 208 but with init scaled by 0.01
+210 : 204 with pixelwise norm instead of spectral norm on generator
+211 : 204 but with layer norm in encoder instead of instance norm
+212 : msg ...
+213 : 204 with equalized init
+213b: 213 with init scaled by 0.01
+213c: 213 with init scaled by 0.001
+213d: 213 with constant init
+214 : 213 with pixelnorm on generator
+215 : 214 with batch stdev discrimination
+216 : 214 with pixelnorm on skinny cat (instead of instance norm)
+217 : 214 with no SN on gen
+218 : 214 with no SN on gen and disc
+219 : 213 with batch stdev discrimination
