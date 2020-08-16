@@ -27,17 +27,27 @@ from model.common.losses import dist_ratio_mse_abs
 from model.bd_segmentation import segmentation_model
 
 
-def build_model():
+def build_model(lambda_disc=3,
+                lambda_x_id=50,
+                lambda_z_id=1,
+                lambda_f_id=0,
+                lambda_cyc=50,
+                lambda_seg=0.01,
+                lambda_enforce_sum=None):
     N = 512 # Number of features at the bottleneck.
     n = 128 # Number of features to sample at the bottleneck.
     image_size = (4, 240, 120)
-    lambdas = {
-        'lambda_disc'       : 3,
-        'lambda_x_id'       : 50,
-        'lambda_z_id'       : 1,
-        'lambda_f_id'       : 0,
-        'lambda_cyc'        : 50,
-        'lambda_seg'        : 0.01}
+    
+    # Rescale lambdas if a sum is enforced.
+    lambda_scale = 1.
+    if lambda_enforce_sum is not None:
+        lambda_sum = ( lambda_disc
+                      +lambda_x_id
+                      +lambda_z_id
+                      +lambda_f_id
+                      +lambda_cyc
+                      +lambda_seg)
+        lambda_scale = lambda_enforce_sum/lambda_sum
     
     encoder_kwargs = {
         'input_shape'         : image_size,
@@ -132,7 +142,12 @@ def build_model():
                                loss_seg=dice_loss([1,2,4]),
                                relativistic=False,
                                rng=np.random.RandomState(1234),
-                               **lambdas)
+                               lambda_disc=lambda_disc*lambda_scale,
+                               lambda_x_id=lambda_x_id*lambda_scale,
+                               lambda_z_id=lambda_z_id*lambda_scale,
+                               lambda_f_id=lambda_f_id*lambda_scale,
+                               lambda_cyc=lambda_cyc*lambda_scale,
+                               lambda_seg=lambda_seg*lambda_scale)
     
     return OrderedDict((
         ('G', model),

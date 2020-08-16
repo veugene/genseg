@@ -29,17 +29,15 @@ from model.common.losses import dist_ratio_mse_abs
 from model.bd_segmentation import segmentation_model
 
 
-def build_model():
+def build_model(lambda_disc=3,
+                lambda_x_id=50,
+                lambda_z_id=1,
+                lambda_f_id=0,
+                lambda_cyc=50,
+                lambda_seg=0.01):
     N = 512 # Number of features at the bottleneck.
     n = 128 # Number of features to sample at the bottleneck.
     image_size = (4, 240, 120)
-    lambdas = {
-        'lambda_disc'       : 3,
-        'lambda_x_id'       : 50,
-        'lambda_z_id'       : 1,
-        'lambda_f_id'       : 0,
-        'lambda_cyc'        : 50,
-        'lambda_seg'        : 0.01}
     
     encoder_kwargs = {
         'input_shape'         : image_size,
@@ -135,7 +133,12 @@ def build_model():
                                loss_seg=multi_class_dice_loss([1,2,4]),
                                relativistic=False,
                                rng=np.random.RandomState(1234),
-                               **lambdas)
+                               lambda_disc=lambda_disc,
+                               lambda_x_id=lambda_x_id,
+                               lambda_z_id=lambda_z_id,
+                               lambda_f_id=lambda_f_id,
+                               lambda_cyc=lambda_cyc,
+                               lambda_seg=lambda_seg)
     
     return OrderedDict((
         ('G', model),
