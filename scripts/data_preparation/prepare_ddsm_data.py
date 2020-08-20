@@ -14,26 +14,31 @@ from tqdm import tqdm
 
 from data_tools.io import h5py_array_writer
 from data_tools.wrap import multi_source_array
-from ddsm_normals.make_dataset import make_data_set as convert_normals
+from ddsm_convert.make_dataset import make_data_set as convert_raws
 
 
 def get_parser():
     parser = argparse.ArgumentParser(description=""
-        "Create an HDF5 dataset with DDSM data by combining the CBIS-DDSM "
-        "dataset with normal (healthy) cases from the original DDSM "
-        "dataset. All images are cropped to remove irrelevant background "
-        "and resized to a square.")
+        "Create an HDF5 dataset with DDSM data by using all healthy images "
+        "in addition to the sick images that exist also in CBIS-DDSM. The "
+        "sick images are sourced from the original DDSM data to ensure that "
+        "they are processed in the same way as healthy images but their "
+        "annotations are sourced from CBIS-DDSM. All images are cropped to "
+        "remove irrelevant background and resized to a square.")
+    parser.add_argument('path_raws', type=str,
+                        help="path to the DDSM raw data directory")
     parser.add_argument('path_cbis', type=str,
                         help="path to the CBIS-DDSM data directory")
-    parser.add_argument('path_healthy', type=str,
-                        help="path to the DDSM `normals` directory")
-    parser.add_argument('--healthy_is_processed', action='store_true',
-                        help="`path_healthy` points to a directory that "
-                             "contains the processed tiff files rather "
-                             "than the original raw files")
+    parser.add_argument('--path_processed', type=str,
+                        help="path to save processed raw DDSM data to"
+                             "(if not specified, will create a temporary "
+                             "directory and delete it when done)")
     parser.add_argument('--path_create', type=str,
                         default='./data/ddsm/ddsm.h5',
                         help="path to save the HDF5 file to")
+    parser.add_argument('--force', action='store_true',
+                        help="force the overwrite of any existing files "
+                             "in `--path_processed`")
     parser.add_argument('--validation_fraction', type=float, default=0.2,
                         help="fraction of (sick, CBIS-DDSM) training data "
                              "to use for the validation subset")
@@ -45,7 +50,7 @@ def get_parser():
     return parser
 
 
-def prepare_data_ddsm(args):
+def prepare_data_ddsm(args, path_processed):
     
     # Create HDF5 file to save dataset into.
     dir_create = os.path.dirname(args.path_create)
@@ -75,72 +80,67 @@ def prepare_data_ddsm(args):
                 dtype=np.uint16 if key=='s' else np.uint8,
                 **writer_kwargs)
     
-    try:
-        # Convert raw healthy cases to tiff.
-        if args.healthy_is_processed:
-            path_temp = args.path_healthy
-        else:
-            path_temp = tempfile.mkdtemp(dir=dir_create)
-            convert_normals(read_from=args.path_healthy,
-                            write_to=path_temp,
-                            clip_noise=args.clip_noise,
-                            force=False)
-    
-        # Collect and store healthy cases (resized).
-        print("Processing normals (healthy) from DDSM")
-        healthy = []
-        for root, dirs, files in os.walk(path_temp):
-            healthy.extend([os.path.join(root, fn) for fn in files])
-        for im_path in tqdm(healthy):
-            if not im_path.endswith('.tif'):
+    # Index all processed DDSM files.
+    files_ddsm_s = {}
+    files_ddsm_h = []
+    for root, dirs, files in os.walk(os.path.join(path_processed)):
+        for fn in files:
+            if not fn.endswith(".tif"):
+                # Not a processed image; skip.
                 continue
-            im = sitk.ReadImage(im_path)
-            im_np = sitk.GetArrayFromImage(im)
-            im_np = trim(im_np)
-            im_np = resize(im_np,
-                           size=(args.resize, args.resize),
-                           interpolator=sitk.sitkLinear)
-            writer['train']['h'].buffered_write(im_np)
-        writer['train']['h'].flush_buffer()
-    except:
-        raise
-    finally:
-        # Clean up temporary path.
-        if not args.healthy_is_processed:
-            shutil.rmtree(path_temp)
+            if root.startswith(os.path.join(path_processed, "normals")):
+                # Healthy case; store in a list.
+                files_ddsm_h.append(os.path.join(root, fn))
+                continue
+            
+            # Sick case; index.
+            fn_base = os.path.basename(fn)
+            case = re.search("(?<=^[A-Z]_)\d{4}", fn_base).group(0)
+            view = re.search("(LEFT_CC|LEFT_MLO|RIGHT_CC|RIGHT_MLO)",
+                             fn_base).group(0)
+            files_ddsm_s["{}_{}".format(case, view)] = os.path.join(root, fn)
+            #print("DEBUG {}_{}".format(case, view))
+    
+    # Collect and store healthy cases (resized).
+    print("Processing normals (healthy) from DDSM")
+    for im_path in tqdm(files_ddsm_h):
+        im = sitk.ReadImage(im_path)
+        im_np = sitk.GetArrayFromImage(im)
+        im_np = trim(im_np)
+        im_np = resize(im_np,
+                       size=(args.resize, args.resize),
+                       interpolator=sitk.sitkLinear)
+        writer['train']['h'].buffered_write(im_np)
+    writer['train']['h'].flush_buffer()
     
     # Collect sick cases.
     dirs_image = {'train': [], 'test': []}
     dirs_mask  = {'train': defaultdict(list), 'test': defaultdict(list)}
+    keys = {'train': [], 'test': []}
     for d in sorted(os.listdir(args.path_cbis)):
         if not os.path.isdir(os.path.join(args.path_cbis, d)):
             continue
-        if   re.search("^Mass-Training.*(CC|MLO)$", d):
-            dirs_image['train'].append(d)
-        elif re.search("^Mass-Test.*(CC|MLO)$", d):
-            dirs_image['test'].append(d)
-        elif re.search("^Mass-Training.*[1-9]$", d):
-            key = re.search("^Mass-Training.*(CC|MLO)", d).group(0)
-            dirs_mask['train'][key].append(d)
-        elif re.search("^Mass-Test.*[1-9]$", d):
-            key = re.search("^Mass-Test.*(CC|MLO)", d).group(0)
-            dirs_mask['test'][key].append(d)
-        else:
-            pass
+        if re.search("^Mass-(Training|Test).*[1-9]$", d):
+            key = re.search("\d{4}_(LEFT_CC|LEFT_MLO|RIGHT_CC|RIGHT_MLO)",
+                            d).group(0)
+            if re.search("Training", d):
+                dirs_mask['train'][key].append(d)
+                keys['train'].append(key)
+            else:
+                dirs_mask['test'][key].append(d)
+                keys['test'].append(key)
     
     # Split sick training cases into training and validation subsets.
-    keys = sorted(dirs_image['train'])
+    keys_train = sorted(keys['train'])
     rng = np.random.RandomState(0)
-    rng.shuffle(keys)
-    n_valid = int(args.validation_fraction*len(keys))
-    keys_valid, keys_train = keys[:n_valid], keys[n_valid:]
+    rng.shuffle(keys_train)
+    n_valid = int(args.validation_fraction*len(keys_train))
+    keys_valid, keys_train = keys_train[:n_valid], keys_train[n_valid:]
+    keys = {'train': keys_train,
+            'valid': keys_valid,
+            'test' : keys['test']}
     
     # Create new sick cases dicts with validation subset.
-    dirs_image_split = {
-        'train': keys_train,
-        'valid': keys_valid,
-        'test': dirs_image['test']
-        }
     dirs_mask_split = {
         'train': dict([(key, dirs_mask['train'][key]) for key in keys_train]),
         'valid': dict([(key, dirs_mask['train'][key]) for key in keys_valid]),
@@ -153,8 +153,8 @@ def prepare_data_ddsm(args):
         print("Processing cases with masses (sick) from CBIS-DDSM : '{}' fold"
               "".format(fold))
         fail_list = []
-        for im_dir in tqdm(sorted(dirs_image_split[fold])):
-            mask_dir_list = dirs_mask_split[fold][im_dir]
+        for key in tqdm(sorted(keys[fold])):
+            mask_dir_list = dirs_mask_split[fold][key]
             
             # Function to get path for every dcm image in a directory tree.
             def get_all_dcm(path):
@@ -166,30 +166,37 @@ def prepare_data_ddsm(args):
                 return dcm_list
             
             # Load image, resize, and store in HDF5.
-            im_path = get_all_dcm(os.path.join(args.path_cbis, im_dir))
-            assert len(im_path)==1  # there should only be one dcm file
-            im_path = im_path[0]
+            try:
+                im_path = files_ddsm_s[key]
+            except KeyError:
+                # The raw DDSM data is missing this case from CBIS-DDSM.
+                # (Whyyyy???)
+                fail_list.append(key)
             im = sitk.ReadImage(im_path)
             im_np = sitk.GetArrayFromImage(im)
-            im_np = np.squeeze(im_np)
-            im_size = im.GetSize()
             
             # Load all masks, merge them together, resize, and store in HDF5.
             mask_np = None
             for d in mask_dir_list:
+                m_np = None
                 mask_path = get_all_dcm(os.path.join(args.path_cbis, d))
                 assert len(mask_path)==2  # there should be two dcm files
-                m_np = None
-                for path in mask_path:
-                    m = sitk.ReadImage(path)
-                    if m.GetSize()==im_size:
-                        # Of the two files, the mask is the one with the same
-                        # image size as the full xray image.
-                        m_np = sitk.GetArrayFromImage(m)
+                m0 = sitk.ReadImage(mask_path[0])
+                m0_np = sitk.GetArrayFromImage(m0)
+                m1 = sitk.ReadImage(mask_path[0])
+                m1_np = sitk.GetArrayFromImage(m1)
+                # Of the two files, the mask is the one with the same
+                # image size as the full xray image.
+                assert not (    m0_np.shape==im_np.shape
+                            and m1_np.shape==im_np.shape)
+                if m0_np.shape==im_np.shape:
+                    m_np = m0_np
+                if m1_np.shape==im_np.shape:
+                    m_np = m1_np
                 if m_np is None:
                     # Could not find a mask matching the image dimensions!
                     # Don't bother looking at the other masks. Just fail this
-                    # case.
+                    # case. And hope the other cases have correct masks.
                     break
                 m_np = np.squeeze(m_np)
                 if mask_np is None:
@@ -198,8 +205,8 @@ def prepare_data_ddsm(args):
                     mask_np = np.logical_or(m_np, mask_np).astype(np.uint8)
             if mask_np is None:
                 # One or more masks does not match the image dimensions.
-                # Skip this case and add it to the fail list.
-                fail_list.append(im_dir)
+                # Skip this case and add it to the fail list. :(
+                fail_list.append(key)
                 continue
             im_np, mask_np = trim(im_np, mask_np)
             im_np = resize(im_np,
@@ -323,4 +330,23 @@ def trim(image, mask=None):
 if __name__ == '__main__':
     parser = get_parser()
     args = parser.parse_args()
-    data = prepare_data_ddsm(args)
+    try:
+        # Convert raw cases to tiff.
+        path_processed = args.path_processed
+        if path_processed is None:
+            path_processed = tempfile.mkdtemp(dir=dir_create)
+        convert_raws(read_from=args.path_raws,
+                     write_to=path_processed,
+                     clip_noise=args.clip_noise,
+                     force=args.force)
+        
+        # Prepare dataset.
+        prepare_data_ddsm(args, path_processed)
+    except:
+        raise
+    finally:
+        # Clean up temporary path.
+        if args.path_processed is None:
+            shutil.rmtree(path_processed)
+    
+    
