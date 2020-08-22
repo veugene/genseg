@@ -68,9 +68,15 @@ The cluttered MNIST digit data is created automatically by the MNIST task launch
 
 ### DDSM
 
-The DDSM breast cancer data consists of CBIS-DDSM (https://wiki.cancerimagingarchive.net/display/Public/CBIS-DDSM) data for sick cases and the "normals" set of cases from the original DDSM data (http://www.eng.usf.edu/cvprg/Mammography/Database.html) for healthy cases. To prepare DDSM data for training, these two sets of data need to be downloaded to `<cbis_download_dir>` and `<healthy_download_dir>`, respectively. Once downloaded, they can be prepared with a provided script, as follows:
+The DDSM breast cancer data consists of DDSM data (http://www.eng.usf.edu/cvprg/Mammography/Database.html) with CBIS-DDSM (https://wiki.cancerimagingarchive.net/display/Public/CBIS-DDSM) annotations for sick cases. To prepare DDSM data for training, these two sets of data need to be downloaded to `<ddsm_download_dir>` and `<cbis_download_dir>`, respectively. The raw DDSM data can be downloaded from its original FTP source using the following script:
+
 ```
-python scripts/data_preparation/prepare_ddsm_data.py --path_cbis <cbis_download_dir> --path_healthy <healthy_download_dir> --path_create data/ddsm/ddsm.h5 --resize 256 --batch_size 20
+python scripts/data_preparation/download_ddsm.py <ddsm_download_dir>
+```
+
+Once downloaded, the dataset can be prepared as follows:
+```
+python scripts/data_preparation/prepare_ddsm_data.py <ddsm_download_dir> <cbis_download_dir> --path_create data/ddsm/ddsm.h5 --resize 256
 ```
 
 ### Launching
