@@ -141,7 +141,8 @@ def prepare_data_ddsm(args, path_processed):
         reader.ReadImageInformation()
         x, y, z = reader.GetSize()
         assert(z==1)
-        root = os.path.dirname(os.path.dirname(os.path.dirname(path)))  # up 3
+        # root omits the number (eg. CC_1, MLO_3 --> CC, MLO)
+        root = re.search("^.*Mass-(Training|Test).*(CC|MLO)", path).group(0)
         masks_by_dir[root].append((path, x, y))
     
     # Match sick case masks from CBIS-DDSM to images in DDSM. Matching is done
