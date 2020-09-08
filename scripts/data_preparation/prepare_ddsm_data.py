@@ -228,8 +228,8 @@ def prepare_data_ddsm(args, path_processed):
     rng = np.random.RandomState(0)
     rng.shuffle(train)
     n_valid = int(args.validation_fraction*len(train))
-    cbis_dirs = {'train': train[:n_valid],
-                 'valid': train[n_valid:],
+    cbis_dirs = {'train': train[n_valid:],
+                 'valid': train[:n_valid],
                  'test' : test}
     
     # For each case, combine all lesions into one mask; process image 
