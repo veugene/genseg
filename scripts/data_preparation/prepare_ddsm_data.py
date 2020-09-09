@@ -316,32 +316,38 @@ def trim(image, mask=None):
     # Crop out background outside of breast (columns) : start 10% in from the
     # left side since some cases start with an empty border and move left to
     # remove the border, then move right to find the end of the breast.
-    # Start crop when mean intensity falls below threshold.
+    # Start crop when mean intensity falls below threshold. For each column,
+    # ignore 10% of each end of the vector in order to avoid bright image 
+    # edges that are present in some images.
     threshold = 0.02
     threshold_left = 0.1
     l = max(int(x.shape[1]*0.1), 1)
+    a, b = int(x.shape[0]*0.1), int(x.shape[0]*0.9)+1
     crop_col_left  = 0
     crop_col_right = x.shape[1]
     for col in range(l, -1, -1):
-        if x[:,col].mean() < threshold_left:
+        if x[:,col][a:b].mean() < threshold_left:
             crop_col_left = col
             break
     for col in range(l, x.shape[1]):
-        if x[:,col].mean() < threshold:
+        if x[:,col][a:b].mean() < threshold:
             crop_col_right = col+1
             break
     
     # Crop out background outside of breast (row) : start at middle, move
-    # outward. Start crop when mean intensity falls below threshold.
+    # outward. Start crop when mean intensity falls below threshold. For each 
+    # row, ignore 10% of each end of the vector in order to avoid bright image
+    # edges that are present in some images.
     threshold = 0.02
+    a, b = int(x.shape[1]*0.1), int(x.shape[1]*0.9)+1
     crop_row_top = 0
     crop_row_bot = x.shape[0]
     for row in range(x.shape[0]//2, -1, -1):
-        if x[row,:].mean() < threshold:
+        if x[row,:][a:b].mean() < threshold:
             crop_row_top = row
             break
     for row in range(x.shape[0]//2, x.shape[0], 1):
-        if x[row,:].mean() < threshold:
+        if x[row,:][a:b].mean() < threshold:
             crop_row_bot = row+1
             break
     
