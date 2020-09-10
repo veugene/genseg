@@ -10,6 +10,8 @@ import h5py
 import numpy as np
 from scipy import ndimage
 import SimpleITK as sitk
+from skimage.morphology import (binary_opening,
+                                flood)
 from tqdm import tqdm
 
 from data_tools.io import h5py_array_writer
@@ -293,15 +295,11 @@ def resize(image, size, interpolator=sitk.sitkLinear):
 def trim(image, mask=None):
     if mask is not None:
         assert np.all(mask.shape==image.shape)
-    
-    # Normalize.
     x = image.copy()
-    if x.dtype==np.uint8:
-        x = (x-63)/(2**8 - 1)
-    elif x.dtype==np.uint16:
-        x = x/(2**16 - 1)
-    else:
-        raise TypeError("Unexpected image type: {}".format(x.dtype))
+    
+    # Threshold to binary.
+    x[x>=0.1] = 1
+    x[x< 0.1] = 0
     
     # Align breast to left (find breast direction).
     # Check first 10% of image from left and first 10% from right. The breast
@@ -313,43 +311,81 @@ def trim(image, mask=None):
             mask = np.fliplr(mask)
         x = np.fliplr(x)
     
-    # Crop out background outside of breast (columns) : start 10% in from the
-    # left side since some cases start with an empty border and move left to
-    # remove the border, then move right to find the end of the breast.
-    # Start crop when mean intensity falls below threshold. For each column,
-    # ignore 10% of each end of the vector in order to avoid bright image 
-    # edges that are present in some images.
-    threshold = 0.02
-    threshold_left = 0.1
-    l = max(int(x.shape[1]*0.1), 1)
-    a, b = int(x.shape[0]*0.1), int(x.shape[0]*0.9)+1
+    # Normalize to within [0, 1] and crop out bright band on left, if present.
+    # Start 20% in from the left side since some cases start with an empty 
+    # border and move left to remove the border (empty or bright).
+    assert image.dtype==np.uint16
+    x_norm = image.copy()/(2**16 - 1)
+    t_high = 0.75
+    t_low  = 0.1
+    start_col_left = max(int(x.shape[1]*0.2), 1)
     crop_col_left  = 0
-    crop_col_right = x.shape[1]
-    for col in range(l, -1, -1):
-        if x[:,col][a:b].mean() < threshold_left:
+    for col in range(start_col_left, -1, -1):
+        mean = x_norm[:,col].mean()
+        if mean < t_low:
+            # empty
             crop_col_left = col
             break
-    for col in range(l, x.shape[1]):
-        if x[:,col][a:b].mean() < threshold:
-            crop_col_right = col+1
+        if mean > t_high:
+            # bright
+            crop_col_left = col
             break
     
-    # Crop out background outside of breast (row) : start at middle, move
-    # outward. Start crop when mean intensity falls below threshold. For each 
-    # row, ignore 10% of each end of the vector in order to avoid bright image
-    # edges that are present in some images.
-    threshold = 0.02
-    a, b = int(x.shape[1]*0.1), int(x.shape[1]*0.9)+1
-    crop_row_top = 0
-    crop_row_bot = x.shape[0]
-    for row in range(x.shape[0]//2, -1, -1):
-        if x[row,:][a:b].mean() < threshold:
+    # Crop out other bright bands using thresholded image. Some bright bands
+    # are not fully saturated, so it's best to remove them after this 
+    # thresholding. This would not work well for the left edge since some
+    # breasts take the full edge. For each edge (right, top, bottom), start
+    # 20% in and move out.
+    t_high = 0.95
+    start_col_right = max(int(x.shape[1]*0.8), 1)
+    start_row_top   = max(int(x.shape[0]*0.2), 1)
+    start_row_bot   = max(int(x.shape[0]*0.8), 1)
+    crop_col_right = x.shape[1]
+    crop_row_top   = 0
+    crop_row_bot   = x.shape[0]
+    for col in range(start_col_right, x.shape[1]):
+        if x[:,col].mean() > t_high:
+            crop_col_right = col+1
+            break
+    for row in range(start_row_top, -1, -1):
+        if x[row,:].mean() > t_high:
             crop_row_top = row
             break
-    for row in range(x.shape[0]//2, x.shape[0], 1):
-        if x[row,:][a:b].mean() < threshold:
+    for row in range(start_row_bot, x.shape[0]):
+        if x[row,:].mean() > t_high:
             crop_row_bot = row+1
             break
+    
+    # Flood fill breast in order to then crop background out. Start flood 
+    # at pixel 20% right from the left edge, center row.
+    flood_row = x.shape[0]//2
+    flood_col = int(x.shape[1]*0.2)
+    m = flood(x, (flood_row, flood_col), connectivity=1)
+    m = binary_opening(m, selem=np.ones((5,5)))
+    
+    # Crop out background outside of breast. Start 20% in from the left side
+    # at the center row and move outward until the columns or rows are empty.
+    # For every row or column mean, ignore 10% of each end of the vector in 
+    # order to avoid problematic edges.
+    frac_row = int(m.shape[0]*0.1)
+    frac_col = int(m.shape[1]*0.1)
+    for col in range(flood_col, m.shape[1]):
+        if not np.any(m[frac_row:-frac_row,col]):
+            crop_col_right = min(crop_col_right, col+1)
+            break
+    for row in range(flood_row, -1, -1):
+        if not np.any(m[row,frac_col:-frac_col]):
+            crop_row_top = max(crop_row_top, row)
+            break
+    for row in range(flood_row, m.shape[0]):
+        if not np.any(m[row,frac_col:-frac_col]):
+            crop_row_bot = min(crop_row_bot, row+1)
+            break
+    
+    # Make sure crop row and column numbers are in range.
+    crop_col_right = min(crop_col_right, image.shape[1])
+    crop_row_top = max(crop_row_top, 0)
+    crop_row_bot = min(crop_row_bot, image.shape[0])
     
     # Adjust crop to not crop mask (find mask bounding box).
     if mask is not None:
@@ -359,14 +395,11 @@ def trim(image, mask=None):
         crop_row_top   = min(crop_row_top,   slice_row.start)
         crop_row_bot   = max(crop_row_bot,   slice_row.stop)
     
-    # Apply crop (unless image is reduced to less than 10% of its side 
-    # on either axis).
-    if (    crop_col_right-crop_col_left > 0.1*x.shape[1]
-        and crop_row_bot  -crop_row_top  > 0.1*x.shape[0]):
-        image = image[crop_row_top:crop_row_bot,crop_col_left:crop_col_right]
-        if mask is not None:
-            mask = mask[crop_row_top:crop_row_bot,crop_col_left:crop_col_right]
-            return image, mask
+    # Apply crop.
+    image = image[crop_row_top:crop_row_bot,crop_col_left:crop_col_right]
+    if mask is not None:
+        mask = mask[crop_row_top:crop_row_bot,crop_col_left:crop_col_right]
+        return image, mask
     
     return image
 
