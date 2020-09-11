@@ -1,6 +1,8 @@
 import argparse
 from collections import (defaultdict,
                          OrderedDict)
+from functools import partial
+import multiprocessing
 import os
 import shutil
 import re
@@ -50,6 +52,100 @@ def get_parser():
     parser.add_argument('--resize', type=int, default=256)
     parser.add_argument('--batch_size', type=int, default=32)
     return parser
+
+
+def _process_healthy(im_path, newsize):
+    im = sitk.ReadImage(im_path)
+    im_np = sitk.GetArrayFromImage(im)
+    im_np = trim(im_np)
+    im_np = resize(im_np,
+                   size=(newsize, newsize),
+                   interpolator=sitk.sitkLinear)
+    return im_np
+
+
+def _process_sick(root, ddsm_by_cbis, mask_by_cbis, newsize):
+    # Load image.
+    im = sitk.ReadImage(ddsm_by_cbis[root])
+    im_np = sitk.GetArrayFromImage(im)
+    
+    # Load all usable masks, merge them together, resize.
+    mask_np = None
+    for path in mask_by_cbis[root]:
+        m = sitk.ReadImage(path)
+        m_np = np.squeeze(sitk.GetArrayFromImage(m))
+        if mask_np is None:
+            mask_np = m_np
+        else:
+            mask_np = np.logical_or(m_np, mask_np).astype(np.uint8)
+    im_np, mask_np = trim(im_np, mask_np)
+    im_np = resize(im_np,
+                   size=(newsize, newsize, 1),
+                   interpolator=sitk.sitkLinear)
+    im_np = np.squeeze(im_np)
+    mask_np = resize(mask_np,
+                     size=(newsize, newsize),
+                     interpolator=sitk.sitkNearestNeighbor)
+    
+    return im_np, mask_np
+
+
+def _match_masks_to_images(root, masks_by_dir, files_ddsm_s):
+    common_match = None
+    masks = []
+    for path, x, y in masks_by_dir[root]:
+        try:
+            match_ddsm = files_ddsm_s[x][y]
+        except KeyError:
+            continue    # Skip
+        
+        # Select only those with the same view.
+        candidates = []     # Tuples : DDSM image, CBIS-DDSM mask.
+        view = re.search("(LEFT_CC|LEFT_MLO|RIGHT_CC|RIGHT_MLO)",
+                            root).group(0)
+        for match in match_ddsm:
+            if re.search(view, match):
+                candidates.append(match)
+        
+        # For each candidate image, check the overlap of the mask with the
+        # original DDSM mask corresponding to the image. Choose the image
+        # with the highest overlap > 0.
+        best_candidate = None
+        max_overlap = 0
+        for match in candidates:
+            original_mask_path = match.replace(".tif", "_mask.tif")
+            if not os.path.exists(original_mask_path):
+                # DDSM image has no mask; skip.
+                continue
+            mask_orig = sitk.ReadImage(original_mask_path)
+            mask_cbis = sitk.ReadImage(path)
+            overlap_filter = sitk.LabelOverlapMeasuresImageFilter()
+            overlap_filter.Execute(mask_orig, mask_cbis[:,:,0])
+            jaccard = overlap_filter.GetJaccardCoefficient()
+            if jaccard > max_overlap:
+                max_overlap = jaccard
+                best_candidate = match
+        if best_candidate is not None:
+            if common_match is None:
+                common_match = best_candidate
+            if common_match!=best_candidate:
+                raise AssertionError(
+                    "All masks in the same case should match the same "
+                    "image in the DDSM set but at least two masks match "
+                    "different images for case {}.".format(root))
+            masks.append(path)      # This is a usable mask.
+    
+    # Return values.
+    no_match = False
+    ddsm_by_cbis = {}
+    mask_by_cbis = {}
+    if common_match is None:
+        no_match = True
+    else:
+        ddsm_by_cbis[root] = common_match
+        mask_by_cbis[root] = masks
+    
+    return no_match, root, ddsm_by_cbis, mask_by_cbis
 
 
 def prepare_data_ddsm(args, path_processed):
@@ -112,14 +208,12 @@ def prepare_data_ddsm(args, path_processed):
     
     # Collect and store healthy cases (resized).
     print("Processing normals (healthy) from DDSM")
-    for im_path in tqdm(files_ddsm_h):
-        im = sitk.ReadImage(im_path)
-        im_np = sitk.GetArrayFromImage(im)
-        im_np = trim(im_np)
-        im_np = resize(im_np,
-                       size=(args.resize, args.resize),
-                       interpolator=sitk.sitkLinear)
-        writer['train']['h'].buffered_write(im_np)
+    with multiprocessing.Pool() as pool:
+        iterator = pool.imap(partial(_process_healthy,
+                                     newsize=args.resize),
+                             files_ddsm_h)
+        for im_np in tqdm(iterator, total=len(files_ddsm_h)):
+            writer['train']['h'].buffered_write(im_np)
     writer['train']['h'].flush_buffer()
     
     # Identify all masks and their shapes.
@@ -155,67 +249,24 @@ def prepare_data_ddsm(args, path_processed):
     ddsm_by_cbis = {}
     mask_by_cbis = {}
     no_match = []
-    n_masks = 0
-    for root in tqdm(sorted(masks_by_dir.keys())):
-        common_match = None
-        masks = []
-        for path, x, y in masks_by_dir[root]:
-            n_masks += 1
-            
-            try:
-                match_ddsm = files_ddsm_s[x][y]
-            except KeyError:
-                continue    # Skip
-            
-            # Select only those with the same view.
-            candidates = []     # Tuples : DDSM image, CBIS-DDSM mask.
-            view = re.search("(LEFT_CC|LEFT_MLO|RIGHT_CC|RIGHT_MLO)",
-                             root).group(0)
-            for match in match_ddsm:
-                if re.search(view, match):
-                    candidates.append(match)
-            
-            # For each candidate image, check the overlap of the mask with the
-            # original DDSM mask corresponding to the image. Choose the image
-            # with the highest overlap > 0.
-            best_candidate = None
-            max_overlap = 0
-            for match in candidates:
-                original_mask_path = match.replace(".tif", "_mask.tif")
-                if not os.path.exists(original_mask_path):
-                    # DDSM image has no mask; skip.
-                    continue
-                mask_orig = sitk.ReadImage(original_mask_path)
-                mask_cbis = sitk.ReadImage(path)
-                overlap_filter = sitk.LabelOverlapMeasuresImageFilter()
-                overlap_filter.Execute(mask_orig, mask_cbis[:,:,0])
-                jaccard = overlap_filter.GetJaccardCoefficient()
-                if jaccard > max_overlap:
-                    max_overlap = jaccard
-                    best_candidate = match
-            if best_candidate is not None:
-                if common_match is None:
-                    common_match = best_candidate
-                if common_match!=best_candidate:
-                    raise AssertionError(
-                        "All masks in the same case should match the same "
-                        "image in the DDSM set but at least two masks match "
-                        "different images for case {}.".format(root))
-                masks.append(path)      # This is a usable mask.
-    
-        # No matches? Record this.
-        if common_match is None:
-            no_match.append(root)
-        else:
-            ddsm_by_cbis[root] = common_match
-            mask_by_cbis[root] = masks
-            n_masks += len(masks)
+    with multiprocessing.Pool() as pool:
+        iterator = pool.imap(partial(_match_masks_to_images,
+                                     masks_by_dir=masks_by_dir,
+                                     files_ddsm_s=files_ddsm_s),
+                             sorted(masks_by_dir.keys()))
+        for result in tqdm(iterator, total=len(masks_by_dir.keys())):
+            _no_match, _root, _ddsm_by_cbis, _mask_by_cbis = result
+            if _no_match:
+                no_match.append(_root)
+            else:
+                ddsm_by_cbis.update(_ddsm_by_cbis)
+                mask_by_cbis.update(_mask_by_cbis)
     
     # Report failed cases.
     if len(no_match):
         print("Skipped {} of {} masks since no matching image could be found: "
               "\n{}".format(len(no_match),
-                            n_masks,
+                            len(masks_by_dir.keys()),
                             "\n".join(no_match)))
     
     # Sort cases into training, validation, and test subsets.
@@ -240,31 +291,15 @@ def prepare_data_ddsm(args, path_processed):
     for fold in ['train', 'valid', 'test']:
         print("Processing cases with masses (sick) : '{}' fold"
               "".format(fold))
-        for root in tqdm(sorted(cbis_dirs[fold])):
-            # Load image.
-            im = sitk.ReadImage(ddsm_by_cbis[root])
-            im_np = sitk.GetArrayFromImage(im)
-            
-            # Load all usable masks, merge them together, resize,
-            # and store in HDF5.
-            mask_np = None
-            for path in mask_by_cbis[root]:
-                m = sitk.ReadImage(path)
-                m_np = np.squeeze(sitk.GetArrayFromImage(m))
-                if mask_np is None:
-                    mask_np = m_np
-                else:
-                    mask_np = np.logical_or(m_np, mask_np).astype(np.uint8)
-            im_np, mask_np = trim(im_np, mask_np)
-            im_np = resize(im_np,
-                           size=(args.resize, args.resize, 1),
-                           interpolator=sitk.sitkLinear)
-            im_np = np.squeeze(im_np)
-            mask_np = resize(mask_np,
-                             size=(args.resize, args.resize),
-                             interpolator=sitk.sitkNearestNeighbor)
-            writer[fold]['s'].buffered_write(im_np)
-            writer[fold]['m'].buffered_write(mask_np)
+        with multiprocessing.Pool() as pool:
+            iterator = pool.imap(partial(_process_sick,
+                                         ddsm_by_cbis=ddsm_by_cbis,
+                                         mask_by_cbis=mask_by_cbis,
+                                         newsize=args.resize),
+                                 sorted(cbis_dirs[fold]))
+            for im_np, mask_np in tqdm(iterator, total=len(cbis_dirs[fold])):
+                writer[fold]['s'].buffered_write(im_np)
+                writer[fold]['m'].buffered_write(mask_np)
         writer[fold]['s'].flush_buffer()
         writer[fold]['m'].flush_buffer()
 
