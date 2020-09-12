@@ -212,7 +212,7 @@ def prepare_data_ddsm(args, path_processed):
         iterator = pool.imap(partial(_process_healthy,
                                      newsize=args.resize),
                              files_ddsm_h)
-        for im_np in tqdm(iterator, total=len(files_ddsm_h)):
+        for im_np in tqdm(iterator, total=len(files_ddsm_h), smoothing=0.1):
             writer['train']['h'].buffered_write(im_np)
     writer['train']['h'].flush_buffer()
     
@@ -254,7 +254,8 @@ def prepare_data_ddsm(args, path_processed):
                                      masks_by_dir=masks_by_dir,
                                      files_ddsm_s=files_ddsm_s),
                              sorted(masks_by_dir.keys()))
-        for result in tqdm(iterator, total=len(masks_by_dir.keys())):
+        for result in tqdm(iterator, total=len(masks_by_dir.keys()),
+                           smoothing=0.1):
             _no_match, _root, _ddsm_by_cbis, _mask_by_cbis = result
             if _no_match:
                 no_match.append(_root)
@@ -272,7 +273,7 @@ def prepare_data_ddsm(args, path_processed):
     # Sort cases into training, validation, and test subsets.
     train = []
     test  = []
-    for k in mask_by_cbis.keys():
+    for k in sorted(mask_by_cbis.keys()):
         if re.search("Mass-Training", k):
             train.append(k)
         elif re.search("Mass-Test", k):
@@ -297,7 +298,8 @@ def prepare_data_ddsm(args, path_processed):
                                          mask_by_cbis=mask_by_cbis,
                                          newsize=args.resize),
                                  sorted(cbis_dirs[fold]))
-            for im_np, mask_np in tqdm(iterator, total=len(cbis_dirs[fold])):
+            for im_np, mask_np in tqdm(iterator, total=len(cbis_dirs[fold]),
+                                       smoothing=0.1):
                 writer[fold]['s'].buffered_write(im_np)
                 writer[fold]['m'].buffered_write(mask_np)
         writer[fold]['s'].flush_buffer()
@@ -330,11 +332,13 @@ def resize(image, size, interpolator=sitk.sitkLinear):
 def trim(image, mask=None):
     if mask is not None:
         assert np.all(mask.shape==image.shape)
-    x = image.copy()
     
-    # Threshold to binary.
-    x[x>=0.1] = 1
-    x[x< 0.1] = 0
+    # Normalize to within [0, 1] and threshold to binary.
+    assert image.dtype==np.uint16
+    x = image.copy()
+    x_norm = x.astype(np.float)/(2**16 - 1)
+    x[x_norm>=0.1] = 1
+    x[x_norm< 0.1] = 0
     
     # Align breast to left (find breast direction).
     # Check first 10% of image from left and first 10% from right. The breast
@@ -345,12 +349,13 @@ def trim(image, mask=None):
         if mask is not None:
             mask = np.fliplr(mask)
         x = np.fliplr(x)
+        x_norm = np.fliplr(x_norm)
     
-    # Normalize to within [0, 1] and crop out bright band on left, if present.
-    # Start 20% in from the left side since some cases start with an empty 
-    # border and move left to remove the border (empty or bright).
-    assert image.dtype==np.uint16
-    x_norm = image.copy()/(2**16 - 1)
+    # Crop out bright band on left, if present. Use the normalized image
+    # instead of the thresholded image in order to differentiate the bright
+    # band from breast tissue. Start 20% in from the left side since some 
+    # cases start with an empty border and move left to remove the border 
+    # (empty or bright).
     t_high = 0.75
     t_low  = 0.1
     start_col_left = max(int(x.shape[1]*0.2), 1)
@@ -370,7 +375,10 @@ def trim(image, mask=None):
     # are not fully saturated, so it's best to remove them after this 
     # thresholding. This would not work well for the left edge since some
     # breasts take the full edge. For each edge (right, top, bottom), start
-    # 20% in and move out.
+    # 20% in and move out. Stop when the mean intensity switches from below
+    # the threshold to above the threshold; if it starts above the threshold,
+    # then it just means the breast is spanning the entire width/height at 
+    # the start position.
     t_high = 0.95
     start_col_right = max(int(x.shape[1]*0.8), 1)
     start_row_top   = max(int(x.shape[0]*0.2), 1)
@@ -378,32 +386,53 @@ def trim(image, mask=None):
     crop_col_right = x.shape[1]
     crop_row_top   = 0
     crop_row_bot   = x.shape[0]
+    prev_mean_col_right  = 1
+    prev_mean_row_top    = 1
+    prev_mean_row_bot    = 1
     for col in range(start_col_right, x.shape[1]):
-        if x[:,col].mean() > t_high:
+        mean = x[:,col].mean()
+        if mean > t_high and prev_mean_col_right < t_high:
             crop_col_right = col+1
             break
+        prev_mean_col_right = mean
     for row in range(start_row_top, -1, -1):
-        if x[row,:].mean() > t_high:
+        mean = x[row,:].mean()
+        if mean > t_high and prev_mean_row_top < t_high:
             crop_row_top = row
             break
+        prev_mean_row_top = mean
     for row in range(start_row_bot, x.shape[0]):
-        if x[row,:].mean() > t_high:
+        mean = x[row,:].mean()
+        if mean > t_high and prev_mean_row_bot < t_high:
             crop_row_bot = row+1
             break
+        prev_mean_row_top = mean
+    
+    # Store crop indices for edges - to be used to make sure that the final 
+    # crop does not include the edges.
+    crop_col_left_edge  = crop_col_left
+    crop_col_right_edge = crop_col_right
+    crop_row_top_edge   = crop_row_top
+    crop_row_bot_edge   = crop_row_bot
     
     # Flood fill breast in order to then crop background out. Start flood 
-    # at pixel 20% right from the left edge, center row.
-    flood_row = x.shape[0]//2
-    flood_col = int(x.shape[1]*0.2)
-    m = flood(x, (flood_row, flood_col), connectivity=1)
-    m = binary_opening(m, selem=np.ones((5,5)))
+    # at pixel 20% right from the left edge, center row. Apply the flood to 
+    # a the image with the edges cropped out in order to avoid flooding the
+    # edges and any artefacts that overlap the edges.
+    x_view = x[crop_row_top:crop_row_bot,crop_col_left:crop_col_right]
+    flood_row = x_view.shape[0]//2
+    flood_col = int(x_view.shape[1]*0.2)
+    x_fill = binary_opening(x_view, selem=np.ones((5,5)))
+    m_view = flood(x_fill, (flood_row, flood_col), connectivity=1)
+    m = np.zeros(x.shape, dtype=np.bool)
+    m[crop_row_top:crop_row_bot,crop_col_left:crop_col_right] = m_view
     
     # Crop out background outside of breast. Start 20% in from the left side
     # at the center row and move outward until the columns or rows are empty.
-    # For every row or column mean, ignore 10% of each end of the vector in 
+    # For every row or column mean, ignore 20% of each end of the vector in 
     # order to avoid problematic edges.
-    frac_row = int(m.shape[0]*0.1)
-    frac_col = int(m.shape[1]*0.1)
+    frac_row = int(m.shape[0]*0.2)
+    frac_col = int(m.shape[1]*0.2)
     for col in range(flood_col, m.shape[1]):
         if not np.any(m[frac_row:-frac_row,col]):
             crop_col_right = min(crop_col_right, col+1)
@@ -429,6 +458,15 @@ def trim(image, mask=None):
         crop_col_right = max(crop_col_right, slice_col.stop)
         crop_row_top   = min(crop_row_top,   slice_row.start)
         crop_row_bot   = max(crop_row_bot,   slice_row.stop)
+    
+    # Expand crop 5% of image dim in each direction (right, top, bottom)
+    # about the breast in order to avoid clipping any breast.
+    crop_col_right = min(int(crop_col_right+x.shape[1]*0.05),
+                         crop_col_right_edge)
+    crop_row_top   = max(int(crop_row_top-x.shape[0]*0.05),
+                         crop_row_top_edge)
+    crop_row_bot   = min(int(crop_row_bot+x.shape[0]*0.05),
+                         crop_row_bot_edge)
     
     # Apply crop.
     image = image[crop_row_top:crop_row_bot,crop_col_left:crop_col_right]
