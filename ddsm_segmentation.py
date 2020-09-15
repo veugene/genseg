@@ -102,6 +102,7 @@ def run(args):
                              rng=np.random.RandomState(args.data_seed))
     data_train = [data['train']['h'], data['train']['s'], data['train']['m']]
     data_valid = [data['valid']['h'], data['valid']['s'], data['valid']['m']]
+    data_test  = [data['test']['h'],  data['test']['s'],  data['test']['m']]
     loader = {
         'train': data_flow_sampler(data_train,
                                    sample_random=True,
@@ -112,6 +113,14 @@ def run(args):
                                    nb_proc_workers=args.nb_proc_workers,
                                    rng=np.random.RandomState(args.init_seed)),
         'valid': data_flow_sampler(data_valid,
+                                   sample_random=True,
+                                   batch_size=args.batch_size_valid,
+                                   preprocessor=preprocessor_ddsm(
+                                       data_augmentation_kwargs=None),
+                                   nb_io_workers=args.nb_io_workers,
+                                   nb_proc_workers=args.nb_proc_workers,
+                                   rng=np.random.RandomState(args.init_seed)),
+        'test':  data_flow_sampler(data_test,
                                    sample_random=True,
                                    batch_size=args.batch_size_valid,
                                    preprocessor=preprocessor_ddsm(
@@ -165,9 +174,14 @@ def run(args):
                                             validation_function,
                                             prefix='val',
                                             epoch_length=len(loader['valid']))
-    engines['valid'].add_event_handler(
-        Events.STARTED,
-        lambda engine: setattr(engine, 'rng', np.random.RandomState(0)))
+    engines['test'] = experiment_state.setup_engine(
+                                            validation_function,
+                                            prefix='test',
+                                            epoch_length=len(loader['test']))
+    for key in ['valid', 'test']:
+        engines[key].add_event_handler(
+            Events.STARTED,
+            lambda engine: setattr(engine, 'rng', np.random.RandomState(0)))
     
     
     # Set up metrics.
@@ -243,6 +257,15 @@ def run(args):
     Train.
     '''
     engines['train'].run(loader['train'], max_epochs=args.epochs)
+    
+    '''
+    Test.
+    '''
+    print("\nTESTING\n")
+    engines['test'].run(loader['test'])
+    print("\nTESTING ON BEST CHECKPOINT\n")
+    experiment_state.load_best_state()
+    engines['test'].run(loader['test'])
 
 
 if __name__ == '__main__':
