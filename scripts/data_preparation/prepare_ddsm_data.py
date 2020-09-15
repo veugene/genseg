@@ -1,6 +1,8 @@
 import argparse
 from collections import (defaultdict,
                          OrderedDict)
+from functools import partial
+import multiprocessing
 import os
 import shutil
 import re
@@ -10,30 +12,38 @@ import h5py
 import numpy as np
 from scipy import ndimage
 import SimpleITK as sitk
+from skimage.morphology import (binary_closing,
+                                binary_opening,
+                                flood)
 from tqdm import tqdm
 
 from data_tools.io import h5py_array_writer
 from data_tools.wrap import multi_source_array
-from ddsm_normals.make_dataset import make_data_set as convert_normals
+from ddsm_convert.make_dataset import make_data_set as convert_raws
 
 
 def get_parser():
     parser = argparse.ArgumentParser(description=""
-        "Create an HDF5 dataset with DDSM data by combining the CBIS-DDSM "
-        "dataset with normal (healthy) cases from the original DDSM "
-        "dataset. All images are cropped to remove irrelevant background "
-        "and resized to a square.")
+        "Create an HDF5 dataset with DDSM data by using all healthy images "
+        "in addition to the sick images that exist also in CBIS-DDSM. The "
+        "sick images are sourced from the original DDSM data to ensure that "
+        "they are processed in the same way as healthy images but their "
+        "annotations are sourced from CBIS-DDSM. All images are cropped to "
+        "remove irrelevant background and resized to a square.")
+    parser.add_argument('path_raws', type=str,
+                        help="path to the DDSM raw data directory")
     parser.add_argument('path_cbis', type=str,
                         help="path to the CBIS-DDSM data directory")
-    parser.add_argument('path_healthy', type=str,
-                        help="path to the DDSM `normals` directory")
-    parser.add_argument('--healthy_is_processed', action='store_true',
-                        help="`path_healthy` points to a directory that "
-                             "contains the processed tiff files rather "
-                             "than the original raw files")
+    parser.add_argument('--path_processed', type=str,
+                        help="path to save processed raw DDSM data to"
+                             "(if not specified, will create a temporary "
+                             "directory and delete it when done)")
     parser.add_argument('--path_create', type=str,
                         default='./data/ddsm/ddsm.h5',
                         help="path to save the HDF5 file to")
+    parser.add_argument('--force', action='store_true',
+                        help="force the overwrite of any existing files "
+                             "in `--path_processed`")
     parser.add_argument('--validation_fraction', type=float, default=0.2,
                         help="fraction of (sick, CBIS-DDSM) training data "
                              "to use for the validation subset")
@@ -45,12 +55,103 @@ def get_parser():
     return parser
 
 
-def prepare_data_ddsm(args):
+def _process_healthy(im_path, newsize):
+    im = sitk.ReadImage(im_path)
+    im_np = sitk.GetArrayFromImage(im)
+    im_np = trim(im_np)
+    im_np = resize(im_np,
+                   size=(newsize, newsize),
+                   interpolator=sitk.sitkLinear)
+    return im_np
+
+
+def _process_sick(root, ddsm_by_cbis, mask_by_cbis, newsize):
+    # Load image.
+    im = sitk.ReadImage(ddsm_by_cbis[root])
+    im_np = sitk.GetArrayFromImage(im)
+    
+    # Load all usable masks, merge them together, resize.
+    mask_np = None
+    for path in mask_by_cbis[root]:
+        m = sitk.ReadImage(path)
+        m_np = np.squeeze(sitk.GetArrayFromImage(m))
+        if mask_np is None:
+            mask_np = m_np
+        else:
+            mask_np = np.logical_or(m_np, mask_np).astype(np.uint8)
+    im_np, mask_np = trim(im_np, mask_np)
+    im_np = resize(im_np,
+                   size=(newsize, newsize, 1),
+                   interpolator=sitk.sitkLinear)
+    im_np = np.squeeze(im_np)
+    mask_np = resize(mask_np,
+                     size=(newsize, newsize),
+                     interpolator=sitk.sitkNearestNeighbor)
+    
+    return im_np, mask_np
+
+
+def _match_masks_to_images(root, masks_by_dir, files_ddsm_s):
+    common_match = None
+    masks = []
+    for path, x, y in masks_by_dir[root]:
+        try:
+            match_ddsm = files_ddsm_s[x][y]
+        except KeyError:
+            continue    # Skip
+        
+        # Select only those with the same view.
+        candidates = []     # Tuples : DDSM image, CBIS-DDSM mask.
+        view = re.search("(LEFT_CC|LEFT_MLO|RIGHT_CC|RIGHT_MLO)",
+                            root).group(0)
+        for match in match_ddsm:
+            if re.search(view, match):
+                candidates.append(match)
+        
+        # For each candidate image, check the overlap of the mask with the
+        # original DDSM mask corresponding to the image. Choose the image
+        # with the highest overlap > 0.
+        best_candidate = None
+        max_overlap = 0
+        for match in candidates:
+            original_mask_path = match.replace(".tif", "_mask.tif")
+            if not os.path.exists(original_mask_path):
+                # DDSM image has no mask; skip.
+                continue
+            mask_orig = sitk.ReadImage(original_mask_path)
+            mask_cbis = sitk.ReadImage(path)
+            overlap_filter = sitk.LabelOverlapMeasuresImageFilter()
+            overlap_filter.Execute(mask_orig, mask_cbis[:,:,0])
+            jaccard = overlap_filter.GetJaccardCoefficient()
+            if jaccard > max_overlap:
+                max_overlap = jaccard
+                best_candidate = match
+        if best_candidate is not None:
+            if common_match is None:
+                common_match = best_candidate
+            if common_match!=best_candidate:
+                raise AssertionError(
+                    "All masks in the same case should match the same "
+                    "image in the DDSM set but at least two masks match "
+                    "different images for case {}.".format(root))
+            masks.append(path)      # This is a usable mask.
+    
+    # Return values.
+    no_match = False
+    ddsm_by_cbis = {}
+    mask_by_cbis = {}
+    if common_match is None:
+        no_match = True
+    else:
+        ddsm_by_cbis[root] = common_match
+        mask_by_cbis[root] = masks
+    
+    return no_match, root, ddsm_by_cbis, mask_by_cbis
+
+
+def prepare_data_ddsm(args, path_processed):
     
     # Create HDF5 file to save dataset into.
-    dir_create = os.path.dirname(args.path_create)
-    if not os.path.exists(dir_create):
-        os.makedirs(dir_create)
     f = h5py.File(args.path_create, 'w')
     f.create_group('train')
     f.create_group('valid')
@@ -75,151 +176,135 @@ def prepare_data_ddsm(args):
                 dtype=np.uint16 if key=='s' else np.uint8,
                 **writer_kwargs)
     
-    try:
-        # Convert raw healthy cases to tiff.
-        if args.healthy_is_processed:
-            path_temp = args.path_healthy
-        else:
-            path_temp = tempfile.mkdtemp(dir=dir_create)
-            convert_normals(read_from=args.path_healthy,
-                            write_to=path_temp,
-                            clip_noise=args.clip_noise,
-                            force=False)
-    
-        # Collect and store healthy cases (resized).
-        print("Processing normals (healthy) from DDSM")
-        healthy = []
-        for root, dirs, files in os.walk(path_temp):
-            healthy.extend([os.path.join(root, fn) for fn in files])
-        for im_path in tqdm(healthy):
-            if not im_path.endswith('.tif'):
+    # Index all processed DDSM files. For sick cases, store path indexed 
+    # by image size. For healthy cases, simply store a list of paths.
+    print("Indexing DDSM files.")
+    files_ddsm_s = {}
+    files_ddsm_s_list = []
+    files_ddsm_h = []
+    for root, dirs, files in os.walk(os.path.join(path_processed)):
+        for fn in files:
+            if not fn.endswith(".tif"):
+                # Not a processed image; skip.
                 continue
-            im = sitk.ReadImage(im_path)
-            im_np = sitk.GetArrayFromImage(im)
-            im_np = trim(im_np)
-            im_np = resize(im_np,
-                           size=(args.resize, args.resize),
-                           interpolator=sitk.sitkLinear)
+            if fn.endswith("mask.tif"):
+                # Mask, not image; skip.
+                continue
+            if root.startswith(os.path.join(path_processed, "normals")):
+                # Healthy case; store in a list.
+                files_ddsm_h.append(os.path.join(root, fn))
+                continue
+            files_ddsm_s_list.append(os.path.join(root, fn))
+    for path in tqdm(files_ddsm_s_list):
+        # Sick case; index.
+        reader = sitk.ImageFileReader()
+        reader.SetFileName(path)
+        reader.ReadImageInformation()
+        x, y = reader.GetSize()
+        if x not in files_ddsm_s:
+            files_ddsm_s[x] = {}
+        if y not in files_ddsm_s[x]:
+            files_ddsm_s[x][y] = []
+        files_ddsm_s[x][y].append(path)
+    
+    # Collect and store healthy cases (resized).
+    print("Processing normals (healthy) from DDSM")
+    with multiprocessing.Pool() as pool:
+        iterator = pool.imap(partial(_process_healthy,
+                                     newsize=args.resize),
+                             files_ddsm_h)
+        for im_np in tqdm(iterator, total=len(files_ddsm_h), smoothing=0.1):
             writer['train']['h'].buffered_write(im_np)
-        writer['train']['h'].flush_buffer()
-    except:
-        raise
-    finally:
-        # Clean up temporary path.
-        if not args.healthy_is_processed:
-            shutil.rmtree(path_temp)
+    writer['train']['h'].flush_buffer()
     
-    # Collect sick cases.
-    dirs_image = {'train': [], 'test': []}
-    dirs_mask  = {'train': defaultdict(list), 'test': defaultdict(list)}
+    # Identify all masks and their shapes.
+    print("Indexing CBIS-DDSM masks.")
+    paths_mask = []
     for d in sorted(os.listdir(args.path_cbis)):
-        if not os.path.isdir(os.path.join(args.path_cbis, d)):
+        d_path = os.path.join(args.path_cbis, d)
+        if not os.path.isdir(d_path):
+            # Not a directory; skip.
             continue
-        if   re.search("^Mass-Training.*(CC|MLO)$", d):
-            dirs_image['train'].append(d)
-        elif re.search("^Mass-Test.*(CC|MLO)$", d):
-            dirs_image['test'].append(d)
-        elif re.search("^Mass-Training.*[1-9]$", d):
-            key = re.search("^Mass-Training.*(CC|MLO)", d).group(0)
-            dirs_mask['train'][key].append(d)
-        elif re.search("^Mass-Test.*[1-9]$", d):
-            key = re.search("^Mass-Test.*(CC|MLO)", d).group(0)
-            dirs_mask['test'][key].append(d)
+        if re.search("^Mass-(Training|Test).*[1-9]$", d):
+            for root, dirs, files in os.walk(d_path):
+                for fn in files:
+                    if fn.endswith('.dcm'):
+                        path = os.path.join(root, fn)
+                        paths_mask.append(path)
+    masks_by_dir = defaultdict(list)
+    for path in tqdm(paths_mask):
+        reader = sitk.ImageFileReader()
+        reader.SetFileName(path)
+        reader.ReadImageInformation()
+        x, y, z = reader.GetSize()
+        assert(z==1)
+        # root omits the number (eg. CC_1, MLO_3 --> CC, MLO)
+        root = re.search("^.*Mass-(Training|Test).*(CC|MLO)", path).group(0)
+        masks_by_dir[root].append((path, x, y))
+    
+    # Match sick case masks from CBIS-DDSM to images in DDSM. Matching is done
+    # first by image size, then by view (left/right, cc/mlo), and finally
+    # by overlaying the mask with the original DDSM mask. Some sick images do 
+    # not have corresponding masks in DDSM and so they are ignored here.
+    print("Matching CBIS-DDSM masks to DDSM images.")
+    ddsm_by_cbis = {}
+    mask_by_cbis = {}
+    no_match = []
+    with multiprocessing.Pool() as pool:
+        iterator = pool.imap(partial(_match_masks_to_images,
+                                     masks_by_dir=masks_by_dir,
+                                     files_ddsm_s=files_ddsm_s),
+                             sorted(masks_by_dir.keys()))
+        for result in tqdm(iterator, total=len(masks_by_dir.keys()),
+                           smoothing=0.1):
+            _no_match, _root, _ddsm_by_cbis, _mask_by_cbis = result
+            if _no_match:
+                no_match.append(_root)
+            else:
+                ddsm_by_cbis.update(_ddsm_by_cbis)
+                mask_by_cbis.update(_mask_by_cbis)
+    
+    # Report failed cases.
+    if len(no_match):
+        print("Skipped {} of {} masks since no matching image could be found: "
+              "\n{}".format(len(no_match),
+                            len(masks_by_dir.keys()),
+                            "\n".join(no_match)))
+    
+    # Sort cases into training, validation, and test subsets.
+    train = []
+    test  = []
+    for k in sorted(mask_by_cbis.keys()):
+        if re.search("Mass-Training", k):
+            train.append(k)
+        elif re.search("Mass-Test", k):
+            test.append(k)
         else:
-            pass
-    
-    # Split sick training cases into training and validation subsets.
-    keys = sorted(dirs_image['train'])
+            raise AssertionError("This error is not possible.")
     rng = np.random.RandomState(0)
-    rng.shuffle(keys)
-    n_valid = int(args.validation_fraction*len(keys))
-    keys_valid, keys_train = keys[:n_valid], keys[n_valid:]
-    
-    # Create new sick cases dicts with validation subset.
-    dirs_image_split = {
-        'train': keys_train,
-        'valid': keys_valid,
-        'test': dirs_image['test']
-        }
-    dirs_mask_split = {
-        'train': dict([(key, dirs_mask['train'][key]) for key in keys_train]),
-        'valid': dict([(key, dirs_mask['train'][key]) for key in keys_valid]),
-        'test': dirs_mask['test']
-        }
+    rng.shuffle(train)
+    n_valid = int(args.validation_fraction*len(train))
+    cbis_dirs = {'train': train[n_valid:],
+                 'valid': train[:n_valid],
+                 'test' : test}
     
     # For each case, combine all lesions into one mask; process image 
     # and mask and store in HDF5 file.
     for fold in ['train', 'valid', 'test']:
-        print("Processing cases with masses (sick) from CBIS-DDSM : '{}' fold"
+        print("Processing cases with masses (sick) : '{}' fold"
               "".format(fold))
-        fail_list = []
-        for im_dir in tqdm(sorted(dirs_image_split[fold])):
-            mask_dir_list = dirs_mask_split[fold][im_dir]
-            
-            # Function to get path for every dcm image in a directory tree.
-            def get_all_dcm(path):
-                dcm_list = []
-                for root, dirs, files in os.walk(path):
-                    for fn in files:
-                        if fn.endswith('.dcm'):
-                            dcm_list.append(os.path.join(root, fn))
-                return dcm_list
-            
-            # Load image, resize, and store in HDF5.
-            im_path = get_all_dcm(os.path.join(args.path_cbis, im_dir))
-            assert len(im_path)==1  # there should only be one dcm file
-            im_path = im_path[0]
-            im = sitk.ReadImage(im_path)
-            im_np = sitk.GetArrayFromImage(im)
-            im_np = np.squeeze(im_np)
-            im_size = im.GetSize()
-            
-            # Load all masks, merge them together, resize, and store in HDF5.
-            mask_np = None
-            for d in mask_dir_list:
-                mask_path = get_all_dcm(os.path.join(args.path_cbis, d))
-                assert len(mask_path)==2  # there should be two dcm files
-                m_np = None
-                for path in mask_path:
-                    m = sitk.ReadImage(path)
-                    if m.GetSize()==im_size:
-                        # Of the two files, the mask is the one with the same
-                        # image size as the full xray image.
-                        m_np = sitk.GetArrayFromImage(m)
-                if m_np is None:
-                    # Could not find a mask matching the image dimensions!
-                    # Don't bother looking at the other masks. Just fail this
-                    # case.
-                    break
-                m_np = np.squeeze(m_np)
-                if mask_np is None:
-                    mask_np = m_np
-                else:
-                    mask_np = np.logical_or(m_np, mask_np).astype(np.uint8)
-            if mask_np is None:
-                # One or more masks does not match the image dimensions.
-                # Skip this case and add it to the fail list.
-                fail_list.append(im_dir)
-                continue
-            im_np, mask_np = trim(im_np, mask_np)
-            im_np = resize(im_np,
-                           size=(args.resize, args.resize, 1),
-                           interpolator=sitk.sitkLinear)
-            im_np = np.squeeze(im_np)
-            mask_np = resize(mask_np,
-                             size=(args.resize, args.resize),
-                             interpolator=sitk.sitkNearestNeighbor)
-            writer[fold]['s'].buffered_write(im_np)
-            writer[fold]['m'].buffered_write(mask_np)
+        with multiprocessing.Pool() as pool:
+            iterator = pool.imap(partial(_process_sick,
+                                         ddsm_by_cbis=ddsm_by_cbis,
+                                         mask_by_cbis=mask_by_cbis,
+                                         newsize=args.resize),
+                                 sorted(cbis_dirs[fold]))
+            for im_np, mask_np in tqdm(iterator, total=len(cbis_dirs[fold]),
+                                       smoothing=0.1):
+                writer[fold]['s'].buffered_write(im_np)
+                writer[fold]['m'].buffered_write(mask_np)
         writer[fold]['s'].flush_buffer()
         writer[fold]['m'].flush_buffer()
-    
-        # Report failed cases.
-        if len(fail_list):
-            print("Skipped {} cases due to issues with their masks (missing "
-                  "mask or incorrect size):\n{}"
-                  "".format(len(fail_list),
-                            "\n".join(fail_list)))
 
 
 def resize(image, size, interpolator=sitk.sitkLinear):
@@ -249,14 +334,12 @@ def trim(image, mask=None):
     if mask is not None:
         assert np.all(mask.shape==image.shape)
     
-    # Normalize.
+    # Normalize to within [0, 1] and threshold to binary.
+    assert image.dtype==np.uint16
     x = image.copy()
-    if x.dtype==np.uint8:
-        x = (x-63)/(2**8 - 1)
-    elif x.dtype==np.uint16:
-        x = x/(2**16 - 1)
-    else:
-        raise TypeError("Unexpected image type: {}".format(x.dtype))
+    x_norm = x.astype(np.float)/(2**16 - 1)
+    x[x_norm>=0.075] = 1
+    x[x_norm< 0.075] = 0
     
     # Align breast to left (find breast direction).
     # Check first 10% of image from left and first 10% from right. The breast
@@ -267,38 +350,116 @@ def trim(image, mask=None):
         if mask is not None:
             mask = np.fliplr(mask)
         x = np.fliplr(x)
+        x_norm = np.fliplr(x_norm)
     
-    # Crop out background outside of breast (columns) : start 10% in from the
-    # left side since some cases start with an empty border and move left to
-    # remove the border, then move right to find the end of the breast.
-    # Start crop when mean intensity falls below threshold.
-    threshold = 0.02
-    threshold_left = 0.1
-    l = max(int(x.shape[1]*0.1), 1)
+    # Crop out bright band on left, if present. Use the normalized image
+    # instead of the thresholded image in order to differentiate the bright
+    # band from breast tissue. Start 20% in from the left side since some 
+    # cases start with an empty border and move left to remove the border 
+    # (empty or bright).
+    t_high = 0.75
+    t_low  = 0.2
+    start_col_left = max(int(x.shape[1]*0.2), 1)
     crop_col_left  = 0
-    crop_col_right = x.shape[1]
-    for col in range(l, -1, -1):
-        if x[:,col].mean() < threshold_left:
+    within_limits = False
+    for col in range(start_col_left, -1, -1):
+        mean = x_norm[:,col].mean()
+        if within_limits and mean <= t_low:
+            # empty
             crop_col_left = col
             break
-    for col in range(l, x.shape[1]):
-        if x[:,col].mean() < threshold:
+        if within_limits and mean >= t_high:
+            # bright
+            crop_col_left = col
+            break
+        if mean > t_low and mean < t_high:
+            # Once this is true, assume breast has been found. Useful for
+            # very small breasts that extend less than 20% in from left edge.
+            within_limits = True
+    
+    # Crop out other bright bands using thresholded image. Some bright bands
+    # are not fully saturated, so it's best to remove them after this 
+    # thresholding. This would not work well for the left edge since some
+    # breasts take the full edge. For each edge (right, top, bottom), start
+    # 20% in and move out. Stop when the mean intensity switches from below
+    # the threshold to above the threshold; if it starts above the threshold,
+    # then it just means the breast is spanning the entire width/height at 
+    # the start position.
+    t_high = 0.95
+    start_col_right = max(int(x.shape[1]*0.8), 1)
+    start_row_top   = max(int(x.shape[0]*0.2), 1)
+    start_row_bot   = max(int(x.shape[0]*0.8), 1)
+    crop_col_right = x.shape[1]
+    crop_row_top   = 0
+    crop_row_bot   = x.shape[0]
+    prev_mean_col_right  = 1
+    prev_mean_row_top    = 1
+    prev_mean_row_bot    = 1
+    for col in range(start_col_right, x.shape[1]):
+        mean = x[:,col].mean()
+        if mean > t_high and prev_mean_col_right < t_high:
             crop_col_right = col+1
             break
-    
-    # Crop out background outside of breast (row) : start at middle, move
-    # outward. Start crop when mean intensity falls below threshold.
-    threshold = 0.02
-    crop_row_top = 0
-    crop_row_bot = x.shape[0]
-    for row in range(x.shape[0]//2, -1, -1):
-        if x[row,:].mean() < threshold:
+        prev_mean_col_right = mean
+    for row in range(start_row_top, -1, -1):
+        mean = x[row,:].mean()
+        if mean > t_high and prev_mean_row_top < t_high:
             crop_row_top = row
             break
-    for row in range(x.shape[0]//2, x.shape[0], 1):
-        if x[row,:].mean() < threshold:
+        prev_mean_row_top = mean
+    for row in range(start_row_bot, x.shape[0]):
+        mean = x[row,:].mean()
+        if mean > t_high and prev_mean_row_bot < t_high:
             crop_row_bot = row+1
             break
+        prev_mean_row_bot = mean
+    
+    # Store crop indices for edges - to be used to make sure that the final 
+    # crop does not include the edges.
+    crop_col_left_edge  = crop_col_left
+    crop_col_right_edge = crop_col_right
+    crop_row_top_edge   = crop_row_top
+    crop_row_bot_edge   = crop_row_bot
+    
+    # Flood fill breast in order to then crop background out. Start flood 
+    # at pixel 20% right from the left edge, center row. Apply the flood to 
+    # a the image with the edges cropped out in order to avoid flooding the
+    # edges and any artefacts that overlap the edges.
+    x_view = x[crop_row_top:crop_row_bot,crop_col_left:crop_col_right]
+    flood_row = max(x.shape[0]//2-crop_row_top, 0)
+    flood_col = max(int(x.shape[1]*0.2)-crop_col_left, 0)
+    x_fill = binary_opening(x_view, selem=np.ones((5,5)))
+    x_fill = binary_closing(x_fill, selem=np.ones((5,5)))
+    m_view = flood(x_fill, (flood_row, flood_col), connectivity=1)
+    m = np.zeros(x.shape, dtype=np.bool)
+    m[crop_row_top:crop_row_bot,crop_col_left:crop_col_right] = m_view
+    
+    # Crop out background outside of breast. Start 20% in from the left side
+    # at the center row and move outward until the columns or rows are empty.
+    # For every row or column mean, ignore 10% of each end of the vector in 
+    # order to avoid problematic edges. Note that the mask already has edges
+    # cropped out, if needed, but this may be imperfect.
+    flood_row_adjusted = flood_row+crop_row_top
+    flood_col_adjusted = flood_col+crop_col_left
+    frac_row = int(m.shape[0]*0.1)
+    frac_col = int(m.shape[1]*0.1)
+    for col in range(flood_col_adjusted, m.shape[1]):
+        if not np.any(m[frac_row:-frac_row,col]):
+            crop_col_right = min(crop_col_right, col+1)
+            break
+    for row in range(flood_row_adjusted, -1, -1):
+        if not np.any(m[row,frac_col:-frac_col]):
+            crop_row_top = max(crop_row_top, row)
+            break
+    for row in range(flood_row_adjusted, m.shape[0]):
+        if not np.any(m[row,frac_col:-frac_col]):
+            crop_row_bot = min(crop_row_bot, row+1)
+            break
+    
+    # Make sure crop row and column numbers are in range.
+    crop_col_right = min(crop_col_right, image.shape[1])
+    crop_row_top = max(crop_row_top, 0)
+    crop_row_bot = min(crop_row_bot, image.shape[0])
     
     # Adjust crop to not crop mask (find mask bounding box).
     if mask is not None:
@@ -308,14 +469,22 @@ def trim(image, mask=None):
         crop_row_top   = min(crop_row_top,   slice_row.start)
         crop_row_bot   = max(crop_row_bot,   slice_row.stop)
     
-    # Apply crop (unless image is reduced to less than 10% of its side 
-    # on either axis).
-    if (    crop_col_right-crop_col_left > 0.1*x.shape[1]
-        and crop_row_bot  -crop_row_top  > 0.1*x.shape[0]):
-        image = image[crop_row_top:crop_row_bot,crop_col_left:crop_col_right]
-        if mask is not None:
-            mask = mask[crop_row_top:crop_row_bot,crop_col_left:crop_col_right]
-            return image, mask
+    # Expand crop 5% to the right and 10% up and down in order to avoid 
+    # clipping any breast.
+    crop_col_right = min(int(crop_col_right+x.shape[1]*0.05),
+                         crop_col_right_edge)
+    crop_row_top   = max(int(crop_row_top-x.shape[0]*0.1),
+                         crop_row_top_edge)
+    crop_row_bot   = min(int(crop_row_bot+x.shape[0]*0.1),
+                         crop_row_bot_edge)
+    
+    # Apply crop.
+    image = image[crop_row_top:crop_row_bot,crop_col_left:crop_col_right]
+    from matplotlib import pyplot as plt
+    plt.show()
+    if mask is not None:
+        mask = mask[crop_row_top:crop_row_bot,crop_col_left:crop_col_right]
+        return image, mask
     
     return image
 
@@ -323,4 +492,27 @@ def trim(image, mask=None):
 if __name__ == '__main__':
     parser = get_parser()
     args = parser.parse_args()
-    data = prepare_data_ddsm(args)
+    try:
+        # Convert raw cases to tiff.
+        dir_create = os.path.dirname(args.path_create)
+        if not os.path.exists(dir_create):
+            os.makedirs(dir_create)
+        path_processed = args.path_processed
+        if path_processed is None:
+            path_processed = tempfile.mkdtemp(dir=dir_create)
+        print("Converting raw DDSM to tiff.")
+        convert_raws(read_from=args.path_raws,
+                     write_to=path_processed,
+                     clip_noise=args.clip_noise,
+                     force=args.force)
+        
+        # Prepare dataset.
+        prepare_data_ddsm(args, path_processed)
+    except:
+        raise
+    finally:
+        # Clean up temporary path.
+        if args.path_processed is None:
+            shutil.rmtree(path_processed)
+    
+    

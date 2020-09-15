@@ -146,9 +146,13 @@ def preprocessor_ddsm(crop_to=None, data_augmentation_kwargs=None):
         h_non_background = h>h.min()
         s_non_background = s>s.min()
         h -= h[h_non_background].mean()
-        h /= h[h_non_background].std()
+        h /= 5*h[h_non_background].std()
         s -= s[s_non_background].mean()
-        s /= s[s_non_background].std()
+        s /= 5*s[s_non_background].std()
+        
+        # Remove distant outlier intensities.
+        h = np.clip(h, -1, 1)
+        s = np.clip(s, -1, 1)
         
         # Change mask values from 255 to 1.
         if m is not None:
