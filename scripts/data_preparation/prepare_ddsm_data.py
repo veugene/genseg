@@ -12,7 +12,8 @@ import h5py
 import numpy as np
 from scipy import ndimage
 import SimpleITK as sitk
-from skimage.morphology import (binary_opening,
+from skimage.morphology import (binary_closing,
+                                binary_opening,
                                 flood)
 from tqdm import tqdm
 
@@ -337,8 +338,8 @@ def trim(image, mask=None):
     assert image.dtype==np.uint16
     x = image.copy()
     x_norm = x.astype(np.float)/(2**16 - 1)
-    x[x_norm>=0.1] = 1
-    x[x_norm< 0.1] = 0
+    x[x_norm>=0.075] = 1
+    x[x_norm< 0.075] = 0
     
     # Align breast to left (find breast direction).
     # Check first 10% of image from left and first 10% from right. The breast
@@ -357,19 +358,24 @@ def trim(image, mask=None):
     # cases start with an empty border and move left to remove the border 
     # (empty or bright).
     t_high = 0.75
-    t_low  = 0.1
+    t_low  = 0.2
     start_col_left = max(int(x.shape[1]*0.2), 1)
     crop_col_left  = 0
+    within_limits = False
     for col in range(start_col_left, -1, -1):
         mean = x_norm[:,col].mean()
-        if mean < t_low:
+        if within_limits and mean <= t_low:
             # empty
             crop_col_left = col
             break
-        if mean > t_high:
+        if within_limits and mean >= t_high:
             # bright
             crop_col_left = col
             break
+        if mean > t_low and mean < t_high:
+            # Once this is true, assume breast has been found. Useful for
+            # very small breasts that extend less than 20% in from left edge.
+            within_limits = True
     
     # Crop out other bright bands using thresholded image. Some bright bands
     # are not fully saturated, so it's best to remove them after this 
@@ -406,7 +412,7 @@ def trim(image, mask=None):
         if mean > t_high and prev_mean_row_bot < t_high:
             crop_row_bot = row+1
             break
-        prev_mean_row_top = mean
+        prev_mean_row_bot = mean
     
     # Store crop indices for edges - to be used to make sure that the final 
     # crop does not include the edges.
@@ -420,28 +426,32 @@ def trim(image, mask=None):
     # a the image with the edges cropped out in order to avoid flooding the
     # edges and any artefacts that overlap the edges.
     x_view = x[crop_row_top:crop_row_bot,crop_col_left:crop_col_right]
-    flood_row = x_view.shape[0]//2
-    flood_col = int(x_view.shape[1]*0.2)
+    flood_row = max(x.shape[0]//2-crop_row_top, 0)
+    flood_col = max(int(x.shape[1]*0.2)-crop_col_left, 0)
     x_fill = binary_opening(x_view, selem=np.ones((5,5)))
+    x_fill = binary_closing(x_fill, selem=np.ones((5,5)))
     m_view = flood(x_fill, (flood_row, flood_col), connectivity=1)
     m = np.zeros(x.shape, dtype=np.bool)
     m[crop_row_top:crop_row_bot,crop_col_left:crop_col_right] = m_view
     
     # Crop out background outside of breast. Start 20% in from the left side
     # at the center row and move outward until the columns or rows are empty.
-    # For every row or column mean, ignore 20% of each end of the vector in 
-    # order to avoid problematic edges.
-    frac_row = int(m.shape[0]*0.2)
-    frac_col = int(m.shape[1]*0.2)
-    for col in range(flood_col, m.shape[1]):
+    # For every row or column mean, ignore 10% of each end of the vector in 
+    # order to avoid problematic edges. Note that the mask already has edges
+    # cropped out, if needed, but this may be imperfect.
+    flood_row_adjusted = flood_row+crop_row_top
+    flood_col_adjusted = flood_col+crop_col_left
+    frac_row = int(m.shape[0]*0.1)
+    frac_col = int(m.shape[1]*0.1)
+    for col in range(flood_col_adjusted, m.shape[1]):
         if not np.any(m[frac_row:-frac_row,col]):
             crop_col_right = min(crop_col_right, col+1)
             break
-    for row in range(flood_row, -1, -1):
+    for row in range(flood_row_adjusted, -1, -1):
         if not np.any(m[row,frac_col:-frac_col]):
             crop_row_top = max(crop_row_top, row)
             break
-    for row in range(flood_row, m.shape[0]):
+    for row in range(flood_row_adjusted, m.shape[0]):
         if not np.any(m[row,frac_col:-frac_col]):
             crop_row_bot = min(crop_row_bot, row+1)
             break
@@ -459,17 +469,19 @@ def trim(image, mask=None):
         crop_row_top   = min(crop_row_top,   slice_row.start)
         crop_row_bot   = max(crop_row_bot,   slice_row.stop)
     
-    # Expand crop 5% of image dim in each direction (right, top, bottom)
-    # about the breast in order to avoid clipping any breast.
+    # Expand crop 5% to the right and 10% up and down in order to avoid 
+    # clipping any breast.
     crop_col_right = min(int(crop_col_right+x.shape[1]*0.05),
                          crop_col_right_edge)
-    crop_row_top   = max(int(crop_row_top-x.shape[0]*0.05),
+    crop_row_top   = max(int(crop_row_top-x.shape[0]*0.1),
                          crop_row_top_edge)
-    crop_row_bot   = min(int(crop_row_bot+x.shape[0]*0.05),
+    crop_row_bot   = min(int(crop_row_bot+x.shape[0]*0.1),
                          crop_row_bot_edge)
     
     # Apply crop.
     image = image[crop_row_top:crop_row_bot,crop_col_left:crop_col_right]
+    from matplotlib import pyplot as plt
+    plt.show()
     if mask is not None:
         mask = mask[crop_row_top:crop_row_bot,crop_col_left:crop_col_right]
         return image, mask
