@@ -198,22 +198,9 @@ def preprocessor_brats(data_augmentation_kwargs=None):
     def process_element(inputs, max_shape):
         h, s, m, hi, si = inputs
         
-        # Center slices onto empty buffers with a size equal to the largest.
-        elem = []
-        for im in [h, s, m]:
-            if im is None:
-                elem.append(None)
-                continue
-            elem_im = np.zeros((len(im),)+max_shape, dtype=np.float32)
-            elem_im[...] = np.inf   # To be replaced with background intensity.
-            im_shape = np.shape(im)[1:]
-            offset = np.subtract(max_shape, im_shape)//2
-            index_slices = [slice(None, None),
-                            slice(offset[0], offset[0]+im_shape[0]),
-                            slice(offset[1], offset[1]+im_shape[1])]
-            elem_im[tuple(index_slices)] = im[...]
-            elem.append(elem_im)
-        h, s, m = elem
+        # Float.
+        h = h.astype(np.float32)
+        s = s.astype(np.float32)
         
         # Data augmentation.
         if data_augmentation_kwargs is not None:
@@ -228,57 +215,22 @@ def preprocessor_brats(data_augmentation_kwargs=None):
                 s, m = _
             else:
                 s = _
-                        
-        # Set background intensity.
-        for im, im_orig in zip([h, s, m], inputs[:-2]):
-            if im is None:
-                continue
-            # HACK: Assuming corner pixel is always outside of the brain.
-            background = im_orig[0,0,0]
-            im[im==np.inf] = background
-                    
+        
         # Remove distant outlier intensities.
-        hs = []
-        for im in [h, s]:
-            if im is None:
-                hs.append(None)
-                continue
-            im = np.clip(im, -1., 1.)
-            hs.append(im)
-        h, s = hs
-        
-        # Set dtype (all output buffers are float32 to support inf).
-        elem = []
-        for im, im_orig in zip([h, s, m], inputs[:-2]):
-            if im is None:
-                elem.append(None)
-                continue
-            im = im.astype(im_orig.dtype)
-            elem.append(im)
-        
-        # Append indices.
-        elem.extend(inputs[-2:])
+        if h is not None:
+            h = np.clip(h, -1., 1.)
+        if s is not None:
+            s = np.clip(s, -1., 1.)
             
-        return elem
+        return h, s, m, hi, si
         
     def process_batch(batch):
-        # Find the largest slice.
-        max_shape = (0,0)
-        for b in batch[:-2]:
-            for im in b:
-                if im is None:
-                    continue
-                im_shape = np.shape(im)[1:]
-                max_shape = (max(im_shape[0], max_shape[0]),
-                             max(im_shape[1], max_shape[1]))
-                
         # Process every element.
         elements = []
         for i in range(len(batch[0])):
-            elem = process_element([b[i] for b in batch], max_shape=max_shape)
+            elem = process_element([b[i] for b in batch])
             elements.append(elem)
         out_batch = list(zip(*elements))
-        
         return out_batch
     
     return process_batch
