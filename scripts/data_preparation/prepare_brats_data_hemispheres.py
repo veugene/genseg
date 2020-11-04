@@ -163,7 +163,7 @@ def preprocess(volume, segmentation, skip_bias_correction=False):
     # Mean center and normalize by std.
     brain_mask = volume_out!=0
     volume_out[brain_mask] -= volume_out[brain_mask].mean()
-    volume_out[brain_mask] /= volume_out[brain_mask].std()*5
+    volume_out[brain_mask] /= volume_out[brain_mask].std()*5    # fit in tanh
     
     # Get slice indices, with 0 at the center.
     #brain_mask_ax1 = brain_mask.sum(axis=(0,2,3))>0

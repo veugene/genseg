@@ -61,10 +61,10 @@ def prepare_data_ddsm(path, masked_fraction=0, drop_masked=False, rng=None):
     data['train']['h'] = h5py_file['train']['h']
     data['train']['s'] = []
     data['train']['m'] = []
-    data['valid']['h'] = h5py_file['train']['h']
+    data['valid']['h'] = h5py_file['train']['h']    # HACK
     data['valid']['s'] = h5py_file['valid']['s']
     data['valid']['m'] = h5py_file['valid']['m']
-    data['test']['h']  = h5py_file['train']['h']
+    data['test']['h']  = h5py_file['train']['h']    # HACK
     data['test']['s']  = h5py_file['test']['s']
     data['test']['m']  = h5py_file['test']['m']
     for i in range(num_cases_total):
