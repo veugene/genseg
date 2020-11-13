@@ -166,7 +166,7 @@ def run(args):
     metrics = {}
     for key in engines:
         metrics[key] = OrderedDict()
-        metrics[key]['dice'] = dice_global(target_class=2,
+        metrics[key]['dice'] = dice_global(target_class=1,
                         output_transform=lambda x: (x['x_AM'], x['x_M']))
         if isinstance(experiment_state.model['G'], model_ae):
             metrics[key]['rec']  = batchwise_loss_accumulator(
