@@ -218,16 +218,27 @@ def run(args):
             metric_keys=['dice'])
     
     # Set up image logging to tensorboard.
-    def _p(val): return val[:,0,:,:].cpu().numpy()
+    def prepare_images(output):
+        items = []
+        for k, v in output.items():
+            if k.startswith('x_') and v is not None:
+                stack = v[:,0,:,:].cpu().numpy()
+                if k.endswith('M'):
+                    # This is a mask. Rescale to to within [-1, 1] for 
+                    # visualization.
+                    stack = 2*np.clip(mask, 0, 1)-1
+                else:
+                    stack = np.clip(mask, -1, 1)
+                items.append((k.replace('x_', ''), stack))
+        return OrderedDict(items)
     save_image = image_logger(
         initial_epoch=experiment_state.get_epoch(),
         directory=os.path.join(experiment_state.experiment_path, "images"),
         summary_tracker=tracker if args.save_image_events else None,
         num_vis=args.n_vis,
-        output_transform=lambda x: OrderedDict([(k.replace('x_',''), _p(v))
-                                                for k, v in x.items()
-                                                if k.startswith('x_')
-                                                and v is not None]),
+        min_val=-1,
+        max_val=1,
+        output_transform=prepare_images,
         fontsize=48)
     save_image.attach(engines['valid'])
     
