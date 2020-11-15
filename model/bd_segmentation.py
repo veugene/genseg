@@ -314,14 +314,17 @@ class segmentation_model(nn.Module):
                                                          mask_packed)
         
         # Include segmentation loss with generator losses and update.
-        losses_G['l_seg'] = _reduce([loss_seg])
-        losses_G['l_G'] += losses_G['l_seg']
-        loss_G = losses_G['l_G']
+        with self._autocast_if_needed():
+            losses_G['l_seg'] = _reduce([loss_seg])
+            losses_G['l_G'] += losses_G['l_seg']
+            loss_G = losses_G['l_G']
         if do_updates_bool and isinstance(loss_G, torch.Tensor):
             if 'S' in optimizer:
                 clear_grad(optimizer['S'])
             clear_grad(optimizer['G'])
-            backward(loss_G.mean())
+            with self._autocast_if_needed():
+                _loss = loss_G.mean()
+            backward(_loss)
             if self.scaler is not None:
                 self.scaler.unscale_(optimizer['G'])
                 if 'S' in optimizer:
@@ -335,12 +338,12 @@ class segmentation_model(nn.Module):
             gradnorm_G = grad_norm(self)
         
         # Unscale norm.
-        if self.scaler is not None:
+        if self.scaler is not None and do_updates_bool:
             gradnorm_D /= self.scaler.get_scale()
             gradnorm_G /= self.scaler.get_scale()
         
         # Update scaler.
-        if self.scaler is not None:
+        if self.scaler is not None and do_updates_bool:
             self.scaler.update()
         
         # Compile ouputs.
