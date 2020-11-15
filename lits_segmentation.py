@@ -124,7 +124,8 @@ def run(args):
     # Training loop.
     def training_function(engine, batch):
         for model in experiment_state.model.values():
-            model.train()
+            if hasattr(model, 'train'):
+                model.train()
         B, A, M = batch
         B, A = B.cuda(), A.cuda()
         outputs = experiment_state.model['G'](A, B, M,
@@ -135,7 +136,8 @@ def run(args):
     # Validation loop.
     def validation_function(engine, batch):
         for model in experiment_state.model.values():
-            model.eval()
+            if hasattr(model, 'eval'):
+                model.eval()
         B, A, M = batch
         B, A = B.cuda(), A.cuda()
         with torch.no_grad():

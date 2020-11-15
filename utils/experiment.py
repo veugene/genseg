@@ -80,7 +80,8 @@ class experiment(object):
         self.optimizer = optimizer
         print("Number of parameters\n"+
               "\n".join([" {} : {}".format(key, count_params(self.model[key]))
-                         for key in self.model.keys()]))
+                         for key in self.model.keys()
+                         if hasattr(self.model[key], 'parameters')]))
     
     def setup_engine(self, function,
                      append=True, prefix=None, epoch_length=None):
@@ -221,6 +222,8 @@ class experiment(object):
         # Setup the optimizer.
         optimizer = {}
         for key in model.keys():
+            if not hasattr(model[key], 'parameters'):
+                continue    # Model has no parameters and cannot be optimized.
             def parse(arg):
                 # Helper function for args when passed as dict, with
                 # model names as keys.

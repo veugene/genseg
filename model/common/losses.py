@@ -82,7 +82,8 @@ class gan_objective(object):
                                  disc(real, **kwargs_real))
         return self._foreach(self._G, disc(fake, **kwargs_fake))
     
-    def D(self, disc, fake, real, kwargs_fake=None, kwargs_real=None):
+    def D(self, disc, fake, real, kwargs_fake=None, kwargs_real=None,
+          scaler=None):
         if kwargs_fake is None: kwargs_fake = {}
         if kwargs_real is None: kwargs_real = {}
         if self.relativistic:
@@ -90,20 +91,23 @@ class gan_objective(object):
                                              self.grad_penalty_real,
                                              self.grad_penalty_fake,
                                              kwargs_a=kwargs_real,
-                                             kwargs_b=kwargs_fake)
+                                             kwargs_b=kwargs_fake,
+                                             scaler=scaler)
             loss_fake = self._D_relativistic(fake, real, disc, self._D0,
                                              self.grad_penalty_fake,
                                              self.grad_penalty_real,
                                              kwargs_a=kwargs_fake,
-                                             kwargs_b=kwargs_real)
+                                             kwargs_b=kwargs_real,
+                                             scaler=scaler)
         else:
             loss_real = self._D(real, disc, self._D1, self.grad_penalty_real,
-                                kwargs_disc=kwargs_real)
+                                kwargs_disc=kwargs_real, scaler=scaler)
             loss_fake = self._D(fake, disc, self._D0, self.grad_penalty_fake,
-                                kwargs_disc=kwargs_fake)
+                                kwargs_disc=kwargs_fake, scaler=scaler)
         return loss_real+loss_fake
     
-    def _D(self, x, disc, objective, grad_penalty, kwargs_disc=None):
+    def _D(self, x, disc, objective, grad_penalty, kwargs_disc=None,
+           scaler=None):
         if kwargs_disc is None: kwargs_disc = {}
         if torch.is_grad_enabled():
             _set_requires_grad(x, True)
@@ -114,11 +118,16 @@ class gan_objective(object):
                 if isinstance(disc_out, torch.Tensor):
                     disc_out = [disc_out]
                 disc_out = sum([o.sum() for o in disc_out])
+                if scaler is not None:
+                    disc_out = scaler.scale(disc_out)
                 grad = torch.autograd.grad(disc_out,
                                            x,
                                            retain_graph=True,
                                            create_graph=True,
                                            only_inputs=True)[0]
+                if scaler is not None:
+                    inv_scale = 1./scaler.get_scale()
+                    grad = [g*inv_scale for g in grad]
                 norm2 = (grad.view(grad.size()[0],-1)**2).sum(-1)
                 if self.grad_penalty_mean:
                     penalty = (torch.sqrt(norm2)-self.grad_penalty_mean)**2
@@ -129,7 +138,8 @@ class gan_objective(object):
     
     def _D_relativistic(self, a, b, disc, objective,
                         grad_penalty_a, grad_penalty_b,
-                        kwargs_a=None, kwargs_b=None):
+                        kwargs_a=None, kwargs_b=None,
+                        scaler=None):
         if kwargs_a is None: kwargs_a = {}
         if kwargs_b is None: kwargs_b = {}
         if torch.is_grad_enabled():
@@ -150,11 +160,17 @@ class gan_objective(object):
                 if isinstance(b, torch.Tensor):
                     b = (b,)
                 a_and_b = a+b   # Tuple containing all tensors in a and in b.
+                if scaler is not None:
+                    disc_out = scaler.scale(disc_out)
                 grad_a, grad_b = torch.autograd.grad(disc_out,
                                                      a_and_b,
                                                      retain_graph=True,
                                                      create_graph=True,
                                                      only_inputs=True)
+                if scaler is not None:
+                    inv_scale = 1./scaler.get_scale()
+                    grad_a = [g*inv_scale for g in grad_a]
+                    grad_b = [g*inv_scale for g in grad_b]
                 norm2_a = (grad_a.view(grad_a.size()[0],-1)**2).sum(-1)
                 norm2_b = (grad_b.view(grad_b.size()[0],-1)**2).sum(-1)
                 if self.grad_penalty_mean:

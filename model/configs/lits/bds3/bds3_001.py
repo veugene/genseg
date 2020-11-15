@@ -136,6 +136,7 @@ def build_model(lambda_disc=3,
     remove_spectral_norm(submodel['decoder_residual'].classifier.op)
     
     model = segmentation_model(**submodel,
+                               scaler=torch.cuda.amp.GradScaler(),
                                shape_sample=z_shape,
                                loss_gan='hinge',
                                loss_seg=dice_loss(),
@@ -152,6 +153,7 @@ def build_model(lambda_disc=3,
         ('G', model),
         ('D', nn.ModuleList([model.separate_networks['disc_A'],
                              model.separate_networks['disc_B']])),
+        ('scaler', model.scaler),
         ))
 
 
@@ -230,7 +232,7 @@ class encoder(nn.Module):
             self.blocks.append(block)
         self.blocks.append(get_nonlinearity(self.nonlinearity))
         self.output_shape = shape
-            
+    
     def forward(self, input):
         skips = []
         size = input.size()
@@ -395,7 +397,6 @@ class decoder(nn.Module):
                 out_channels=self.num_classes,
                 kernel_size=1,
                 ndim=self.ndim)
-        
         
     def forward(self, z, skip_info=None, mode=0):
         # Set mode (0: trans, 1: seg).
