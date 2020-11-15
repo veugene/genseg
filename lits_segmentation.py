@@ -228,9 +228,9 @@ def run(args):
                 if k.endswith('M'):
                     # This is a mask. Rescale to to within [-1, 1] for 
                     # visualization.
-                    stack = 2*np.clip(mask, 0, 1)-1
+                    stack = 2*np.clip(stack, 0, 1)-0.5
                 else:
-                    stack = np.clip(mask, -1, 1)
+                    stack = np.clip(stack, -0.8, 0.8)
                 items.append((k.replace('x_', ''), stack))
         return OrderedDict(items)
     save_image = image_logger(
