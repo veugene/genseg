@@ -85,8 +85,10 @@ def prepare_data_lits(path, masked_fraction=0, drop_masked=False, rng=None):
                         ('test', OrderedDict())])
     if drop_masked:
         # Remove all volumes indexed with `masked`.
-        data['train']['s'] = multi_source_array(volumes_s['train'][visible])
-        data['train']['m'] = multi_source_array(volumes_m['train'][visible])
+        data['train']['s'] = multi_source_array(
+            [volumes_s['train'][i] for i in visible])
+        data['train']['m'] = multi_source_array(
+            [volumes_m['train'][i] for i in visible])
     else:
         # Mask out the labels for volumes indexed with `masked` by 
         # setting the segmentations volume as an array of `None`, with length 
@@ -150,7 +152,12 @@ class LITSDataset(Dataset):
                                 p=self.h_histogram)
         h = self.h[h_idx]
         
-        # Add channel dim to mask (for data augmentation, etc.)
+        # Add channel dim: h, s may have 2 or 3 dims, depending on if liver
+        # is cropped.
+        if h.ndim==2:
+            h = np.expand_dims(h, 0)
+        if s.ndim==2:
+            s = np.expand_dims(s, 0)
         if m is not None:
             m = np.expand_dims(m, 0)    # (256, 256) -> (1, 256, 256)
 
