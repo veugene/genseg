@@ -178,9 +178,13 @@ class experiment(object):
                 'model_as_str' : self.model_as_str
                 }}
             for key in self.model.keys():
+                if hasattr(self.model[key], 'parameters'):
+                    _optimizer_state = self.optimizer[key].state_dict()
+                else:
+                    _optimizer_state = None
                 model_save_dict['dict'][key] = {
                     'model_state'     : self.model[key].state_dict(),
-                    'optimizer_state' : self.optimizer[key].state_dict()}
+                    'optimizer_state' : _optimizer_state}
             checkpoint_last_handler(engine, model_save_dict)                
             checkpoint_best_handler(engine, model_save_dict)
             hist_save_dict = {'dict': {
@@ -252,7 +256,7 @@ class experiment(object):
         saved_dict = torch.load(load_from)
         for key in model.keys():
             model[key].load_state_dict(saved_dict[key]['model_state'])
-            if optimizer is not None:
+            if optimizer is not None and hasattr(model[key], 'parameters'):
                 optimizer[key].load_state_dict(
                                    saved_dict[key]['optimizer_state'])
 
