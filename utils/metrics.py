@@ -62,11 +62,12 @@ class dice_global(metric):
         classes in mask_class.
         '''
         
-        # Get outputs.
+        # Get outputs (and cast to float to avoid buffer overun with AMP).
         y_pred, y_true = output
         if y_true is None or len(y_true)==0 or y_pred is None:
             return
         assert len(y_pred)==len(y_true)
+        y_pred, y_true = y_pred.float(), y_true.float()
         y_pred = sum([y_pred[:,i:i+1] for i in self.prediction_index])
         
         # Targer variable must not require a gradient.
