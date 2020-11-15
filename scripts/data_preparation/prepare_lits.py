@@ -30,6 +30,7 @@ def get_parser():
     parser.add_argument('--path_create', type=str,
                         default='./data/lits/lits.h5',
                         help="path to save the prepared HDF5 dataset to")
+    parser.add_argument('--crop_to_liver', action='store_true')
     parser.add_argument('--min_lesion_width', type=int, default=6,
                         help="a slice is included as a sick slice only if at "
                              "least one lesion has this width or larger in "
@@ -67,6 +68,10 @@ def index_slices(paths, min_lesion_width=0, min_liver_fraction=0.25):
     frac_liver = np.sum(seg[liver_extent]>0, axis=(1,2))/n_pixels_slice
     valid_liver_indices = (liver_extent.start
                            +np.where(frac_liver>min_liver_fraction)[0])
+    
+    ## If no liver for given `min_liver_fraction`, return.
+    #if len(valid_lesion_indices)==0:
+        #return slice(None, None), [], []
     
     # Determine the axial range that tightly contains the valid liver slices.
     valid_liver_extent = slice(valid_liver_indices.min(),
@@ -133,7 +138,7 @@ def compute_position_histogram(liver_extents, lesion_indices, bins=10):
     return histogram(all_normalized_indices, bins=bins)
 
 
-def get_slices(inputs, size, hist):
+def get_slices(inputs, size, hist, crop_to_liver):
     vol_path, seg_path, liver_extent, indices_h, indices_s = inputs
     
     # Load volume, segmentation.
@@ -145,6 +150,10 @@ def get_slices(inputs, size, hist):
     # Canonical normalization : consider only liver tissue. Use statistics
     # from the entire liver.
     vol = (vol-vol[seg==1].mean())/(vol[seg==1].std()*5+1)  # fit in tanh
+    
+    # Crop to liver, if requested.
+    if crop_to_liver:
+        vol[seg==0] = 0
     
     # Get axial slices.
     vol_slices_h = vol[indices_h]
@@ -172,10 +181,16 @@ def get_slices(inputs, size, hist):
     histogram_values = [hist.get_value(idx, liver_extent) for idx in indices_h]
     histogram_values = np.array(histogram_values)
     
-    # Concatenate liver segmentation slice to image volume slice.
-    h = np.stack([vol_slices_h, seg_slices_h], axis=1)  # channel dim : 1
-    s = np.stack([vol_slices_s, seg_slices_s==1], axis=1)
-    m = np.uint8(seg_slices_s==2)
+    if crop_to_liver:
+        # Previously cropped to liver.
+        h = vol_slices_h
+        s = vol_slices_s
+        m = np.uint8(seg_slices_s==2)
+    else:
+        # Concatenate liver segmentation slice to image volume slice.
+        h = np.stack([vol_slices_h, seg_slices_h>0], axis=1)  # channel dim=1
+        s = np.stack([vol_slices_s, seg_slices_s>0], axis=1)
+        m = np.uint8(seg_slices_s==2)
     
     return h, s, m, histogram_values
 
@@ -248,7 +263,8 @@ def prepare_dataset(args):
     with multiprocessing.Pool() as pool:
         iterator = pool.imap(partial(get_slices,
                                      size=args.resize,
-                                     hist=hist),
+                                     hist=hist,
+                                     crop_to_liver=args.crop_to_liver),
                              zip(paths_vol,
                                  paths_seg,
                                  all_liver_extents,
@@ -256,12 +272,16 @@ def prepare_dataset(args):
                                  all_lesion_indices))
         for i, out in enumerate(tqdm(iterator, total=NUM_CASES)):
             h, s, m, histogram_values = out
+            if args.crop_to_liver:
+                chunks = (1, args.resize, args.resize)
+            else:
+                chunks = (1, 2, args.resize, args.resize)
             if len(h):
                 f['h'].create_dataset(str(i),
                                       shape=h.shape,
                                       data=h,
                                       dtype=np.float32,
-                                      chunks=(1, 2, args.resize, args.resize),
+                                      chunks=chunks,
                                       compression='lzf')
                 f['h_histogram'].create_dataset(str(i),
                                                 shape=histogram_values.shape,
@@ -272,7 +292,7 @@ def prepare_dataset(args):
                                       shape=s.shape,
                                       data=s,
                                       dtype=np.float32,
-                                      chunks=(1, 2, args.resize, args.resize),
+                                      chunks=chunks,
                                       compression='lzf')
                 assert len(s)==len(m)
                 f['m'].create_dataset(str(i),
