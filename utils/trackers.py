@@ -1,6 +1,7 @@
 from collections import (defaultdict,
                          OrderedDict)
 import os
+import warnings
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -140,6 +141,19 @@ class summary_tracker(object):
             if isinstance(val, torch.Tensor):
                 value_dict[key] = val.cpu().numpy()
         for key, val in value_dict.items():
+            # Skip values with nan or inf. This is useful for metrics like
+            # gradient norm when using automated mixed precision since it
+            # causes occasional instability -- the optimizer automatically
+            # skips the update step at these times.
+            if np.any(np.isnan(val)):
+                warnings.warn("nan in {} - skipping in summary_tracker"
+                              "".format(key))
+                continue
+            if np.any(np.isinf(val)):
+                warnings.warn("inf in {} - skipping in summary_tracker"
+                              "".format(key))
+                continue
+            
             # Prefix key, if requested.
             if prefix is not None:
                 key = "{}_{}".format(prefix, key)
