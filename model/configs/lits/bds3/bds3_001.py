@@ -35,7 +35,8 @@ def build_model(lambda_disc=3,
                 lambda_f_id=0,
                 lambda_cyc=50,
                 lambda_seg=0.01,
-                lambda_enforce_sum=None):
+                lambda_enforce_sum=None,
+                mixed_precision=True):
     N = 512 # Number of features at the bottleneck.
     n = 128 # Number of features to sample at the bottleneck.
     image_size = (2, 256, 256)
@@ -135,8 +136,14 @@ def build_model(lambda_disc=3,
     remove_spectral_norm(submodel['decoder_residual'].out_conv[1].conv.op)
     remove_spectral_norm(submodel['decoder_residual'].classifier.op)
     
+    # If mixed precision mode, create the amp gradient scaler.
+    scaler = None
+    if mixed_precision:
+        print("DEBUG using mixed precision")
+        scaler = torch.cuda.amp.GradScaler()
+    
     model = segmentation_model(**submodel,
-                               scaler=torch.cuda.amp.GradScaler(),
+                               scaler=scaler,
                                shape_sample=z_shape,
                                loss_gan='hinge',
                                loss_seg=dice_loss(),
@@ -149,12 +156,14 @@ def build_model(lambda_disc=3,
                                lambda_cyc=lambda_cyc*lambda_scale,
                                lambda_seg=lambda_seg*lambda_scale)
     
-    return OrderedDict((
+    out = OrderedDict((
         ('G', model),
         ('D', nn.ModuleList([model.separate_networks['disc_A'],
                              model.separate_networks['disc_B']])),
-        ('scaler', model.scaler),
         ))
+    if mixed_precision:
+        out['scaler'] = model.scaler
+    return out
 
 
 class encoder(nn.Module):
