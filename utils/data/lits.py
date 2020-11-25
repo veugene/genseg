@@ -9,7 +9,8 @@ from data_tools.data_augmentation import image_random_transform
 from data_tools.wrap import multi_source_array
 
 
-def prepare_data_lits(path, masked_fraction=0, drop_masked=False, rng=None):
+def prepare_data_lits(path, masked_fraction=0, drop_masked=False,
+                      data_augmentation_kwargs=None, rng=None):
     """
     Convenience function to prepare LiTS data split into training and
     validation subsets.
@@ -122,7 +123,9 @@ def prepare_data_lits(path, masked_fraction=0, drop_masked=False, rng=None):
     # Create Dataset objects.
     dataset = {'train': None, 'valid': None, 'test': None}
     for key in ['train', 'valid', 'test']:
-        dataset[key] = LITSDataset(**data[key], rng=rng)
+        dataset[key] = LITSDataset(**data[key],
+                                   da_kwargs=data_augmentation_kwargs,
+                                   rng=rng)
     return dataset
 
 
@@ -132,14 +135,13 @@ class LITSDataset(Dataset):
     simultaneously returns healthy slices by sampling with replacement
     according to `h_histogram` weights.
     """
-    def __init__(self, h, s, m, h_histogram,
-                 data_augmentation_kwargs=None, rng=None):
+    def __init__(self, h, s, m, h_histogram, da_kwargs=None, rng=None):
         super().__init__()
         self.h = h
         self.s = s
         self.m = m
         self.h_histogram = h_histogram
-        self.data_augmentation_kwargs = data_augmentation_kwargs
+        self.da_kwargs = da_kwargs
         self.rng = rng
         if self.rng is None:
             self.rng = np.random.RandomState()
@@ -166,13 +168,9 @@ class LITSDataset(Dataset):
         s = s.astype(np.float32)
         
         # Data augmentation.
-        if self.data_augmentation_kwargs is not None:
-            h = image_random_transform(h,
-                                       **self.data_augmentation_kwargs,
-                                       n_warp_threads=1)
-            s = image_random_transform(s, m,
-                                       **self.data_augmentation_kwargs,
-                                       n_warp_threads=1)
+        if self.da_kwargs is not None:
+            h = image_random_transform(h, **self.da_kwargs)
+            s = image_random_transform(s, m, **self.da_kwargs)
             if m is not None:
                 s, m = s
         

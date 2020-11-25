@@ -95,6 +95,7 @@ def run(args):
     dataset = prepare_data_lits(path=args.data,
                                 masked_fraction=1.-args.labeled_fraction,
                                 drop_masked=args.yield_only_labeled,
+                                data_augmentation_kwargs=da_kwargs,
                                 rng=np.random.RandomState(args.data_seed))
     loader = {
         'train': DataLoader(dataset['train'],
