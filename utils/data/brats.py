@@ -195,7 +195,7 @@ def preprocessor_brats(data_augmentation_kwargs=None):
         the data augmentation code (image_stack_random_transform).
     """
         
-    def process_element(inputs, max_shape):
+    def process_element(inputs):
         h, s, m, hi, si = inputs
         
         # Float.
