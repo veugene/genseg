@@ -171,6 +171,9 @@ def run(args):
         metrics[key] = OrderedDict()
         metrics[key]['dice'] = dice_global(target_class=1,
                         output_transform=lambda x: (x['x_AM'], x['x_M']))
+        metrics[key]['l_seg'] = batchwise_loss_accumulator(
+                            output_transform=lambda x: x['l_seg'],
+                            skip_zero=True)
         if isinstance(experiment_state.model['G'], model_ae):
             metrics[key]['rec']  = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_rec'])

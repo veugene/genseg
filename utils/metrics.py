@@ -111,8 +111,11 @@ class batchwise_loss_accumulator(metric):
     The batch size is determined as the length of the loss input.
     
     output_transform : function that isolates the loss from the engine output.
+    skip_zero : if True, do not count loss when it is equal to zero (average
+        only over non-zero losses)
     """
-    def __init__(self, output_transform=lambda x: x):
+    def __init__(self, output_transform=lambda x: x, skip_zero=False):
+        self.skip_zero = skip_zero
         super(batchwise_loss_accumulator, self).__init__(output_transform)
     
     def update(self, loss):
@@ -122,8 +125,9 @@ class batchwise_loss_accumulator(metric):
             self._count += len(loss)
             self._total += loss.mean()*len(loss)
         else:
-            self._count += 1
-            self._total += loss
+            if loss!=0 or not self.skip_zero:
+                self._count += 1
+                self._total += loss
         
     def compute(self):
         return self._total/max(1., float(self._count))
