@@ -33,6 +33,7 @@ def get_parser():
                        help="Save images into tensorboard event files.")
     g_exp.add_argument('--init_seed', type=int, default=1234)
     g_exp.add_argument('--data_seed', type=int, default=0)
+    g_exp.add_argument('--data_split_seed', type=int, default=0)
     return parser
 
 
@@ -96,6 +97,7 @@ def run(args):
                                 masked_fraction=1.-args.labeled_fraction,
                                 drop_masked=args.yield_only_labeled,
                                 data_augmentation_kwargs=da_kwargs,
+                                split_seed=args.data_split_seed,
                                 rng=np.random.RandomState(args.data_seed))
     loader = {
         'train': DataLoader(dataset['train'],

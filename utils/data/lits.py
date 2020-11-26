@@ -10,7 +10,8 @@ from data_tools.wrap import multi_source_array
 
 
 def prepare_data_lits(path, masked_fraction=0, drop_masked=False,
-                      data_augmentation_kwargs=None, rng=None):
+                      data_augmentation_kwargs=None, split_seed=0,
+                      rng=None):
     """
     Convenience function to prepare LiTS data split into training and
     validation subsets.
@@ -19,6 +20,8 @@ def prepare_data_lits(path, masked_fraction=0, drop_masked=False,
     masked_fraction (float) : The fraction in [0, 1.] of cases in the 
         training set for which  to return segmentation masks as None
     drop_masked (bool) : Whether to omit cases with "masked" segmentations.
+    split_seed (int) : The random seed to determine tha validation and test
+        set split.
     rng (numpy RandomState) : Random number generator.
     
     NOTE: The rng passed for data preparation is used to determine which 
@@ -34,7 +37,7 @@ def prepare_data_lits(path, masked_fraction=0, drop_masked=False,
     # Random 20% data split (10% validation, 10% testing).
     f = h5py.File(path, 'r')
     cases = list(f['s'].keys())
-    rnd_state = np.random.RandomState(0)
+    rnd_state = np.random.RandomState(split_seed)
     rnd_state.shuffle(cases)
     n_cases = len(cases)
     split = {'train': cases[:int(0.8*n_cases)],
