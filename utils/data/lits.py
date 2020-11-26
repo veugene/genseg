@@ -122,10 +122,11 @@ def prepare_data_lits(path, masked_fraction=0, drop_masked=False,
     
     # Create Dataset objects.
     dataset = {'train': None, 'valid': None, 'test': None}
-    for key in ['train', 'valid', 'test']:
-        dataset[key] = LITSDataset(**data[key],
+    dataset['train'] = LITSDataset(**data['train'],
                                    da_kwargs=data_augmentation_kwargs,
                                    rng=rng)
+    dataset['valid'] = LITSDataset(**data['valid'], rng=rng)
+    dataset['test']  = LITSDataset(**data['test'],  rng=rng)
     return dataset
 
 
