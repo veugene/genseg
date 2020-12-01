@@ -11,7 +11,7 @@ from data_tools.wrap import multi_source_array
 
 def prepare_data_lits(path, masked_fraction=0, drop_masked=False,
                       data_augmentation_kwargs=None, split_seed=0,
-                      rng=None):
+                      fold=None, rng=None):
     """
     Convenience function to prepare LiTS data split into training and
     validation subsets.
@@ -22,6 +22,8 @@ def prepare_data_lits(path, masked_fraction=0, drop_masked=False,
     drop_masked (bool) : Whether to omit cases with "masked" segmentations.
     split_seed (int) : The random seed to determine tha validation and test
         set split.
+    fold (int) : The fold in {0,1,2,3} for 4-fold cross-validation. If None,
+        then validation and test sets are some fixed 10% of the data, each.
     rng (numpy RandomState) : Random number generator.
     
     NOTE: The rng passed for data preparation is used to determine which 
@@ -34,15 +36,35 @@ def prepare_data_lits(path, masked_fraction=0, drop_masked=False,
     weights equal to their corresponding position histogram values.
     """
     
-    # Random 20% data split (10% validation, 10% testing).
     f = h5py.File(path, 'r')
     cases = list(f['s'].keys())
-    rnd_state = np.random.RandomState(split_seed)
-    rnd_state.shuffle(cases)
     n_cases = len(cases)
-    split = {'train': cases[:int(0.8*n_cases)],
-             'valid': cases[int(0.8*n_cases):int(0.9*n_cases)],
-             'test' : cases[int(0.9*n_cases):]}
+    rng_split = np.random.RandomState(split_seed)
+    rng_split.shuffle(cases)
+    if fold is None:
+        # Random 20% data split (10% validation, 10% testing).
+        split = {'train': cases[:int(0.8*n_cases)],
+                 'valid': cases[int(0.8*n_cases):int(0.9*n_cases)],
+                 'test' : cases[int(0.9*n_cases):]}
+    else:
+        # 25% of the data for test, 10% for validation. The validation
+        # subset is randomly sampled from the data that isn't in the test
+        # fold.
+        assert fold in [0, 1, 2, 3]
+        indices = [int(x*n_cases) for x in [0.25, 0.5, 0.75, 1]]
+        fold_cases = {0: cases[0         :indices[0]],
+                      1: cases[indices[0]:indices[1]],
+                      2: cases[indices[1]:indices[2]],
+                      3: cases[indices[2]:indices[3]]}
+        test = fold_cases[fold]
+        not_test = sum([fold_cases[x] for x in {0,1,2,3}-{fold}], [])
+        rng_valid = np.random.RandomState(fold)     # Different for each fold.
+        idx_valid = rng_valid.permutation(len(not_test))[:int(0.1*n_cases)]
+        split = {'train': [x for i, x in enumerate(not_test)
+                           if i not in idx_valid],
+                 'valid': [x for i, x in enumerate(not_test)
+                           if i in idx_valid],
+                 'test' : test}
     
     # Assemble volumes.
     volumes_s = {'train': [f['s'][k] for k in split['train']],

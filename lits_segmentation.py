@@ -34,11 +34,14 @@ def get_parser():
     g_exp.add_argument('--init_seed', type=int, default=1234)
     g_exp.add_argument('--data_seed', type=int, default=0)
     g_exp.add_argument('--data_split_seed', type=int, default=0)
-    g_exp.add_argument('--data_split_by_slice', action='store_true',
+    split = g_exp.add_mutually_exclusive_group()
+    split.add_argument('--data_split_by_slice', action='store_true',
                        help="Split data to training, validation, test subsets "
                             "by randomly sampling from all slices without "
                             "making sure that a volume's slices are not "
                             "present in more than one subset.")
+    split.add_argument('--data_fold', type=int, default=None,
+                       choices=[0,1,2,3], help="For 4-fold cross-validation.")
     return parser
 
 
@@ -108,6 +111,7 @@ def run(args):
                                 drop_masked=args.yield_only_labeled,
                                 data_augmentation_kwargs=da_kwargs,
                                 split_seed=args.data_split_seed,
+                                fold=args.data_fold,
                                 rng=np.random.RandomState(args.data_seed))
     loader = {
         'train': DataLoader(dataset['train'],
