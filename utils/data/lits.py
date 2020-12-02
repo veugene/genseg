@@ -82,21 +82,33 @@ def prepare_data_lits(path, masked_fraction=0, drop_masked=False,
     # The `masked_fraction` determines the maximal fraction of slices that
     # are to be thus removed. All or none of the slices are selected for 
     # each volume.
-    masked = []
     n_cases_train = len(volumes_m['train'])
     num_total_slices = sum([len(v) for v in volumes_m['train']])
-    num_masked_slices = 0
+    sizes = np.array([len(v) for v in volumes_m['train']])
+    # Mask all volumes that have more slices than the number that should be
+    # visible.
+    masked_arr = np.argwhere(sizes > num_total_slices*(1-masked_fraction))
+    masked = list(masked_arr.flatten())
+    visible = []
+    if len(masked)==n_cases_train and masked_fraction!=1:
+        # All volumes are masked but some slices should be visible.
+        # Select the volume with the fewest slices to be visible.
+        idx = np.argmin(sizes)
+        masked.remove(idx)
+        visible = [idx]
+    # Keep masking volumes until enough slices are masked out.
+    num_masked_slices = sum([len(volumes_m['train'][i]) for i in masked])
     max_masked_slices = int(min(num_total_slices,
                                 num_total_slices*masked_fraction+0.5))
     for i in rng.permutation(n_cases_train):
+        if i in masked:
+            continue    # Already masked.
         num_slices = len(volumes_m['train'][i])
-        if num_slices>0 and num_masked_slices >= max_masked_slices:
-            continue    # Stop masking non-empty volumes (mask empty).
         if num_slices+num_masked_slices >= max_masked_slices:
             continue    # Stop masking non-empty volumes (mask empty).
         masked.append(i)
         num_masked_slices += num_slices
-    visible = [i for i in range(n_cases_train) if i not in masked]
+    visible.extend([i for i in range(n_cases_train) if i not in masked])
     print("DEBUG: A total of {}/{} slices are labeled across {} "
           "volumes ({:.1f}%)."
           "".format(num_total_slices-num_masked_slices,
