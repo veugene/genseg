@@ -113,7 +113,7 @@ class segmentation_model(nn.Module):
         x_AM_unsup_teacher = None
         if self.lambda_con and len(mask_indices) < len(mask):
             x_AM_unsup_student = x_AM_student[no_mask_indices]
-            x_AM_unsup_teacher = x_AM_teacher[no_mask_indices]
+            x_AM_unsup_teacher = x_AM_teacher[no_mask_indices].detach()
             loss_con = _mean(F.mse_loss(x_AM_unsup_student,
                                         x_AM_unsup_teacher))
         
