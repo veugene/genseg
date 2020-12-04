@@ -177,7 +177,9 @@ class dice_per_input(metric):
         self._count += b
         
     def compute(self):
-        average_dice = self._dice/self._count
+        average_dice = 0
+        if self._count:
+            average_dice = self._dice/self._count
         return average_dice
     
     def reset(self):
