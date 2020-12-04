@@ -92,7 +92,7 @@ class dice_global(metric):
         # Accumulate dice counts.
         self._intersection += torch.sum(y_target * y_pred_f)
         self._y_target_sum += torch.sum(y_target)
-        self._y_pred_sum   += torch.sum(y_pred)
+        self._y_pred_sum   += torch.sum(y_pred_f)
         
     def compute(self):
         dice_val = -(2.*self._intersection+self._smooth) / \
