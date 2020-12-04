@@ -205,9 +205,10 @@ def run(args):
                             output_transform=lambda x: x['l_DA'])
             metrics[key]['DB']   = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_DB'])
-            metrics[key]['miA']  = batchwise_loss_accumulator(
+            if experiment_state.model['G'].separate_networks['mi_estimator']:
+                metrics[key]['miA']  = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_mi_A'])
-            metrics[key]['miBA'] = batchwise_loss_accumulator(
+                metrics[key]['miBA'] = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_mi_BA'])
         elif isinstance(experiment_state.model['G'], model_mt):
             metrics[key]['seg']  = batchwise_loss_accumulator(
