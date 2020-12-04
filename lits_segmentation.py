@@ -69,7 +69,8 @@ def run(args):
     from utils.data.lits_by_slice import prepare_data_lits as lits_by_slice
     from utils.experiment import experiment
     from utils.metrics import (batchwise_loss_accumulator,
-                               dice_global)
+                               dice_global,
+                               dice_per_input)
     from utils.trackers import(image_logger,
                                scoring_function,
                                summary_tracker)
@@ -186,6 +187,8 @@ def run(args):
     for key in engines:
         metrics[key] = OrderedDict()
         metrics[key]['dice'] = dice_global(target_class=1,
+                        output_transform=lambda x: (x['x_AM'], x['x_M']))
+        metrics[key]['dice_slice'] = dice_per_input(target_class=1,
                         output_transform=lambda x: (x['x_AM'], x['x_M']))
         metrics[key]['l_seg'] = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_seg'],
