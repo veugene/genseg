@@ -180,7 +180,7 @@ def run(args):
         for key in filter(lambda x: x.startswith('x_'), outputs.keys()):
             if outputs['x_M'] is None:
                 outputs[key] = None
-            elif outputs[key] is not None and key!='x_M' and 'x_AM' not in key:
+            elif outputs[key] is not None and len(outputs)==len(M):
                 outputs[key] = outputs[key][indices]
         
         return outputs
