@@ -254,19 +254,19 @@ class segmentation_model(nn.Module):
                     if self.disc_clip_norm:
                         if self.scaler is not None:
                             self.scaler.unscale_(optimizer['D'])
-                        nn.utils.clip_grad_norm_(disc_A.parameters(),
-                                                 max_norm=self.disc_clip_norm)
+                        #nn.utils.clip_grad_norm_(disc_A.parameters(),
+                                                 #max_norm=self.disc_clip_norm)
                         nn.utils.clip_grad_norm_(disc_B.parameters(),
                                                  max_norm=self.disc_clip_norm)
                     step(optimizer['D'])
-                    gradnorm_D = grad_norm(disc_A)+grad_norm(disc_B)
+                    #gradnorm_D = grad_norm(disc_A)+grad_norm(disc_B)
+                    gradnorm_D = grad_norm(disc_B)
                 # Update MI estimator.
                 mi_estimator = self.separate_networks['mi_estimator']
                 if do_updates_bool and mi_estimator is not None:
                     clear_grad(optimizer['E'])
                     with self._autocast_if_needed():
-                        _loss = _reduce([loss_mi_est['A'],
-                                         loss_mi_est['BA']]).mean()
+                        _loss = _reduce(loss_mi_est.values()).mean()
                     backward(_loss)
                     step(optimizer['E'])
         
@@ -353,7 +353,8 @@ class segmentation_model(nn.Module):
         outputs['x_AM'] = x_AM_packed
         outputs.update(losses_G)
         outputs['l_D']  = loss_D
-        outputs['l_DA'] = _reduce([loss_disc['A']])
+        #outputs['l_DA'] = _reduce([loss_disc['A']])
+        outputs['l_DA'] = 0
         outputs['l_DB'] = _reduce([loss_disc['B']])
         outputs['l_gradnorm_D'] = gradnorm_D
         outputs['l_gradnorm_G'] = gradnorm_G
@@ -448,21 +449,21 @@ class _forward(nn.Module):
         # B->(B, dA)->A
         x_BA = x_BA_residual = x_BB = z_BA = u_BA = c_B = None
         x_BA_list = x_BB_list = None
-        if self.lambda_disc or self.lambda_x_id or self.lambda_z_id:
-            info_BA = {'skip_info': skip_B}
-            if class_A is not None:
-                info_BA['class_info'] = class_B
-            u_BA = self._z_sample(batch_size, rng=rng)
-            c_B  = s_B[:,:s_B.size(1)-self.shape_sample[0]]
-            z_BA = torch.cat([c_B, u_BA], dim=1)
-            x_BB, _ = self.decoder_common(c_B, **info_BA)
-            x_BA_residual, _ = self.decoder_residual(z_BA, **info_BA)
-            x_BA = add(x_BB, x_BA_residual)
+        #if self.lambda_disc or self.lambda_x_id or self.lambda_z_id:
+            #info_BA = {'skip_info': skip_B}
+            #if class_A is not None:
+                #info_BA['class_info'] = class_B
+            #u_BA = self._z_sample(batch_size, rng=rng)
+            #c_B  = s_B[:,:s_B.size(1)-self.shape_sample[0]]
+            #z_BA = torch.cat([c_B, u_BA], dim=1)
+            #x_BB, _ = self.decoder_common(c_B, **info_BA)
+            #x_BA_residual, _ = self.decoder_residual(z_BA, **info_BA)
+            #x_BA = add(x_BB, x_BA_residual)
             
-            # Unpack.
-            x_BA, x_BA_list = unpack(x_BA)
-            x_BB, x_BB_list = unpack(x_BB)
-            x_BA_residual, _= unpack(x_BA_residual)
+            ## Unpack.
+            #x_BA, x_BA_list = unpack(x_BA)
+            #x_BB, x_BB_list = unpack(x_BB)
+            #x_BA_residual, _= unpack(x_BA_residual)
         
         # Optional separate autoencoder.
         x_AA_ae = x_BB_ae = None
@@ -486,23 +487,23 @@ class _forward(nn.Module):
         # Reconstruct latent codes.
         s_BA = s_AA = c_AB = c_BB = None
         if self.lambda_z_id or self.lambda_cyc:
-            s_BA, skip_BA = self.encoder(x_BA)
+            #s_BA, skip_BA = self.encoder(x_BA)
             s_AA, _       = self.encoder(x_AA)
             s_AB, _       = self.encoder(x_AB)
-            s_BB, _       = self.encoder(x_BB)
+            #s_BB, _       = self.encoder(x_BB)
             c_AB = s_AB[:,:s_AB.size(1)-self.shape_sample[0]]
-            c_BB = s_BB[:,:s_BB.size(1)-self.shape_sample[0]]
+            #c_BB = s_BB[:,:s_BB.size(1)-self.shape_sample[0]]
         
         # Cycle.
         x_BAB = c_BA = u_BA = None
-        if self.lambda_cyc:
-            info_BAB = {'skip_info': skip_BA}
-            if class_A is not None:
-                info_BAB['class_info'] = class_B
-            c_BA, u_BA = torch.split(s_BA, [s_BA.size(1)-self.shape_sample[0],
-                                            self.shape_sample[0]], dim=1)
-            x_BAB, _ = self.decoder_common(c_BA, **info_BAB)
-            x_BAB, _ = unpack(x_BAB)
+        #if self.lambda_cyc:
+            #info_BAB = {'skip_info': skip_BA}
+            #if class_A is not None:
+                #info_BAB['class_info'] = class_B
+            #c_BA, u_BA = torch.split(s_BA, [s_BA.size(1)-self.shape_sample[0],
+                                            #self.shape_sample[0]], dim=1)
+            #x_BAB, _ = self.decoder_common(c_BA, **info_BAB)
+            #x_BAB, _ = unpack(x_BAB)
         
         # Compile outputs and return.
         visible = OrderedDict((
@@ -572,38 +573,38 @@ class _loss_D(nn.Module):
     def forward(self, x_A, x_B, out_BA, out_AB, c_A, u_A, c_BA, u_BA,
                 class_A=None, class_B=None):
         # Detach all tensors; updating discriminator, not generator.
-        if isinstance(out_BA, list):
-            out_BA = [x.detach() for x in out_BA]
-        else:
-            out_BA = out_BA.detach()
+        #if isinstance(out_BA, list):
+            #out_BA = [x.detach() for x in out_BA]
+        #else:
+            #out_BA = out_BA.detach()
         if isinstance(out_AB, list):
             out_AB = [x.detach() for x in out_AB]
         else:
             out_AB = out_AB.detach()
         c_A = c_A.detach()
         u_A = u_A.detach()
-        c_BA = c_BA.detach()
-        u_BA = u_BA.detach()
+        #c_BA = c_BA.detach()
+        #u_BA = u_BA.detach()
         
         # If outputs are lists, get the last item (image).
-        x_BA = out_BA
+        #x_BA = out_BA
         x_AB = out_AB
-        if not isinstance(x_BA, torch.Tensor):
-            x_BA = out_BA[-1]
+        #if not isinstance(x_BA, torch.Tensor):
+            #x_BA = out_BA[-1]
         if not isinstance(x_AB, torch.Tensor):
             x_AB = out_AB[-1]
         
         # Discriminators.
-        kwargs_real = None if class_A is None else {'class_info': class_A}
-        kwargs_fake = None if class_B is None else {'class_info': class_B}
         loss_disc = OrderedDict()
-        loss_disc_A = self._gan.D(self.net['disc_A'],
-                                  fake=out_BA,
-                                  real=x_A,
-                                  kwargs_real=kwargs_real,
-                                  kwargs_fake=kwargs_fake,
-                                  scaler=self.scaler)
-        loss_disc['A'] = loss_disc_A
+        #kwargs_real = None if class_A is None else {'class_info': class_A}
+        #kwargs_fake = None if class_B is None else {'class_info': class_B}
+        #loss_disc_A = self._gan.D(self.net['disc_A'],
+                                  #fake=out_BA,
+                                  #real=x_A,
+                                  #kwargs_real=kwargs_real,
+                                  #kwargs_fake=kwargs_fake,
+                                  #scaler=self.scaler)
+        #loss_disc['A'] = loss_disc_A
         kwargs_real = None if class_A is None else {'class_info': class_B}
         kwargs_fake = None if class_B is None else {'class_info': class_A}
         loss_disc_B = self._gan.D(self.net['disc_B'],
@@ -616,11 +617,11 @@ class _loss_D(nn.Module):
         
         # Slice number classification.
         loss_slice_est = defaultdict(int)
-        if self.lambda_slice and class_A is not None:
-            loss_slice_est['A'] = _cce(self.net['class_A'](x_A), class_A)
-            if self.debug_ac_gan:
-                loss_slice_est['BA'] = _cce(self.net['class_A'](x_BA), 
-                                            class_A)
+        #if self.lambda_slice and class_A is not None:
+            #loss_slice_est['A'] = _cce(self.net['class_A'](x_A), class_A)
+            #if self.debug_ac_gan:
+                #loss_slice_est['BA'] = _cce(self.net['class_A'](x_BA), 
+                                            #class_A)
         if self.lambda_slice and class_B is not None:
             loss_slice_est['B'] = _cce(self.net['class_B'](x_B), class_B)
             if self.debug_ac_gan:
@@ -631,8 +632,8 @@ class _loss_D(nn.Module):
         loss_mi_est = defaultdict(int)
         if self.net['mi'] is not None:
             loss_mi_est['A'] = self.net['mi'](c_A, u_A)
-            if self.lambda_cyc:
-                loss_mi_est['BA'] = self.net['mi'](c_BA, u_BA)
+            #if self.lambda_cyc:
+                #loss_mi_est['BA'] = self.net['mi'](c_BA, u_BA)
         
         return loss_disc, loss_slice_est, loss_mi_est
 
@@ -672,13 +673,13 @@ class _loss_G(nn.Module):
         loss_mi_gen = defaultdict(int)
         if self.net['mi'] is not None and self.lambda_mi:
             loss_mi_gen['A']  = -self.lambda_mi*self.net['mi'](c_A, u_A)
-            if self.lambda_cyc:
-                loss_mi_gen['BA'] = -self.lambda_mi*self.net['mi'](c_BA, u_BA)
+            #if self.lambda_cyc:
+                #loss_mi_gen['BA'] = -self.lambda_mi*self.net['mi'](c_BA, u_BA)
         
         # Slice number classification.
         loss_slice_gen = defaultdict(int)
-        if self.lambda_slice and class_A is not None:
-            loss_slice_gen['BA'] = _cce(self.net['class_A'](x_BA), class_A)
+        #if self.lambda_slice and class_A is not None:
+            #loss_slice_gen['BA'] = _cce(self.net['class_A'](x_BA), class_A)
         if self.lambda_slice and class_B is not None:
             loss_slice_gen['AB'] = _cce(self.net['class_B'](x_AB), class_B)
         
@@ -692,41 +693,41 @@ class _loss_G(nn.Module):
                                     fake=x_AB, real=x_B,
                                     kwargs_real=kwargs_real,
                                     kwargs_fake=kwargs_fake)
-            kwargs_real = None if class_A is None else {'class_info': class_A}
-            kwargs_fake = None if class_B is None else {'class_info': class_B}
-            loss_gen['BA'] = self.lambda_disc*self._gan.G(
-                                    self.net['disc_A'],
-                                    fake=x_BA, real=x_A,
-                                    kwargs_real=kwargs_real,
-                                    kwargs_fake=kwargs_fake)
+            #kwargs_real = None if class_A is None else {'class_info': class_A}
+            #kwargs_fake = None if class_B is None else {'class_info': class_B}
+            #loss_gen['BA'] = self.lambda_disc*self._gan.G(
+                                    #self.net['disc_A'],
+                                    #fake=x_BA, real=x_A,
+                                    #kwargs_real=kwargs_real,
+                                    #kwargs_fake=kwargs_fake)
         
         # Reconstruction loss.
         loss_rec = defaultdict(int)
         if self.lambda_x_id:
             loss_rec['AA'] = self.lambda_x_id*self.loss_rec(x_AA, x_A)
-            loss_rec['BB'] = self.lambda_x_id*self.loss_rec(x_BB, x_B)
+            #loss_rec['BB'] = self.lambda_x_id*self.loss_rec(x_BB, x_B)
         if self.lambda_x_ae and x_AA_ae is not None:
             loss_rec['AA_ae'] = self.lambda_x_ae*self.loss_rec(x_AA_ae, x_A)
-        if self.lambda_x_ae and x_BB_ae is not None:
-            loss_rec['BB_ae'] = self.lambda_x_ae*self.loss_rec(x_BB_ae, x_B)
-        if self.lambda_x_id and self.lambda_cyc:
-            loss_rec['BB'] += self.lambda_cyc*self.loss_rec(x_BAB, x_B)
+        #if self.lambda_x_ae and x_BB_ae is not None:
+            #loss_rec['BB_ae'] = self.lambda_x_ae*self.loss_rec(x_BB_ae, x_B)
+        #if self.lambda_x_id and self.lambda_cyc:
+            #loss_rec['BB'] += self.lambda_cyc*self.loss_rec(x_BAB, x_B)
         if self.lambda_z_id:
-            loss_rec['z_BA'] = self.lambda_z_id*self.loss_rec(s_BA, z_BA)
+            #loss_rec['z_BA'] = self.lambda_z_id*self.loss_rec(s_BA, z_BA)
             loss_rec['z_AB'] = self.lambda_z_id*self.loss_rec(c_AB, c_A)
             loss_rec['z_AA'] = self.lambda_z_id*self.loss_rec(s_AA, s_A)
-            loss_rec['z_BB'] = self.lambda_z_id*self.loss_rec(c_BB, c_B)
+            #loss_rec['z_BB'] = self.lambda_z_id*self.loss_rec(c_BB, c_B)
         
         # Reconstruction of intermediate features.
         if self.lambda_f_id:
             loss_rec['AA'] = _reduce([loss_rec['AA']])
-            loss_rec['BB'] = _reduce([loss_rec['BB']])
+            #loss_rec['BB'] = _reduce([loss_rec['BB']])
             for s, t in zip(x_AA_list, skip_A[::-1]):
                 loss_rec['AA'] += _reduce([ self.lambda_f_id
                                            *self.loss_rec(s, t)])
-            for s, t in zip(x_BB_list, skip_B[::-1]):
-                loss_rec['BB'] += _reduce([ self.lambda_f_id
-                                           *self.loss_rec(s, t)])
+            #for s, t in zip(x_BB_list, skip_B[::-1]):
+                #loss_rec['BB'] += _reduce([ self.lambda_f_id
+                                           #*self.loss_rec(s, t)])
         
         # All generator losses combined.
         loss_G = ( _reduce(loss_gen.values())
