@@ -23,7 +23,7 @@ from model.common.network.basic import (adjust_to_size,
 from model.mean_teacher_segmentation import segmentation_model
 
 
-def build_model():
+def build_model(lambda_con=0.01, alpha_max=0.99):
     N = 512 # Number of features at the bottleneck.
     kwargs = {
         'in_channels'         : 1,
@@ -47,8 +47,8 @@ def build_model():
         student=encoder_decoder(**kwargs),
         teacher=encoder_decoder(**kwargs),
         loss_seg=dice_loss(),
-        lambda_con=0.01,
-        alpha_max=0.99)
+        lambda_con=lambda_con,
+        alpha_max=alpha_max)
     return {'G': model}
 
 
