@@ -37,6 +37,11 @@ def get_parser():
                        help="Save images into tensorboard event files.")
     g_exp.add_argument('--init_seed', type=int, default=1234)
     g_exp.add_argument('--data_seed', type=int, default=0)
+    g_exp.add_argument('--label_corruption', type=float, default=None,
+                       help="The sigma value of the spline warp applied to "
+                            "to the target label mask during training in "
+                            "order to corrupt it. Used for testing "
+                            "robustness to label noise.")
     return parser
 
 
@@ -125,7 +130,8 @@ def run(args):
                                    sample_random=True,
                                    batch_size=args.batch_size_train,
                                    preprocessor=preprocessor_brats(
-                                       data_augmentation_kwargs=da_kwargs),
+                                       data_augmentation_kwargs=da_kwargs,
+                                       label_corruption=args.label_corruption),
                                    nb_io_workers=args.nb_io_workers,
                                    nb_proc_workers=args.nb_proc_workers,
                                    rng=np.random.RandomState(args.init_seed)),
@@ -133,7 +139,8 @@ def run(args):
                                    sample_random=True,
                                    batch_size=args.batch_size_valid,
                                    preprocessor=preprocessor_brats(
-                                       data_augmentation_kwargs=None),
+                                       data_augmentation_kwargs=None,
+                                       label_corruption=None),
                                    nb_io_workers=args.nb_io_workers,
                                    nb_proc_workers=args.nb_proc_workers,
                                    rng=np.random.RandomState(args.init_seed)),

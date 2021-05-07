@@ -187,12 +187,15 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
     return data
 
 
-def preprocessor_brats(data_augmentation_kwargs=None):
+def preprocessor_brats(data_augmentation_kwargs=None, label_corruption=None):
     """
     Preprocessor function to pass to a data_flow, for BRATS data.
     
     data_augmentation_kwargs : Dictionary of keyword arguments to pass to
         the data augmentation code (image_stack_random_transform).
+    label_corruption (float) : The sigma value of the spline warp applied to
+        to the target label mask during training in order to corrupt it. Used
+        for testing robustness to label noise.
     """
         
     def process_element(inputs):
@@ -215,6 +218,15 @@ def preprocessor_brats(data_augmentation_kwargs=None):
                 s, m = _
             else:
                 s = _
+        
+        # Label corruption.
+        if label_corruption is not None:
+            if m is not None:
+                m = image_random_transform(m,
+                                           spline_warp=True,
+                                           warp_sigma=label_corruption,
+                                           warp_grid_size=3,
+                                           n_warp_threads=1)
         
         # Remove distant outlier intensities.
         if h is not None:
