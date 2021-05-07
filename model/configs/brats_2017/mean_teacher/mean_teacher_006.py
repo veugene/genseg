@@ -240,6 +240,7 @@ class encoder_decoder(nn.Module):
                     ValueError()
             else:
                 out = block(out)
+                out = adjust_to_size(out, skips[n].size()[2:])
             if not out.is_contiguous():
                 out = out.contiguous()
         out = self.pre_conv(out)

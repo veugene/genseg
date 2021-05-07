@@ -23,7 +23,9 @@ from model.common.network.basic import (adjust_to_size,
 from model.mean_teacher_segmentation import segmentation_model
 
 
-def build_model(lambda_con=0.01, alpha_max=0.99):
+def build_model(long_skip='skinny_cat', lambda_con=0.01, alpha_max=0.99):
+    if long_skip=='none':
+        long_skip = None
     N = 512 # Number of features at the bottleneck.
     kwargs = {
         'in_channels'         : 1,
@@ -31,7 +33,7 @@ def build_model(lambda_con=0.01, alpha_max=0.99):
         'enc_layer_size'      : [N//32, N//16, N//8, N//4, N//2, N],
         'dec_layer_size'      : [N//2, N//4, N//8, N//16, N//32],
         'skip'                : True,
-        'long_skip_merge_mode': 'skinny_cat',
+        'long_skip_merge_mode': long_skip,
         'dropout'             : 0.4,
         'enc_normalization'   : None,
         'dec_normalization'   : None,
@@ -238,6 +240,8 @@ class encoder_decoder(nn.Module):
                     ValueError()
             else:
                 out = block(out)
+                assert skips is not None    # Decoder must take skips.
+                out = adjust_to_size(out, skips[n].size()[2:])
             if not out.is_contiguous():
                 out = out.contiguous()
         out = self.pre_conv(out)

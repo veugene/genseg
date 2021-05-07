@@ -1,5 +1,3 @@
-# ae_001L with mse instead of mae
-
 import torch
 from torch import nn
 from torch.functional import F
@@ -28,7 +26,7 @@ def build_model(long_skip='skinny_cat', lambda_rec=1, lambda_seg=1):
     if long_skip=='none':
         long_skip = None
     N = 512 # Number of features at the bottleneck.
-    image_size = (1, 256, 256)
+    image_size = (4, 240, 120)
     
     encoder_kwargs = {
         'input_shape'         : image_size,
@@ -77,9 +75,9 @@ def build_model(long_skip='skinny_cat', lambda_rec=1, lambda_seg=1):
                                    num_classes=1,
                                    **decoder_kwargs),
                                loss_rec=mse,
-                               loss_seg=dice_loss(),
-                               lambda_rec=1.,
-                               lambda_seg=1.,
+                               loss_seg=dice_loss([1,2,4]),
+                               lambda_rec=lambda_rec,
+                               lambda_seg=lambda_seg,
                                rng=np.random.RandomState(1234))
     
     return {'G': model}

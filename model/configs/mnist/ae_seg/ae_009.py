@@ -1,5 +1,4 @@
-# ae_001L with mse instead of mae
-
+from collections import OrderedDict
 import torch
 from torch import nn
 from torch.functional import F
@@ -17,24 +16,25 @@ from model.common.network.basic import (adjust_to_size,
                                         instance_normalization,
                                         layer_normalization,
                                         norm_nlin_conv,
-                                        pool_block)
+                                        pool_block,
+                                        repeat_block)
 from model.common.losses import (dist_ratio_mse_abs,
                                  mae,
                                  mse)
 from model.ae_segmentation import segmentation_model
 
 
-def build_model(long_skip='skinny_cat', lambda_rec=1, lambda_seg=1):
+def build_model(long_skip='skinny_cat', lambda_rec=1., lambda_seg=1.):
     if long_skip=='none':
         long_skip = None
     N = 512 # Number of features at the bottleneck.
-    image_size = (1, 256, 256)
+    image_size = (1, 48, 48)
     
     encoder_kwargs = {
         'input_shape'         : image_size,
-        'num_conv_blocks'     : 6,
+        'num_conv_blocks'     : 5,
         'block_type'          : conv_block,
-        'num_channels_list'   : [N//32, N//16, N//8, N//4, N//2, N],
+        'num_channels_list'   : [N//16, N//8, N//4, N//2, N],
         'skip'                : True,
         'dropout'             : 0.,
         'normalization'       : instance_normalization,
@@ -51,9 +51,9 @@ def build_model(long_skip='skinny_cat', lambda_rec=1, lambda_seg=1):
     decoder_kwargs = {
         'input_shape'         : enc_out_shape,
         'output_shape'        : image_size,
-        'num_conv_blocks'     : 5,
+        'num_conv_blocks'     : 4,
         'block_type'          : conv_block,
-        'num_channels_list'   : [N//2, N//4, N//8, N//16, N//32],
+        'num_channels_list'   : [N//2, N//4, N//8, N//16],
         'skip'                : True,
         'dropout'             : 0.,
         'normalization'       : layer_normalization,
@@ -78,8 +78,8 @@ def build_model(long_skip='skinny_cat', lambda_rec=1, lambda_seg=1):
                                    **decoder_kwargs),
                                loss_rec=mse,
                                loss_seg=dice_loss(),
-                               lambda_rec=1.,
-                               lambda_seg=1.,
+                               lambda_rec=lambda_rec,
+                               lambda_seg=lambda_seg,
                                rng=np.random.RandomState(1234))
     
     return {'G': model}
@@ -340,8 +340,26 @@ class decoder(nn.Module):
             out = torch.tanh(out)
         else:
             out = self.classifier(out)
-            if self.num_classes==1:
-                out = torch.sigmoid(out)
-            else:
-                out = torch.softmax(out, dim=1)
+            out = torch.sigmoid(out)
+        return out
+
+
+class mi_estimation_network(nn.Module):
+    def __init__(self, x_size, z_size, n_hidden):
+        super(mi_estimation_network, self).__init__()
+        self.x_size = x_size
+        self.z_size = z_size
+        self.n_hidden = n_hidden
+        modules = []
+        modules.append(nn.Linear(x_size+z_size, self.n_hidden))
+        modules.append(nn.ReLU())
+        for i in range(2):
+            modules.append(nn.Linear(self.n_hidden, self.n_hidden))
+            modules.append(nn.ReLU())
+        modules.append(nn.Linear(self.n_hidden, 1))
+        self.model = nn.Sequential(*tuple(modules))
+    
+    def forward(self, x, z):
+        out = self.model(torch.cat([x.view(x.size(0), -1),
+                                    z.view(z.size(0), -1)], dim=-1))
         return out
