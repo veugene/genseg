@@ -300,6 +300,10 @@ def _isrunning_canada(path):
     # If the process is still running, wait. If there is no such process,
     # assume the job has failed to launch.
     
+    # If the path does not exist, nothing is running with that path.
+    if not os.path.exists(path):
+        return False
+    
     # Helper to check if a lock is active.
     def lock_is_active(lock_path):
         with open(lock_path, 'r') as lock:
