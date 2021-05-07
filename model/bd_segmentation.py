@@ -1,9 +1,12 @@
 from collections import (defaultdict,
                          OrderedDict)
+from contextlib import nullcontext
+import functools
 import numpy as np
 import torch
 from torch import nn
 from torch.autograd import Variable
+from torch.cuda.amp import autocast
 import torch.nn.functional as F
 from fcn_maker.loss import dice_loss
 from .common.network.basic import grad_norm
@@ -25,6 +28,8 @@ def clear_grad(optimizer):
 
 
 def _reduce(loss):
+    # Reduce torch tensors with dim > 1 with a mean on all but the first
+    # (batch) dimension. Else, return as is.
     def _mean(x):
         if not isinstance(x, torch.Tensor) or x.dim()<=1:
             return x
@@ -57,6 +62,20 @@ def _cce(p, t):
     return out.view(out.size(0), -1).mean(1)    # Reduce to batch dim.
 
 
+def autocast_if_needed():
+    # Decorator. If the method's object has a scaler, use the pytorch
+    # autocast context; else, run the method without any context.
+    def decorator(method):
+        @functools.wraps(method)
+        def context_wrapper(cls, *args, **kwargs):
+            if cls.scaler is not None:
+                with torch.cuda.amp.autocast():
+                    return method(cls, *args, **kwargs)
+            return method(cls, *args, **kwargs)
+        return context_wrapper
+    return decorator
+
+
 class segmentation_model(nn.Module):
     """
     Interface wrapper around the `DataParallel` parts of the model.
@@ -64,7 +83,7 @@ class segmentation_model(nn.Module):
     def __init__(self, encoder, decoder_common, decoder_residual, segmenter,
                  disc_A, disc_B, shape_sample, mutual_information=None,
                  decoder_autoencode=None, classifier_A=None, classifier_B=None,
-                 loss_rec=mae, loss_seg=None, loss_gan='hinge',
+                 scaler=None, loss_rec=mae, loss_seg=None, loss_gan='hinge',
                  num_disc_updates=1, relativistic=False, grad_penalty=None,
                  disc_clip_norm=None,gen_clip_norm=None,  lambda_disc=1,
                  lambda_x_ae=10, lambda_x_id=10, lambda_z_id=1, lambda_f_id=1,
@@ -90,6 +109,7 @@ class segmentation_model(nn.Module):
             ('decoder_residual',  decoder_residual),
             ('decoder_autoencode',decoder_autoencode),
             ('shape_sample',      shape_sample),
+            ('scaler',            scaler),
             ('loss_rec',          loss_rec),
             ('loss_seg',          loss_seg if loss_seg else dice_loss()),
             ('loss_gan',          loss_gan),
@@ -111,7 +131,7 @@ class segmentation_model(nn.Module):
             ('disc_A',            disc_A),
             ('disc_B',            disc_B),
             ('classifier_A',      classifier_A),
-            ('classifier_B',      classifier_B)
+            ('classifier_B',      classifier_B),
             ))
         kwargs.update(lambdas)
         for key, val in kwargs.items():
@@ -128,7 +148,7 @@ class segmentation_model(nn.Module):
         # Outputs are placed on CPU when there are multiple GPUs.
         keys_forward = ['encoder', 'decoder_common', 'decoder_residual',
                         'decoder_autoencode',  'segmenter', 'shape_sample',
-                        'rng']
+                        'scaler', 'rng']
         kwargs_forward = dict([(key, val) for key, val in kwargs.items()
                                if key in keys_forward])
         self._forward = _forward(**kwargs_forward, **lambdas)
@@ -138,7 +158,7 @@ class segmentation_model(nn.Module):
         # Module to compute discriminator losses on GPU.
         # Outputs are placed on CPU when there are multiple GPUs.
         keys_D = ['gan_objective', 'disc_A', 'disc_B', 'mi_estimator',
-                  'classifier_A', 'classifier_B', 'debug_ac_gan']
+                  'classifier_A', 'classifier_B', 'scaler', 'debug_ac_gan']
         kwargs_D = dict([(key, val) for key, val in kwargs.items()
                          if key in keys_D])
         self._loss_D = _loss_D(**kwargs_D, **lambdas)
@@ -148,24 +168,48 @@ class segmentation_model(nn.Module):
         # Module to compute generator updates on GPU.
         # Outputs are placed on CPU when there are multiple GPUs.
         keys_G = ['gan_objective', 'disc_A', 'disc_B', 'mi_estimator',
-                  'classifier_A', 'classifier_B', 'loss_rec', 'debug_ac_gan']
+                  'classifier_A', 'classifier_B', 'scaler', 'loss_rec',
+                  'debug_ac_gan']
         kwargs_G = dict([(key, val) for key, val in kwargs.items()
                          if key in keys_G])
         self._loss_G = _loss_G(**kwargs_G, **lambdas)
         if torch.cuda.device_count()>1:
             self._loss_G = nn.DataParallel(self._loss_G, output_device=-1)
-        
+    
+    def _autocast_if_needed(self):
+        # If a scaler is passed, use pytorch gradient autocasting. Else,
+        # just use a null context that does nothing.
+        if self.scaler is not None:
+            context = torch.cuda.amp.autocast()
+        else:
+            context = nullcontext()
+        return context
+    
     def forward(self, x_A, x_B, mask=None, class_A=None, class_B=None,
-                optimizer=None, disc=None, rng=None):
+                optimizer=None, rng=None):
         # Compute gradients and update?
         do_updates_bool = True if optimizer is not None else False
         
+        # Apply scaler for gradient backprop if it is passed.
+        def backward(loss):
+            if self.scaler is not None:
+                return self.scaler.scale(loss).backward()
+            return loss.backward()
+        
+        # Apply scaler for optimizer step if it is passed.
+        def step(optimizer):
+            if self.scaler is not None:
+                self.scaler.step(optimizer)
+            else:
+                optimizer.step()
+        
         # Compute all outputs.
         with torch.set_grad_enabled(do_updates_bool):
-            visible, hidden, intermediates = self._forward(x_A, x_B,
-                                                           class_A=class_A,
-                                                           class_B=class_B,
-                                                           rng=rng)
+            with self._autocast_if_needed():
+                visible, hidden, intermediates = self._forward(x_A, x_B,
+                                                               class_A=class_A,
+                                                               class_B=class_B,
+                                                               rng=rng)
         
         # Evaluate discriminator loss and update.
         loss_disc = defaultdict(int)
@@ -182,58 +226,68 @@ class segmentation_model(nn.Module):
             for i in range(self.num_disc_updates):
                 # Evaluate.
                 with torch.set_grad_enabled(do_updates_bool):
-                    loss_disc, loss_slice_est, loss_mi_est = self._loss_D(
-                        x_A=x_A,
-                        x_B=x_B,
-                        class_A=class_A,
-                        class_B=class_B,
-                        out_BA=out_BA,
-                        out_AB=out_AB,
-                        c_A=hidden['c_A'],
-                        u_A=hidden['u_A'],
-                        c_BA=hidden['c_BA'],
-                        u_BA=hidden['u_BA'])
-                    loss_D = _reduce(loss_disc.values())
+                    with self._autocast_if_needed():
+                        loss_disc, loss_slice_est, loss_mi_est = self._loss_D(
+                            x_A=x_A,
+                            x_B=x_B,
+                            class_A=class_A,
+                            class_B=class_B,
+                            out_BA=out_BA,
+                            out_AB=out_AB,
+                            c_A=hidden['c_A'],
+                            u_A=hidden['u_A'],
+                            c_BA=hidden['c_BA'],
+                            u_BA=hidden['u_BA'])
+                        loss_D = _reduce(loss_disc.values())
                 # Update discriminator (and slice classifiers).
                 disc_A = self.separate_networks['disc_A']
                 disc_B = self.separate_networks['disc_B']
                 if do_updates_bool:
                     clear_grad(optimizer['D'])
-                    loss_D.mean().backward()
+                    with self._autocast_if_needed():
+                        _loss = loss_D.mean()
+                    backward(_loss)
                     if self.lambda_slice:
-                        _reduce(loss_slice_est.values()).mean().backward()
+                        with self._autocast_if_needed():
+                            _loss = _reduce(loss_slice_est.values()).mean()
+                        backward(_loss)
                     if self.disc_clip_norm:
+                        if self.scaler is not None:
+                            self.scaler.unscale_(optimizer['D'])
                         nn.utils.clip_grad_norm_(disc_A.parameters(),
                                                  max_norm=self.disc_clip_norm)
                         nn.utils.clip_grad_norm_(disc_B.parameters(),
                                                  max_norm=self.disc_clip_norm)
-                    optimizer['D'].step()
+                    step(optimizer['D'])
                     gradnorm_D = grad_norm(disc_A)+grad_norm(disc_B)
                 # Update MI estimator.
                 mi_estimator = self.separate_networks['mi_estimator']
                 if do_updates_bool and mi_estimator is not None:
                     clear_grad(optimizer['E'])
-                    _reduce([loss_mi_est['A'],
-                             loss_mi_est['BA']]).mean().backward()
-                    optimizer['E'].step()
+                    with self._autocast_if_needed():
+                        _loss = _reduce([loss_mi_est['A'],
+                                         loss_mi_est['BA']]).mean()
+                    backward(_loss)
+                    step(optimizer['E'])
         
         # Evaluate generator losses.
         gradnorm_G = 0
         with torch.set_grad_enabled(do_updates_bool):
-            losses_G = self._loss_G(x_AM=visible['x_AM'],
-                                    x_A=x_A,
-                                    class_A=class_A,
-                                    x_AB=visible['x_AB'],
-                                    x_AA=visible['x_AA'],
-                                    x_B=x_B,
-                                    class_B=class_B,
-                                    x_BA=visible['x_BA'],
-                                    x_BB=visible['x_BB'],
-                                    x_BAB=visible['x_BAB'],
-                                    x_AA_ae=visible['x_AA_ae'],
-                                    x_BB_ae=visible['x_BB_ae'],
-                                    **hidden,
-                                    **intermediates)
+            with self._autocast_if_needed():
+                losses_G = self._loss_G(x_AM=visible['x_AM'],
+                                        x_A=x_A,
+                                        class_A=class_A,
+                                        x_AB=visible['x_AB'],
+                                        x_AA=visible['x_AA'],
+                                        x_B=x_B,
+                                        class_B=class_B,
+                                        x_BA=visible['x_BA'],
+                                        x_BB=visible['x_BB'],
+                                        x_BAB=visible['x_BAB'],
+                                        x_AA_ae=visible['x_AA_ae'],
+                                        x_BB_ae=visible['x_BB_ae'],
+                                        **hidden,
+                                        **intermediates)
         
         # Compute segmentation loss outside of DataParallel modules,
         # avoiding various issues:
@@ -254,25 +308,43 @@ class segmentation_model(nn.Module):
                 mask_packed = mask_packed.cuda()
         loss_seg = 0.
         if self.lambda_seg and mask_packed is not None and len(mask_packed):
-            x_AM_packed = visible['x_AM'][mask_indices]
-            loss_seg = self.lambda_seg*self.loss_seg(x_AM_packed, mask_packed)
+            with self._autocast_if_needed():
+                x_AM_packed = visible['x_AM'][mask_indices]
+                loss_seg = self.lambda_seg*self.loss_seg(x_AM_packed,
+                                                         mask_packed)
         
         # Include segmentation loss with generator losses and update.
-        losses_G['l_seg'] = _reduce([loss_seg])
-        losses_G['l_G'] += losses_G['l_seg']
-        loss_G = losses_G['l_G']
+        with self._autocast_if_needed():
+            losses_G['l_seg'] = _reduce([loss_seg])
+            losses_G['l_G'] += losses_G['l_seg']
+            loss_G = losses_G['l_G']
         if do_updates_bool and isinstance(loss_G, torch.Tensor):
             if 'S' in optimizer:
                 clear_grad(optimizer['S'])
             clear_grad(optimizer['G'])
-            loss_G.mean().backward()
+            with self._autocast_if_needed():
+                _loss = loss_G.mean()
+            backward(_loss)
+            if self.scaler is not None:
+                self.scaler.unscale_(optimizer['G'])
+                if 'S' in optimizer:
+                    self.scaler.unscale_(optimizer['S'])
             if self.gen_clip_norm is not None:
                 nn.utils.clip_grad_norm_(self.parameters(),
                                          max_norm=self.gen_clip_norm)
-            optimizer['G'].step()
+            step(optimizer['G'])
             if 'S' in optimizer:
-                optimizer['S'].step()
+                step(optimizer['S'])
             gradnorm_G = grad_norm(self)
+        
+        # Unscale norm.
+        if self.scaler is not None and do_updates_bool:
+            gradnorm_D /= self.scaler.get_scale()
+            gradnorm_G /= self.scaler.get_scale()
+        
+        # Update scaler.
+        if self.scaler is not None and do_updates_bool:
+            self.scaler.update()
         
         # Compile ouputs.
         outputs = OrderedDict()
@@ -291,10 +363,10 @@ class segmentation_model(nn.Module):
 
 class _forward(nn.Module):
     def __init__(self, encoder, decoder_common, decoder_residual, segmenter,
-                 shape_sample, decoder_autoencode=None, lambda_disc=1,
-                 lambda_x_ae=10, lambda_x_id=10, lambda_z_id=1, lambda_f_id=1,
-                 lambda_seg=1, lambda_cyc=0, lambda_mi=0, lambda_slice=0,
-                 rng=None):
+                 shape_sample, decoder_autoencode=None, scaler=None,
+                 lambda_disc=1, lambda_x_ae=10, lambda_x_id=10, lambda_z_id=1,
+                 lambda_f_id=1, lambda_seg=1, lambda_cyc=0, lambda_mi=0,
+                 lambda_slice=0, rng=None):
         super(_forward, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.encoder            = encoder
@@ -303,6 +375,7 @@ class _forward(nn.Module):
         self.segmenter          = [segmenter]   # Separate params.
         self.shape_sample       = shape_sample
         self.decoder_autoencode = decoder_autoencode
+        self.scaler             = scaler
         self.lambda_disc        = lambda_disc
         self.lambda_x_ae        = lambda_x_ae
         self.lambda_x_id        = lambda_x_id
@@ -321,6 +394,7 @@ class _forward(nn.Module):
         ret = ret.to(torch.cuda.current_device())
         return ret
     
+    @autocast_if_needed()
     def forward(self, x_A, x_B, class_A=None, class_B=None, rng=None):
         assert len(x_A)==len(x_B)
         batch_size = len(x_A)
@@ -471,12 +545,13 @@ class _forward(nn.Module):
 
 class _loss_D(nn.Module):
     def __init__(self, gan_objective, disc_A, disc_B, classifier_A=None, 
-                 classifier_B=None, mi_estimator=None, lambda_disc=1,
-                 lambda_x_ae=10, lambda_x_id=10, lambda_z_id=1, lambda_f_id=1,
-                 lambda_seg=1, lambda_cyc=0, lambda_mi=0, lambda_slice=0,
-                 debug_ac_gan=False):
+                 classifier_B=None, mi_estimator=None, scaler=None,
+                 lambda_disc=1, lambda_x_ae=10, lambda_x_id=10, lambda_z_id=1,
+                 lambda_f_id=1, lambda_seg=1, lambda_cyc=0, lambda_mi=0,
+                 lambda_slice=0, debug_ac_gan=False):
         super(_loss_D, self).__init__()
         self._gan               = gan_objective
+        self.scaler             = scaler
         self.lambda_disc        = lambda_disc
         self.lambda_x_ae        = lambda_x_ae
         self.lambda_x_id        = lambda_x_id
@@ -493,6 +568,7 @@ class _loss_D(nn.Module):
                     'class_B'   : classifier_B,
                     'mi'        : mi_estimator}  # Separate params.
     
+    @autocast_if_needed()
     def forward(self, x_A, x_B, out_BA, out_AB, c_A, u_A, c_BA, u_BA,
                 class_A=None, class_B=None):
         # Detach all tensors; updating discriminator, not generator.
@@ -525,7 +601,8 @@ class _loss_D(nn.Module):
                                   fake=out_BA,
                                   real=x_A,
                                   kwargs_real=kwargs_real,
-                                  kwargs_fake=kwargs_fake)
+                                  kwargs_fake=kwargs_fake,
+                                  scaler=self.scaler)
         loss_disc['A'] = loss_disc_A
         kwargs_real = None if class_A is None else {'class_info': class_B}
         kwargs_fake = None if class_B is None else {'class_info': class_A}
@@ -533,7 +610,8 @@ class _loss_D(nn.Module):
                                   fake=out_AB,
                                   real=x_B,
                                   kwargs_real=kwargs_real,
-                                  kwargs_fake=kwargs_fake)
+                                  kwargs_fake=kwargs_fake,
+                                  scaler=self.scaler)
         loss_disc['B'] = loss_disc_B
         
         # Slice number classification.
@@ -561,12 +639,13 @@ class _loss_D(nn.Module):
 
 class _loss_G(nn.Module):
     def __init__(self, gan_objective, disc_A, disc_B, classifier_A=None, 
-                 classifier_B=None, mi_estimator=None, loss_rec=mae,
-                 lambda_disc=1, lambda_x_ae=10, lambda_x_id=10, lambda_z_id=1,
-                 lambda_f_id=1, lambda_seg=1, lambda_cyc=0, lambda_mi=0,
-                 lambda_slice=0, debug_ac_gan=False):
+                 classifier_B=None, mi_estimator=None, scaler=None,
+                 loss_rec=mae, lambda_disc=1, lambda_x_ae=10, lambda_x_id=10,
+                 lambda_z_id=1, lambda_f_id=1, lambda_seg=1, lambda_cyc=0,
+                 lambda_mi=0, lambda_slice=0, debug_ac_gan=False):
         super(_loss_G, self).__init__()
         self._gan               = gan_objective
+        self.scaler             = scaler
         self.loss_rec           = loss_rec
         self.lambda_disc        = lambda_disc
         self.lambda_x_ae        = lambda_x_ae
@@ -584,6 +663,7 @@ class _loss_G(nn.Module):
                     'class_B'   : classifier_B,
                     'mi'        : mi_estimator}  # Separate params.
     
+    @autocast_if_needed()
     def forward(self, x_AM, x_A, x_AB, x_AA, x_B, x_BA, x_BB, x_BAB,
                 s_BA, s_AA, c_AB, c_BB, z_BA, s_A, c_A, u_A, c_B, c_BA, u_BA,
                 x_AA_list, x_AB_list, x_BB_list, x_BA_list, skip_A, skip_B,

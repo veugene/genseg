@@ -62,6 +62,18 @@ python scripts/data_preparation/prepare_brats_data_hemispheres.py --data_dir <do
 ```
 Data preparation creates a new dataset based on BRATS that contains 2D hemispheres, split into sick and healthy subsets.
 
+### LiTS
+
+This is the 2017 Liver Tumour Segmentation (LiTS) challenge data from the https://competitions.codalab.org/competitions/17094. After downloading this data to `<download_dir>/Training_Batch1.zip` and `<download_dir>/Training_Batch2.zip`, it must be unzipped to some `<data_dir>` and the `.nii` NIFTI files must be gunzip compressed to `.nii.gz` files, as follows (in BASH):
+```
+for fn in <download_dir>/Training_Batch{1,2}.zip; do unzip -j $fn -d <data_dir>; done
+for fn in <data_dir>/*.nii; do echo "Compressing $fn" && gunzip $fn; done
+```
+This data can then be prepared for training using as a provided script, as follows:
+```
+python scripts/data_preparation/prepare_lits.py --data_dir <data_dir> --path_create data/lits/lits.h5
+```
+
 ### MNIST
 
 The cluttered MNIST digit data is created automatically by the MNIST task launcher from MNIST data that is also downloaded automatically.

@@ -37,13 +37,14 @@ def _reduce(loss):
 
 class segmentation_model(nn.Module):
     def __init__(self, student, teacher, loss_seg=None, lambda_con=10.,
-                 alpha_max=0.99):
+                 alpha_max=0.99, use_gradual_alpha=False):
         super(segmentation_model, self).__init__()
         self.student    = student
         self.teacher    = teacher
         self.loss_seg   = loss_seg if loss_seg else dice_loss()
         self.lambda_con = lambda_con    # consistency weight
         self.alpha_max  = alpha_max     # for exponential moving average
+        self.use_gradual_alpha = use_gradual_alpha
         self.is_cuda    = False
         self._iteration = nn.Parameter(torch.zeros(1), requires_grad=False)
 
@@ -112,7 +113,7 @@ class segmentation_model(nn.Module):
         x_AM_unsup_teacher = None
         if self.lambda_con and len(mask_indices) < len(mask):
             x_AM_unsup_student = x_AM_student[no_mask_indices]
-            x_AM_unsup_teacher = x_AM_teacher[no_mask_indices]
+            x_AM_unsup_teacher = x_AM_teacher[no_mask_indices].detach()
             loss_con = _mean(F.mse_loss(x_AM_unsup_student,
                                         x_AM_unsup_teacher))
         
@@ -127,8 +128,12 @@ class segmentation_model(nn.Module):
         alpha = min(1 - 1./(self._iteration+1), self.alpha_max)
         for ema_param, param in zip(self.teacher.parameters(),
                                     self.student.parameters()):
-            ema_param.data.mul_(self.alpha_max).add_(1-self.alpha_max,
-                                                     param.data)
+            if self.use_gradual_alpha: # False proved to work better
+                ema_param.data.mul_(alpha).add_(1 - alpha, param.data)
+            else:
+                ema_param.data.mul_(self.alpha_max).add_(1-self.alpha_max,
+                                                         param.data)
+            
         
         # Compile outputs and return.
         outputs = OrderedDict((
