@@ -187,7 +187,8 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
     return data
 
 
-def preprocessor_brats(data_augmentation_kwargs=None, label_corruption=None):
+def preprocessor_brats(data_augmentation_kwargs=None, label_corruption=None,
+                       label_shift=None):
     """
     Preprocessor function to pass to a data_flow, for BRATS data.
     
@@ -196,6 +197,8 @@ def preprocessor_brats(data_augmentation_kwargs=None, label_corruption=None):
     label_corruption (float) : The sigma value of the spline warp applied to
         to the target label mask during training in order to corrupt it. Used
         for testing robustness to label noise.
+    label_shift (int) : The number of pixels to shift all training target masks
+        to the right.
     """
         
     def process_element(inputs):
@@ -227,6 +230,11 @@ def preprocessor_brats(data_augmentation_kwargs=None, label_corruption=None):
                                            warp_sigma=label_corruption,
                                            warp_grid_size=3,
                                            n_warp_threads=1)
+        if label_shift is not None:
+            if m is not None:
+                m_shift = np.zeros(m.shape, dtype=m.dtype)
+                m_shift[:,label_shift:,:] = m[:,:-label_shift,:]
+                m = m_shift
         
         # Remove distant outlier intensities.
         if h is not None:
