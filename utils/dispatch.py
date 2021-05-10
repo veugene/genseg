@@ -9,6 +9,8 @@ import sys
 import time
 import warnings
 
+from natsort import natsorted
+
 
 SBATCH_TIMEOUT = 60
 
@@ -19,6 +21,9 @@ an experiment's parser via `parents=[dispatch_parser]`.
 """
 def dispatch_argument_parser(*args, **kwargs):
     parser = argparse.ArgumentParser(*args, **kwargs)
+    parser.add_argument('--force_resume', action='store_true',
+                        help="Resume a job even if it has already completed "
+                             "the requested number of epochs.")
     g_sel = parser.add_argument_group('Cluster select.')
     mutex_cluster = g_sel.add_mutually_exclusive_group()
     mutex_cluster.add_argument('--dispatch_dgx', action='store_true')
@@ -75,6 +80,21 @@ def dispatch(parser, run):
     # Get arguments.
     args = parser.parse_args()
     assert hasattr(args, 'path')
+    
+    # If resuming, check whether the requested number of epochs has already
+    # been done. If so, don't resume unless `--force_resume` is used.
+    if os.path.exists(os.path.join(args.path, "args.txt")):
+        state_file_list = natsorted([fn for fn in os.listdir(args.path)
+                                     if fn.startswith('state_dict_')
+                                     and fn.endswith('.pth')])
+        state_file = state_file_list[-1]
+        epoch = re.search('(?<=state_dict_)\d+(?=.pth)', state_file).group(0)
+        epoch = int(epoch)
+        if epoch >= args.epochs and not args.force_resume:
+            print("WARNING: aborting dispatch since {} epochs already "
+                  "completed ({}). To override, use `--force_resume`"
+                  "".format(args.epochs, args.path))
+            return
     
     # If resuming, merge with loaded arguments (newly passed arguments
     # override loaded arguments).
