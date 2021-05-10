@@ -336,7 +336,7 @@ def _isrunning_canada(path):
         try:
             proc = psutil.Process(pid)
             if not 'sbatch' in proc.name():
-                raise psutil.NoSuchProcess
+                raise psutil.NoSuchProcess(pid)
         except psutil.NoSuchProcess:
             active = False
         
