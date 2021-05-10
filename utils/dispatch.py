@@ -87,9 +87,11 @@ def dispatch(parser, run):
         state_file_list = natsorted([fn for fn in os.listdir(args.path)
                                      if fn.startswith('state_dict_')
                                      and fn.endswith('.pth')])
-        state_file = state_file_list[-1]
-        epoch = re.search('(?<=state_dict_)\d+(?=.pth)', state_file).group(0)
-        epoch = int(epoch)
+        epoch = 0
+        if len(state_file_list):
+            state_file = state_file_list[-1]
+            epoch = re.search('(?<=state_dict_)\d+(?=.pth)', state_file).group(0)
+            epoch = int(epoch)
         if epoch >= args.epochs and not args.force_resume:
             print("WARNING: aborting dispatch since {} epochs already "
                   "completed ({}). To override, use `--force_resume`"
