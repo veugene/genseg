@@ -1,5 +1,6 @@
 import argparse
 import os
+import re
 import subprocess
 
 
@@ -17,19 +18,19 @@ if __name__=='__main__':
         print(path)
         if not os.path.exists(path):
             raise ValueError("path not found: {}".format(path))
-        daemon_path = os.path.join(path, 'daemon_log.txt')
-        if not os.path.exists(daemon_path):
-            print("daemon_log.txt not found in {}".format(daemon_path))
-            continue
-        f = open(daemon_path, 'r')
+        regex = re.compile('lock\.\d+')
+        lock_files = list(filter(lambda fn : regex.search(fn),
+                                sorted(os.listdir(path))))
         job_id_list = []
-        for line in f:
-            val = line.strip('\n\t ').split(' ')[-1]
-            try:
-                job_id = int(val)
+        for fn in lock_files:
+            lock_path = os.path.join(path, fn)
+            with open(lock_path, 'r') as f:
+                pid = f.readline()
+                job_string = f.readline()   # Second line.
+            match = re.search("(?<=Submitted batch job )[0-9].*[0-9]$", job_string)
+            if match:
+                job_id = match.group(0)
                 job_id_list.append(job_id)
-            except ValueError:
-                pass
         for job_id in job_id_list:
             print("scancel {}".format(job_id))
             subprocess.run(["scancel", str(job_id)])
