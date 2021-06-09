@@ -11,11 +11,13 @@ Requires:
 - imageio  
 - natsort  
 - numpy  
+- protobuf  
+- psutil  
 - python-daemon  
-- SimpleITK  
 - scikit-image  
 - scipy  
-- tensorboardx  
+- SimpleITK  
+- six  
 - torch  
 - tqdm  
 - zarr  

@@ -201,9 +201,15 @@ def _dispatch_canada(args):
     lock = open(lock_path, 'w')
     
     # Prepare command for sbatch.
-    pre_cmd = ("cd /scratch/veugene/ssl-seg-eugene\n"
-               "source register_submodules.sh\n"
-               "source activate genseg\n")
+    pre_cmd = ("cd /home/veugene/home_projects/ssl-seg-eugene\n"
+               "module load python/3.7 cuda cudnn scipy-stack\n"
+               "virtualenv --no-download $SLURM_TMPDIR/env\n"
+               "source $SLURM_TMPDIR/env/bin/activate\n"
+               "pip install --no-index --upgrade pip\n"
+               "pip install --no-index -r requirements.txt\n"
+               "pip install "
+               "~/env/genseg/wheels/python_daemon-2.3.0-py2.py3-none-any.whl\n"
+               "source register_submodules.sh\n")
     cmd = subprocess.list2cmdline(sys.argv)       # Shell executable.
     cmd = cmd.replace(" --dispatch_canada",   "") # Remove recursion.
     cmd = "#!/bin/bash\n {}\n python3 {}".format(pre_cmd, cmd)  # Combine.
