@@ -52,6 +52,14 @@ def get_parser():
     g_exp.add_argument('--label_permutation', type=float, default=0,
                        help="The fraction of training slices for which labels "
                             "are mismatched via permutation.")
+    g_crop = g_exp.add_mutually_exclusive_group()
+    g_crop.add_argument('--label_rand_crop', action='store_true',
+                        help="Crop out a randomly sized rectangle out of "
+                             "every connected component of the mask during "
+                             "training.")
+    g_crop.add_argument('--label_crop_left', action='store_true',
+                        help="Crop out the left half of every connected "
+                             "component of the mask during training.")
     return parser
 
 
@@ -149,29 +157,23 @@ def run(args):
                                        data_augmentation_kwargs=da_kwargs,
                                        label_warp=args.label_warp,
                                        label_shift=args.label_shift,
-                                       label_dropout=args.label_dropout),
+                                       label_dropout=args.label_dropout,
+                                       label_rand_crop=args.label_rand_crop,
+                                       label_crop_left=args.label_crop_left),
                                    nb_io_workers=args.nb_io_workers,
                                    nb_proc_workers=args.nb_proc_workers,
                                    rng=np.random.RandomState(args.init_seed)),
         'valid': data_flow_sampler(get_data_list('valid'),
                                    sample_random=True,
                                    batch_size=args.batch_size_valid,
-                                   preprocessor=preprocessor_brats(
-                                       data_augmentation_kwargs=None,
-                                       label_warp=None,
-                                       label_shift=None,
-                                       label_dropout=0),
+                                   preprocessor=preprocessor_brats(),
                                    nb_io_workers=args.nb_io_workers,
                                    nb_proc_workers=args.nb_proc_workers,
                                    rng=np.random.RandomState(args.init_seed)),
         'test':  data_flow_sampler(get_data_list('test'),
                                    sample_random=True,
                                    batch_size=args.batch_size_valid,
-                                   preprocessor=preprocessor_brats(
-                                       data_augmentation_kwargs=None,
-                                       label_warp=None,
-                                       label_shift=None,
-                                       label_dropout=0),
+                                   preprocessor=preprocessor_brats(),
                                    nb_io_workers=args.nb_io_workers,
                                    nb_proc_workers=args.nb_proc_workers,
                                    rng=np.random.RandomState(args.init_seed))}

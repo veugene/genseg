@@ -2,6 +2,7 @@ from collections import OrderedDict
 
 import h5py
 import numpy as np
+from scipy import ndimage
 
 from data_tools.wrap import multi_source_array
 from data_tools.data_augmentation import image_random_transform
@@ -188,7 +189,9 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
 
 
 def preprocessor_brats(data_augmentation_kwargs=None, label_warp=None,
-                       label_shift=None, label_dropout=0, seed=None):
+                       label_shift=None, label_dropout=0,
+                       label_rand_crop=False, label_crop_left=False,
+                       seed=None):
     """
     Preprocessor function to pass to a data_flow, for BRATS data.
     
@@ -201,6 +204,10 @@ def preprocessor_brats(data_augmentation_kwargs=None, label_warp=None,
         to the right.
     label_dropout (float) : The probability in [0, 1] of discarding a slice's
         segmentation mask.
+    label_rand_crop (bool) : If true, crop out a randomly sized rectangle out 
+        of every connected component of the mask.
+    label_crop_left (bool) : If true, crop out the left half of every
+        connected component of the mask.
     seed (int) : The seed for the random number generator.
     """
         
@@ -213,6 +220,21 @@ def preprocessor_brats(data_augmentation_kwargs=None, label_warp=None,
         # Drop mask.
         if rng.choice([True, False], p=[label_dropout, 1-label_dropout]):
             m = None
+        
+        # Crop mask.
+        if label_rand_crop or label_crop_left:
+            m_out = m.copy()
+            m_labeled, _ = ndimage.label(m)
+            for (row, col) in ndimage.find_objects(m_labeled):
+                if label_rand_crop:
+                    row_start = rng.randint(row.start, row.stop+1)
+                    row_stop  = rng.randint(row_start, row.stop+1)
+                    col_start = rng.randint(col.start, col.stop+1)
+                    col_stop  = rng.randint(col_start, col.stop+1)
+                    m_out[row_start:row_stop, col_start:col_stop] = 0
+                if label_crop_left:
+                    m_out[row, col.start:col.stop//2] = 0
+            m = m_out
         
         # Float.
         h = h.astype(np.float32)
