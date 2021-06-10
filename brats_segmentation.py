@@ -37,7 +37,7 @@ def get_parser():
                        help="Save images into tensorboard event files.")
     g_exp.add_argument('--init_seed', type=int, default=1234)
     g_exp.add_argument('--data_seed', type=int, default=0)
-    g_exp.add_argument('--label_corruption', type=float, default=None,
+    g_exp.add_argument('--label_warp', type=float, default=None,
                        help="The sigma value of the spline warp applied to "
                             "to the target label mask during training in "
                             "order to corrupt it. Used for testing "
@@ -147,7 +147,7 @@ def run(args):
                                    batch_size=args.batch_size_train,
                                    preprocessor=preprocessor_brats(
                                        data_augmentation_kwargs=da_kwargs,
-                                       label_corruption=args.label_corruption,
+                                       label_warp=args.label_warp,
                                        label_shift=args.label_shift,
                                        label_dropout=args.label_dropout),
                                    nb_io_workers=args.nb_io_workers,
@@ -158,7 +158,7 @@ def run(args):
                                    batch_size=args.batch_size_valid,
                                    preprocessor=preprocessor_brats(
                                        data_augmentation_kwargs=None,
-                                       label_corruption=None,
+                                       label_warp=None,
                                        label_shift=None,
                                        label_dropout=0),
                                    nb_io_workers=args.nb_io_workers,
@@ -169,7 +169,7 @@ def run(args):
                                    batch_size=args.batch_size_valid,
                                    preprocessor=preprocessor_brats(
                                        data_augmentation_kwargs=None,
-                                       label_corruption=None,
+                                       label_warp=None,
                                        label_shift=None,
                                        label_dropout=0),
                                    nb_io_workers=args.nb_io_workers,
