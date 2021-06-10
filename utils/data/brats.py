@@ -188,7 +188,7 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
 
 
 def preprocessor_brats(data_augmentation_kwargs=None, label_corruption=None,
-                       label_shift=None):
+                       label_shift=None, label_dropout=0, seed=None):
     """
     Preprocessor function to pass to a data_flow, for BRATS data.
     
@@ -199,10 +199,20 @@ def preprocessor_brats(data_augmentation_kwargs=None, label_corruption=None,
         for testing robustness to label noise.
     label_shift (int) : The number of pixels to shift all training target masks
         to the right.
+    label_dropout (float) : The probability in [0, 1] of discarding a slice's
+        segmentation mask.
+    seed (int) : The seed for the random number generator.
     """
         
     def process_element(inputs):
         h, s, m, hi, si = inputs
+        
+        # Set up rng.
+        rng = np.random.RandomState(seed)
+        
+        # Drop mask.
+        if rng.choice([True, False], p=[label_dropout, 1-label_dropout]):
+            m = None
         
         # Float.
         h = h.astype(np.float32)

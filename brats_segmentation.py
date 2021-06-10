@@ -46,6 +46,9 @@ def get_parser():
                        help="The number of pixels to shift every training "
                             "target mask. Used for testing robustness to "
                             "label noise.")
+    g_exp.add_argument('--label_dropout', type=float, default=0,
+                       help="The probability of randomly dropping a reference "
+                            "segmentation mask in the training set.")
     return parser
 
 
@@ -136,7 +139,8 @@ def run(args):
                                    preprocessor=preprocessor_brats(
                                        data_augmentation_kwargs=da_kwargs,
                                        label_corruption=args.label_corruption,
-                                       label_shift=args.label_shift),
+                                       label_shift=args.label_shift,
+                                       label_dropout=args.label_dropout),
                                    nb_io_workers=args.nb_io_workers,
                                    nb_proc_workers=args.nb_proc_workers,
                                    rng=np.random.RandomState(args.init_seed)),
@@ -146,7 +150,8 @@ def run(args):
                                    preprocessor=preprocessor_brats(
                                        data_augmentation_kwargs=None,
                                        label_corruption=None,
-                                       label_shift=None),
+                                       label_shift=None,
+                                       label_dropout=0),
                                    nb_io_workers=args.nb_io_workers,
                                    nb_proc_workers=args.nb_proc_workers,
                                    rng=np.random.RandomState(args.init_seed)),
@@ -156,7 +161,8 @@ def run(args):
                                    preprocessor=preprocessor_brats(
                                        data_augmentation_kwargs=None,
                                        label_corruption=None,
-                                       label_shift=None),
+                                       label_shift=None,
+                                       label_dropout=0),
                                    nb_io_workers=args.nb_io_workers,
                                    nb_proc_workers=args.nb_proc_workers,
                                    rng=np.random.RandomState(args.init_seed))}
