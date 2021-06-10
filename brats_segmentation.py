@@ -49,6 +49,9 @@ def get_parser():
     g_exp.add_argument('--label_dropout', type=float, default=0,
                        help="The probability of randomly dropping a reference "
                             "segmentation mask in the training set.")
+    g_exp.add_argument('--label_permutation', type=float, default=0,
+                       help="The fraction of training slices for which labels "
+                            "are mismatched via permutation.")
     return parser
 
 
@@ -76,7 +79,8 @@ def run(args):
     from utils.data.brats import (prepare_data_brats13s,
                                   prepare_data_brats17,
                                   preprocessor_brats)
-    from utils.data.common import data_flow_sampler
+    from utils.data.common import (data_flow_sampler,
+                                   permuted_view)
 
     from utils.experiment import experiment
     from utils.metrics import (batchwise_loss_accumulator,
@@ -127,6 +131,11 @@ def run(args):
                               masked_fraction=1.-args.labeled_fraction,
                               drop_masked=args.yield_only_labeled,
                               rng=np.random.RandomState(args.data_seed))
+    if args.label_permutation:
+        data['train']['m'] = permuted_view(
+            data['train']['m'],
+            fraction=args.label_permutation,
+            rng=np.random.RandomState(args.data_seed))
     get_data_list = lambda key : [data[key]['h'],
                                   data[key]['s'],
                                   data[key]['m'],
