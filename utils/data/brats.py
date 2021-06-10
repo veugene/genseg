@@ -190,7 +190,7 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
 
 def preprocessor_brats(data_augmentation_kwargs=None, label_warp=None,
                        label_shift=None, label_dropout=0,
-                       label_rand_crop=False, label_crop_left=False,
+                       label_crop_rand=None, label_crop_left=None,
                        seed=None):
     """
     Preprocessor function to pass to a data_flow, for BRATS data.
@@ -204,10 +204,11 @@ def preprocessor_brats(data_augmentation_kwargs=None, label_warp=None,
         to the right.
     label_dropout (float) : The probability in [0, 1] of discarding a slice's
         segmentation mask.
-    label_rand_crop (bool) : If true, crop out a randomly sized rectangle out 
+    label_crop_rand (float) : Crop out a randomly sized rectangle out of every
+        connected component of the mask. The minimum size of the rectangle is
+        set as a fraction of the connected component's bounding box, in [0, 1].
+    label_crop_left (float) : If true, crop out the left fraction (in [0, 1]) 
         of every connected component of the mask.
-    label_crop_left (bool) : If true, crop out the left half of every
-        connected component of the mask.
     seed (int) : The seed for the random number generator.
     """
         
@@ -222,18 +223,23 @@ def preprocessor_brats(data_augmentation_kwargs=None, label_warp=None,
             m = None
         
         # Crop mask.
-        if label_rand_crop or label_crop_left:
+        if m is not None and (   label_crop_rand is not None
+                              or label_crop_left is not None):
             m_out = m.copy()
             m_labeled, _ = ndimage.label(m)
-            for (row, col) in ndimage.find_objects(m_labeled):
-                if label_rand_crop:
-                    row_start = rng.randint(row.start, row.stop+1)
-                    row_stop  = rng.randint(row_start, row.stop+1)
-                    col_start = rng.randint(col.start, col.stop+1)
-                    col_stop  = rng.randint(col_start, col.stop+1)
-                    m_out[row_start:row_stop, col_start:col_stop] = 0
-                if label_crop_left:
-                    m_out[row, col.start:col.stop//2] = 0
+            for bbox in ndimage.find_objects(m_labeled):
+                _, row, col = bbox
+                if label_crop_rand is not None:
+                    r = int(label_crop_rand*(row.stop-row.start))
+                    c = int(label_crop_rand*(col.stop-col.start))
+                    row_a = rng.randint(row.start, row.stop+1-r)
+                    row_b = rng.randint(row_a+r, row.stop+1)
+                    col_a = rng.randint(col.start, col.stop+1-c)
+                    col_b = rng.randint(col_a+c, col.stop+1)
+                    m_out[:, row_a:row_b, col_a:col_b] = 0
+                if label_crop_left is not None:
+                    crop_size = int(label_crop_left*(col.stop-col.start))
+                    m_out[:, row, col.start:col.start+crop_size] = 0
             m = m_out
         
         # Float.
