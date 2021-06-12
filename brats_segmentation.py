@@ -58,6 +58,7 @@ def get_parser():
                             "training. The minimum size of the rectangle is "
                             "set as a fraction of the connected component's "
                             "bounding box.")
+    g_exp.add_argument('--label_crop_rand2', type=float, default=None)
     g_exp.add_argument('--label_crop_left', type=float, default=None,
                        help="Crop out the left fraction of every connected "
                             "component of the mask during training.")
@@ -160,6 +161,7 @@ def run(args):
                                        label_shift=args.label_shift,
                                        label_dropout=args.label_dropout,
                                        label_crop_rand=args.label_crop_rand,
+                                       label_crop_rand2=args.label_crop_rand2,
                                        label_crop_left=args.label_crop_left,
                                        seed=args.data_seed),
                                    nb_io_workers=args.nb_io_workers,

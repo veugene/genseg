@@ -4,8 +4,8 @@ import h5py
 import numpy as np
 from scipy import ndimage
 
-from data_tools.wrap import multi_source_array
 from data_tools.data_augmentation import image_random_transform
+from data_tools.wrap import multi_source_array
 
  
 def prepare_data_brats17(path_hgg, path_lgg,
@@ -190,8 +190,8 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
 
 def preprocessor_brats(data_augmentation_kwargs=None, label_warp=None,
                        label_shift=None, label_dropout=0,
-                       label_crop_rand=None, label_crop_left=None,
-                       seed=None):
+                       label_crop_rand=None, label_crop_rand2=None,
+                       label_crop_left=None, seed=None):
     """
     Preprocessor function to pass to a data_flow, for BRATS data.
     
@@ -207,6 +207,9 @@ def preprocessor_brats(data_augmentation_kwargs=None, label_warp=None,
     label_crop_rand (float) : Crop out a randomly sized rectangle out of every
         connected component of the mask. The minimum size of the rectangle is
         set as a fraction of the connected component's bounding box, in [0, 1].
+    label_crop_rand2 (float) : Crop out a randomly sized rectangle out of every
+        connected component of the mask. The mean size in each dimension is
+        set as a fraction of the connected component's width/height, in [0, 1].
     label_crop_left (float) : If true, crop out the left fraction (in [0, 1]) 
         of every connected component of the mask.
     seed (int) : The seed for the random number generator.
@@ -226,7 +229,8 @@ def preprocessor_brats(data_augmentation_kwargs=None, label_warp=None,
         if m is not None and (   label_crop_rand is not None
                               or label_crop_left is not None):
             m_out = m.copy()
-            m_labeled, _ = ndimage.label(m)
+            m_dilated = ndimage.morphology.binary_dilation(m)
+            m_labeled, n_obj = ndimage.label(m_dilated)
             for bbox in ndimage.find_objects(m_labeled):
                 _, row, col = bbox
                 if label_crop_rand is not None:
@@ -237,6 +241,25 @@ def preprocessor_brats(data_augmentation_kwargs=None, label_warp=None,
                     col_a = rng.randint(col.start, col.stop+1-c)
                     col_b = rng.randint(col_a+c, col.stop+1)
                     m_out[:, row_a:row_b, col_a:col_b] = 0
+                if label_crop_rand2 is not None:
+                    def get_p(n):
+                        mu = int(label_crop_rand2*n+0.5)     # mean
+                        m = (12*mu-6*n)/(n*(n+1)*(n+2))     # slope
+                        i = 1/(n+1)-m*n/2                   # intersection
+                        p = np.array([max(x*m+i, 0) for x in range(n+1)])
+                        p = p/p.sum()   # Precision errors can make p.sum() > 1
+                        return p
+                    width  = row.stop - row.start
+                    height = col.stop - col.start
+                    box_width  = rng.choice(range(width+1),  p=get_p(width))
+                    box_height = rng.choice(range(height+1), p=get_p(height))
+                    box_row_start = rng.randint(row.start,
+                                                row.stop+1-box_width)
+                    box_col_start = rng.randint(col.start,
+                                                col.stop+1-box_height)
+                    row_slice = slice(box_row_start, box_row_start+box_width)
+                    col_slice = slice(box_col_start, box_col_start+box_height)
+                    m_out[:, row_slice, col_slice] = 0
                 if label_crop_left is not None:
                     crop_size = int(label_crop_left*(col.stop-col.start))
                     m_out[:, row, col.start:col.start+crop_size] = 0
