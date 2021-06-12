@@ -122,25 +122,23 @@ class permuted_view(delayed_view):
     """
     
     def __init__(self, arr, fraction, rng=None):
-        super(masked_view, self).__init__(arr=arr, shuffle=False, rng=rng)
+        super().__init__(arr=arr, shuffle=False, rng=rng)
         if 0 > fraction or fraction > 1:
             raise ValueError("In `permuted_view`, `fraction` must be set "
                              "to a value in [0, 1.0] but was set to {}."
                              "".format(fraction))
         self.fraction = fraction
-        num_permuted_indices = int(min(self.num_items,
-                                       fraction*self.num_items+0.5))
+        n = int(min(self.num_items, fraction*self.num_items+0.5))
         permuted_indices = self.rng.choice(self.num_items,
-                                           size=num_permuted_indices,
+                                           size=n,
                                            replace=False)
-        self.permuted_indices = set(permuted_indices)
-        self.remap = dict(zip(sorted(permuted_indices), permuted_indices))
+        self.remap = dict(zip(permuted_indices, permuted_indices[::-1]))
         
     def _get_element(self, int_key, key_remainder=None):
         if not isinstance(int_key, (int, np.integer)):
             raise IndexError("cannot index with {}".format(type(int_key)))
-        if int_key in self.permuted_indices:
-            int_key = remap[int_key]
+        if int_key in self.remap:
+            int_key = self.remap[int_key]
         idx = self.arr_indices[int_key]
         if key_remainder is not None:
             idx = (idx,)+key_remainder
