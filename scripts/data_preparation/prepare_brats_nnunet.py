@@ -89,9 +89,7 @@ def convert_data(hdf5_from, save_to, name, data_seed=0):
     json_dict['training'] = [{'image': f'./imagesTr/{i}.nii.gz',
                               'label': f'./labelsTr/{i}.nii.gz'}
                              for i in range(n_train)]
-    json_dict['test'] = [{'image': f'./imagesTs/{i}.nii.gz',
-                          'label': f'./labelsTs/{i}.nii.gz'}
-                          for i in range(n_test)]
+    json_dict['test'] = [f'./imagesTs/{i}.nii.gz' for i in range(n_test)]
     with open(os.path.join(save_path, 'dataset.json'), 'w') as f:
         json.dump(json_dict, f, sort_keys=True, indent=4)
 
