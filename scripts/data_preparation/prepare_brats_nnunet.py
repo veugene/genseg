@@ -86,10 +86,10 @@ def convert_data(hdf5_from, save_to, name, data_seed=0):
     }
     json_dict['numTraining'] = n_train
     json_dict['numTest'] = n_test
-    json_dict['training'] = [{'image': f'./imagesTr/{i}.nii.gz',
-                              'label': f'./labelsTr/{i}.nii.gz'}
+    json_dict['training'] = [{'image': f'./imagesTr/{i:04}.nii.gz',
+                              'label': f'./labelsTr/{i:04}.nii.gz'}
                              for i in range(n_train)]
-    json_dict['test'] = [f'./imagesTs/{i}.nii.gz' for i in range(n_test)]
+    json_dict['test'] = [f'./imagesTs/{i:04}.nii.gz' for i in range(n_test)]
     with open(os.path.join(save_path, 'dataset.json'), 'w') as f:
         json.dump(json_dict, f, sort_keys=True, indent=4)
 
@@ -115,12 +115,14 @@ def _convert_datapoint(idx, s, m, save_path, suffix):
         os.makedirs(m_dir)
     
     # Save as compressed nifti.
-    for modality in range(s.shape[0]):
+    for modality in range(s.shape[0]):         # Modality.
         fn = f'{idx:04}_{modality:04}.nii.gz'
-        im_sitk = sitk.GetImageFromArray(s[modality].astype(np.float32))
+        s_write = s[modality:modality+1].astype(np.float32)
+        im_sitk = sitk.GetImageFromArray(s_write)
         sitk.WriteImage(im_sitk, os.path.join(s_dir, fn))
     fn = f'{idx:04}.nii.gz'
-    im_sitk = sitk.GetImageFromArray(m[0].astype(np.uint8))
+    m_write = m.astype(bool).astype(np.uint8)
+    im_sitk = sitk.GetImageFromArray(m_write)
     sitk.WriteImage(im_sitk, os.path.join(m_dir, fn))
 
 
