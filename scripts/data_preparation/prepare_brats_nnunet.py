@@ -17,9 +17,6 @@ from data_tools.wrap import multi_source_array
 from utils.data.brats import prepare_data_brats17
 
 
-TASK_NUMBER = 'Task500'
-
-
 def parse():
     parser = argparse.ArgumentParser(description='TODO')
     parser.add_argument('--hdf5_from', type=str, required=True,
@@ -29,18 +26,25 @@ def parse():
     parser.add_argument('--save_to', type=str, required=True,
                         help='URL to directory that shall hold the converted '
                              'data.')
+    parser.add_argument('--task_number', type=int, required=True)
     parser.add_argument('--name', type=str, required=True,
                         help='The name to give the converted dataset.')
+    parser.add_argument('--data_fraction', type=float, default=1,
+                        help='The fraction in (0, 1] of the data to include '
+                             'in the training set.')
     parser.add_argument('--data_seed', type=int, default=0,
                         help='The random seed used to split the data into '
                              'training, validation, and test sets.')
     return parser.parse_args()
 
 
-def convert_data(hdf5_from, save_to, name, data_seed=0):
+def convert_data(hdf5_from, save_to, task_number, name,
+                 data_fraction=1, data_seed=0):
     # Memory map data and split into training, validation, testing.
     data = prepare_data_brats17(path_hgg=os.path.join(hdf5_from, 'hgg.h5'),
                                 path_lgg=os.path.join(hdf5_from, 'lgg.h5'),
+                                masked_fraction=1-data_fraction,
+                                drop_masked=True,
                                 rng=np.random.RandomState(data_seed))
     
     # Merge training and validation splits since nnUnet will do 
@@ -49,7 +53,7 @@ def convert_data(hdf5_from, save_to, name, data_seed=0):
     m_train = multi_source_array([data['train']['m'], data['valid']['m']])
     
     # Create save_to directory if it doesn't exist.
-    save_path = os.path.join(save_to, f'{TASK_NUMBER}_{name}')
+    save_path = os.path.join(save_to, f'Task{task_number:03}_{name}')
     if not os.path.exists(save_path):
         os.makedirs(save_path)
     
@@ -128,7 +132,12 @@ def _convert_datapoint(idx, s, m, save_path, suffix):
 
 if __name__=='__main__':
     args = parse()
+    assert args.task_number >= 500      # Custom tasks start at 500.
+    assert args.data_fraction > 0
+    assert args.data_fraction <= 1
     convert_data(args.hdf5_from,
                  args.save_to,
+                 args.task_number,
                  args.name,
+                 args.data_fraction,
                  args.data_seed)
