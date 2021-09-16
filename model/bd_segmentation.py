@@ -366,7 +366,7 @@ class _forward(nn.Module):
                  shape_sample, decoder_autoencode=None, scaler=None,
                  lambda_disc=1, lambda_x_ae=10, lambda_x_id=10, lambda_z_id=1,
                  lambda_f_id=1, lambda_seg=1, lambda_cyc=0, lambda_mi=0,
-                 lambda_slice=0, rng=None):
+                 lambda_slice=0, debug_disable_latent_split=False, rng=None):
         super(_forward, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.encoder            = encoder
@@ -385,6 +385,7 @@ class _forward(nn.Module):
         self.lambda_cyc         = lambda_cyc
         self.lambda_mi          = lambda_mi
         self.lambda_slice       = lambda_slice
+        self.debug_disable_latent_split = debug_disable_latent_split
     
     def _z_sample(self, batch_size, rng=None):
         if rng is None:
@@ -437,7 +438,10 @@ class _forward(nn.Module):
         c_A, u_A = torch.split(s_A, [s_A.size(1)-self.shape_sample[0],
                                      self.shape_sample[0]], dim=1)
         if self.lambda_disc or self.lambda_x_id or self.lambda_z_id:
-            x_AB, _ = self.decoder_common(c_A, **info_AB)
+            if debug_disable_latent_split:
+                x_AB, _ = self.decoder_common(s_A, **info_AB)
+            else:
+                x_AB, _ = self.decoder_common(c_A, **info_AB)
             x_AA = add(x_AB, x_AB_residual)
             
             # Unpack.
@@ -501,7 +505,10 @@ class _forward(nn.Module):
                 info_BAB['class_info'] = class_B
             c_BA, u_BA = torch.split(s_BA, [s_BA.size(1)-self.shape_sample[0],
                                             self.shape_sample[0]], dim=1)
-            x_BAB, _ = self.decoder_common(c_BA, **info_BAB)
+            if debug_disable_latent_split:
+                x_BAB, _ = self.decoder_common(s_BA, **info_BAB)
+            else:
+                x_BAB, _ = self.decoder_common(c_BA, **info_BAB)
             x_BAB, _ = unpack(x_BAB)
         
         # Compile outputs and return.
