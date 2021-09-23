@@ -49,8 +49,10 @@ def convert_data(hdf5_from, save_to, task_number, name,
     
     # Merge training and validation splits since nnUnet will do 
     # cross-validation.
-    s_train = multi_source_array([data['train']['s'], data['valid']['s']])
-    m_train = multi_source_array([data['train']['m'], data['valid']['m']])
+    #s_train = multi_source_array([data['train']['s'], data['valid']['s']])
+    #m_train = multi_source_array([data['train']['m'], data['valid']['m']])
+    s_train = data['train']['s']
+    m_train = data['train']['m']
     
     # Create save_to directory if it doesn't exist.
     save_path = os.path.join(save_to, f'Task{task_number:03}_{name}')
