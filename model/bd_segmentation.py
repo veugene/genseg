@@ -310,6 +310,10 @@ class segmentation_model(nn.Module):
         if self.lambda_seg and mask_packed is not None and len(mask_packed):
             with self._autocast_if_needed():
                 x_AM_packed = visible['x_AM'][mask_indices]
+                # print('x_AM_packed')
+                # print(x_AM_packed.shape)
+                # print('mask_packed')
+                # print(mask_packed.shape)
                 loss_seg = self.lambda_seg*self.loss_seg(x_AM_packed,
                                                          mask_packed)
         
@@ -407,6 +411,7 @@ class _forward(nn.Module):
             or self.lambda_x_id
             or self.lambda_z_id):
                 s_B, skip_B = self.encoder(x_B)
+        # print("encoder OK")
         
         # Helper function for summing either two tensors or pairs of tensors
         # across two lists of tensors.
@@ -433,10 +438,24 @@ class _forward(nn.Module):
             info_AB = {'skip_info': skip_A}
             if class_A is not None:
                 info_AB['class_info'] = class_A
+            # print("DECODER RESIDUAL")
             x_AB_residual, skip_AM = self.decoder_residual(s_A, **info_AB)
+        # TODO preco toto sa deje?
+        # print('s_A shape')
+        # print(s_A.shape)
+        # print('s_A.size(1)-self.shape_sample[0]')
+        # print(s_A.size(1)-self.shape_sample[0])
+        # print("self.shape_sample[0]")
+        # print(self.shape_sample[0])
         c_A, u_A = torch.split(s_A, [s_A.size(1)-self.shape_sample[0],
                                      self.shape_sample[0]], dim=1)
+        # print("c_A")
+        # print(c_A.shape)
+        # print("u_A")
+        # print(u_A.shape)
+
         if self.lambda_disc or self.lambda_x_id or self.lambda_z_id:
+            # print('DECODER COMMON')
             x_AB, _ = self.decoder_common(c_A, **info_AB)
             x_AA = add(x_AB, x_AB_residual)
             
@@ -454,9 +473,27 @@ class _forward(nn.Module):
                 info_BA['class_info'] = class_B
             u_BA = self._z_sample(batch_size, rng=rng)
             c_B  = s_B[:,:s_B.size(1)-self.shape_sample[0]]
+            # print('c_B')
+            # print(c_B.shape)
+            # print('s_B')
+            # print(s_B.shape)
+            # print('s_Bsize(1)-self.shape_sample[0]')
+            # print(s_B.size(1)-self.shape_sample[0])
+            # TODO u_BA je zle, co to vobec je dpc?
+            # print('u_BA')
+            # print(u_BA.shape)
+
             z_BA = torch.cat([c_B, u_BA], dim=1)
+           #  print('z_BA')
+            # print(z_BA.shape)
+             #print('DECODER COMMON')
             x_BB, _ = self.decoder_common(c_B, **info_BA)
+            # print('x_bb shape')
+            # print(x_BB.shape)
+            # print('DECODER RESIDUAL')
             x_BA_residual, _ = self.decoder_residual(z_BA, **info_BA)
+            # print('x_ba shape')
+            # print(x_BA_residual.shape)
             x_BA = add(x_BB, x_BA_residual)
             
             # Unpack.
@@ -467,6 +504,7 @@ class _forward(nn.Module):
         # Optional separate autoencoder.
         x_AA_ae = x_BB_ae = None
         if self.lambda_x_ae and self.decoder_autoencode is not None:
+            # print('not using')
             x_AA_ae, _ = self.decoder_autoencode(s_A, skip_info=skip_A)
             x_BB_ae, _ = self.decoder_autoencode(s_B, skip_info=skip_B)
         
@@ -480,6 +518,7 @@ class _forward(nn.Module):
                 info_AM = {'skip_info': skip_AM}
                 if class_A is not None:
                     info_AM['class_info'] = class_A
+                # print("DECODER RESIDUAL")
                 x_AM = self.decoder_residual(s_A, **info_AM, mode=1)
                 x_AM, _ = unpack(x_AM)
         
@@ -492,7 +531,7 @@ class _forward(nn.Module):
             s_BB, _       = self.encoder(x_BB)
             c_AB = s_AB[:,:s_AB.size(1)-self.shape_sample[0]]
             c_BB = s_BB[:,:s_BB.size(1)-self.shape_sample[0]]
-        
+
         # Cycle.
         x_BAB = c_BA = u_BA = None
         if self.lambda_cyc:
@@ -668,6 +707,7 @@ class _loss_G(nn.Module):
                 s_BA, s_AA, c_AB, c_BB, z_BA, s_A, c_A, u_A, c_B, c_BA, u_BA,
                 x_AA_list, x_AB_list, x_BB_list, x_BA_list, skip_A, skip_B,
                 x_AA_ae=None, x_BB_ae=None, class_A=None, class_B=None):
+        # print("'G' FORWARD FUNCTION")
         # Mutual information loss for generator.
         loss_mi_gen = defaultdict(int)
         if self.net['mi'] is not None and self.lambda_mi:
