@@ -8,7 +8,7 @@ from torch import nn
 def get_dataset_properties(path=None):
      nnunet_architecture_config_files = {
          # plans
-        'input_channels': 1,
+        'input_channels': 2,
         'base_num_features': 30,
         'num_classes': 3,
         'num_pool': 7,

@@ -41,74 +41,72 @@ def build_model(lambda_disc=3,
                 lambda_seg=0.01,
                 lambda_enforce_sum=None,
                 mixed_precision=True):
-
     # this should be probably removed
-    N = 512 # Number of features at the bottleneck.
-    n = 128 # Number of features to sample at the bottleneck.
-    image_size = (2, 256, 256)
-    
+    N = 512  # Number of features at the bottleneck.
+    n = 128  # Number of features to sample at the bottleneck.
+    image_size = (2, 480, 480)
+
     # Rescale lambdas if a sum is enforced.
     lambda_scale = 1.
     if lambda_enforce_sum is not None:
-        lambda_sum = ( lambda_disc
-                      +lambda_x_id
-                      +lambda_z_id
-                      +lambda_f_id
-                      +lambda_cyc
-                      +lambda_seg)
-        lambda_scale = lambda_enforce_sum/lambda_sum
-    
+        lambda_sum = (lambda_disc
+                      + lambda_x_id
+                      + lambda_z_id
+                      + lambda_f_id
+                      + lambda_cyc
+                      + lambda_seg)
+        lambda_scale = lambda_enforce_sum / lambda_sum
+
     encoder_kwargs = {}
     encoder_instance = encoder(**get_dataset_properties())
     enc_out_shape = encoder_instance.final_num_features
     final_num_features = encoder_instance.final_num_features
 
-    
     decoder_common_kwargs = {}
 
     decoder_residual_kwargs = {}
 
     discriminator_kwargs = {
-        'input_dim'           : image_size[0],
-        'num_channels_list'   : [N//8, N//4, N//2, N],
-        'num_scales'          : 3,
-        'normalization'       : layer_normalization,
-        'norm_kwargs'         : None,
-        'kernel_size'         : 4,
-        'nonlinearity'        : lambda : nn.LeakyReLU(0.2, inplace=True),
-        'padding_mode'        : 'reflect',
-        'init'                : 'kaiming_normal_'}
-    
-    z_shape = (480, 480)
+        'input_dim': image_size[0],
+        'num_channels_list': [N // 8, N // 4, N // 2, N],
+        'num_scales': 3,
+        'normalization': layer_normalization,
+        'norm_kwargs': None,
+        'kernel_size': 4,
+        'nonlinearity': lambda: nn.LeakyReLU(0.2, inplace=True),
+        'padding_mode': 'reflect',
+        'init': 'kaiming_normal_'}
+
+    z_shape = (2, 480, 480)
     print("DEBUG: sample_shape={}".format(z_shape))
 
     submodel = {
-        'encoder'           : encoder_instance,
-        'decoder_common'    : decoder(final_num_features,
-                                      encoder_instance.conv_blocks_context,
-                                      # out_conv,
-                                      **get_dataset_properties("")),
-        'decoder_residual'  : decoder(final_num_features,
-                                      encoder_instance.conv_blocks_context,
-                                      # out_conv,
-                                      **get_dataset_properties("")),
-        'segmenter'         : None,
+        'encoder': encoder_instance,
+        'decoder_common': decoder(final_num_features,
+                                  encoder_instance.conv_blocks_context,
+                                  # out_conv,
+                                  **get_dataset_properties("")),
+        'decoder_residual': decoder(final_num_features,
+                                    encoder_instance.conv_blocks_context,
+                                    # out_conv,
+                                    **get_dataset_properties("")),
+        'segmenter': None,
         'mutual_information': None,
-        'disc_A'            : munit_discriminator(**discriminator_kwargs),
-        'disc_B'            : munit_discriminator(**discriminator_kwargs)}
+        'disc_A': munit_discriminator(**discriminator_kwargs),
+        'disc_B': munit_discriminator(**discriminator_kwargs)}
     for m in submodel.values():
         if m is None:
             continue
         recursive_spectral_norm(m)
-    #remove_spectral_norm(submodel['decoder_residual'].out_conv[1].conv.op)
-    #remove_spectral_norm(submodel['decoder_residual'].classifier.op)
-    
+    # remove_spectral_norm(submodel['decoder_residual'].out_conv[1].conv.op)
+    # remove_spectral_norm(submodel['decoder_residual'].classifier.op)
+
     # If mixed precision mode, create the amp gradient scaler.
     scaler = None
     if mixed_precision:
         print("DEBUG using mixed precision")
         scaler = torch.cuda.amp.GradScaler()
-    
+
     model = segmentation_model(**submodel,
                                scaler=scaler,
                                shape_sample=z_shape,
@@ -116,18 +114,18 @@ def build_model(lambda_disc=3,
                                loss_seg=dice_loss(),
                                relativistic=False,
                                rng=np.random.RandomState(1234),
-                               lambda_disc=lambda_disc*lambda_scale,
-                               lambda_x_id=lambda_x_id*lambda_scale,
-                               lambda_z_id=lambda_z_id*lambda_scale,
-                               lambda_f_id=lambda_f_id*lambda_scale,
-                               lambda_cyc=lambda_cyc*lambda_scale,
-                               lambda_seg=lambda_seg*lambda_scale)
-    
+                               lambda_disc=lambda_disc * lambda_scale,
+                               lambda_x_id=lambda_x_id * lambda_scale,
+                               lambda_z_id=lambda_z_id * lambda_scale,
+                               lambda_f_id=lambda_f_id * lambda_scale,
+                               lambda_cyc=lambda_cyc * lambda_scale,
+                               lambda_seg=lambda_seg * lambda_scale)
+
     out = OrderedDict((
         ('G', model),
         ('D', nn.ModuleList([model.separate_networks['disc_A'],
                              model.separate_networks['disc_B']])),
-        ))
+    ))
     if mixed_precision:
         out['scaler'] = model.scaler
     return out
@@ -270,12 +268,13 @@ class encoder(nn.Module):
     def forward(self, x):
         skips = []
         for d in range(len(self.conv_blocks_context) - 1):
+            print(self.conv_blocks_context[d](x))
             x = self.conv_blocks_context[d](x)
             skips.append(x)
             if not self.convolutional_pooling:
                 x = self.td[d](x)
         x = self.conv_blocks_context[-1](x)
-        return x
+        return x, skips
 
 
 class decoder(nn.Module):
@@ -408,19 +407,20 @@ class decoder(nn.Module):
         if self.weightInitializer is not None:
             self.apply(self.weightInitializer)
 
-    def forward(self, x, skips):
+    def forward(self, x, skip_info):
         seg_outputs = []
         for u in range(len(self.tu)):
             x = self.tu[u](x)
-            x = torch.cat((x, skips[-(u + 1)]), dim=1)
+            x = torch.cat((x, skip_info[-(u + 1)]), dim=1)
             x = self.conv_blocks_localization[u](x)
             seg_outputs.append(self.final_nonlin(self.seg_outputs[u](x)))
 
         if self._deep_supervision and self.do_ds:
             return tuple([seg_outputs[-1]] + [i(j) for i, j in
-                                              zip(list(self.upscale_logits_ops)[::-1], seg_outputs[:-1][::-1])])
+                                              zip(list(self.upscale_logits_ops)[::-1], seg_outputs[:-1][::-1])]), skip_info
         else:
-            return seg_outputs[-1]
+            return seg_outputs[-1], skip_info
+
 
 class switching_normalization(nn.Module):
     def __init__(self, normalization, *args, **kwargs):
@@ -439,6 +439,7 @@ class switching_normalization(nn.Module):
         else:
             return self.norm1(x)
 
+
 class mi_estimation_network(nn.Module):
     def __init__(self, x_size, z_size, n_hidden):
         super(mi_estimation_network, self).__init__()
@@ -446,14 +447,14 @@ class mi_estimation_network(nn.Module):
         self.z_size = z_size
         self.n_hidden = n_hidden
         modules = []
-        modules.append(nn.Linear(x_size+z_size, self.n_hidden))
+        modules.append(nn.Linear(x_size + z_size, self.n_hidden))
         modules.append(nn.ReLU())
         for i in range(2):
             modules.append(nn.Linear(self.n_hidden, self.n_hidden))
             modules.append(nn.ReLU())
         modules.append(nn.Linear(self.n_hidden, 1))
         self.model = nn.Sequential(*tuple(modules))
-    
+
     def forward(self, x, z):
         out = self.model(torch.cat([x.view(x.size(0), -1),
                                     z.view(z.size(0), -1)], dim=-1))
