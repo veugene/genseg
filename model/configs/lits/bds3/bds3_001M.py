@@ -2,6 +2,8 @@
 
 from collections import OrderedDict
 import torch
+from nnunet.network_architecture.generic_UNet import Generic_UNet, StackedConvLayers, ConvDropoutNormNonlin, Upsample
+from nnunet.network_architecture.initialization import InitWeights_He
 from torch import nn
 from torch.nn.utils import remove_spectral_norm
 from torch.functional import F
@@ -27,6 +29,7 @@ from model.common.network.basic import (adjust_to_size,
                                         repeat_block)
 from model.common.losses import dist_ratio_mse_abs
 from model.bd_segmentation import segmentation_model
+from model.common.network_architecture.dataset_properties import get_dataset_properties
 
 
 def build_model(lambda_disc=3,
@@ -67,8 +70,9 @@ def build_model(lambda_disc=3,
         'nonlinearity'        : lambda : nn.ReLU(inplace=True),
         'skip_pool_indices'   : False,
         'ndim'                : 2}
-    encoder_instance = encoder(**encoder_kwargs)
-    enc_out_shape = encoder_instance.output_shape
+    encoder_instance = encoder(**get_dataset_properties())
+    enc_out_shape = encoder_instance.final_num_features
+    final_num_features =  encoder_instance.final_num_features
     
     decoder_common_kwargs = {
         'input_shape'         : (N-n,)+enc_out_shape[1:],
@@ -87,7 +91,7 @@ def build_model(lambda_disc=3,
         'nonlinearity'        : lambda : nn.ReLU(inplace=True),
         'long_skip_merge_mode': 'skinny_cat',
         'ndim'                : 2}
-    
+
     decoder_residual_kwargs = {
         'input_shape'         : enc_out_shape,
         'output_shape'        : image_size,
@@ -106,7 +110,7 @@ def build_model(lambda_disc=3,
         'nonlinearity'        : lambda : nn.ReLU(inplace=True),
         'long_skip_merge_mode': 'skinny_cat',
         'ndim'                : 2}
-    
+
     discriminator_kwargs = {
         'input_dim'           : image_size[0],
         'num_channels_list'   : [N//8, N//4, N//2, N],
@@ -123,8 +127,8 @@ def build_model(lambda_disc=3,
     print("DEBUG: sample_shape={}".format(z_shape))
     submodel = {
         'encoder'           : encoder_instance,
-        'decoder_common'    : decoder(**decoder_common_kwargs),
-        'decoder_residual'  : decoder(**decoder_residual_kwargs),
+        'decoder_common'    : decoder(final_num_features, **get_dataset_properties("")),
+        'decoder_residual'  : decoder(final_num_features, **get_dataset_properties("")),
         'segmenter'         : None,
         'mutual_information': None,
         'disc_A'            : munit_discriminator(**discriminator_kwargs),
@@ -167,101 +171,307 @@ def build_model(lambda_disc=3,
 
 
 class encoder(nn.Module):
-    def __init__(self, input_shape, num_conv_blocks, block_type,
-                 num_channels_list, skip=True, dropout=0.,
-                 normalization=instance_normalization, norm_kwargs=None,
-                 padding_mode='constant', kernel_size=3,
-                 init='kaiming_normal_', nonlinearity='ReLU',
-                 skip_pool_indices=False, ndim=2):
-        super(encoder, self).__init__()
-        
-        # ndim must be only 2 or 3.
-        if ndim not in [2, 3]:
-            raise ValueError("`ndim` must be either 2 or 3")
-        
-        # num_channels should be specified once for every block.
-        if len(num_channels_list)!=num_conv_blocks:
-            raise ValueError("`num_channels_list` must have the same number "
-                             "of entries as there are blocks.")
-        
-        self.input_shape = input_shape
-        self.num_conv_blocks = num_conv_blocks
-        self.block_type = block_type
-        self.num_channels_list = num_channels_list
-        self.skip = skip
-        self.dropout = dropout
-        self.normalization = normalization
-        self.norm_kwargs = {} if norm_kwargs is None else norm_kwargs
-        self.padding_mode = padding_mode
-        self.kernel_size = kernel_size
-        self.init = init
-        self.nonlinearity = nonlinearity
-        self.skip_pool_indices = skip_pool_indices
-        self.ndim = ndim
-        
-        self.in_channels = input_shape[0]
-        self.out_channels = self.num_channels_list[-1]
-        
-        '''
-        Set up blocks.
-        '''
-        self.blocks = nn.ModuleList()
-        shape = self.input_shape
-        last_channels = self.in_channels
-        conv = convolution(in_channels=last_channels,
-                           out_channels=self.num_channels_list[0],
-                           kernel_size=3,
-                           stride=1,
-                           padding=1,
-                           padding_mode=self.padding_mode,
-                           init=self.init)
-        self.blocks.append(conv)
-        shape = get_output_shape(conv, shape)
-        last_channels = self.num_channels_list[0]
-        for i in range(1, self.num_conv_blocks):
-            block = self.block_type(in_channels=last_channels,
-                                    num_filters=self.num_channels_list[i],
-                                    subsample=True,
-                                    skip=skip,
-                                    dropout=self.dropout,
-                                    normalization=self.normalization,
-                                    norm_kwargs=self.norm_kwargs,
-                                    padding_mode=self.padding_mode,
-                                    kernel_size=self.kernel_size,
-                                    init=self.init,
-                                    nonlinearity=self.nonlinearity,
-                                    ndim=self.ndim)
-            self.blocks.append(block)
-            shape = get_output_shape(block, shape)
-            last_channels = self.num_channels_list[i]
-        if normalization is not None:
-            block = normalization(ndim=self.ndim,
-                                  num_features=last_channels,
-                                  **self.norm_kwargs)
-            self.blocks.append(block)
-        self.blocks.append(get_nonlinearity(self.nonlinearity))
-        self.output_shape = shape
-            
-    def forward(self, input):
-        skips = []
-        size = input.size()
-        out = input
-        for m in self.blocks:
-            out_prev = out
-            if isinstance(m, pool_block):
-                out, indices = m(out_prev)
-            else:
-                out = m(out_prev)
-            out_size = out.size()
-            if out_size[-1]!=size[-1] or out_size[-2]!=size[-2]:
-                # Skip forward feature stacks prior to resolution change.
-                size = out_size
-                if self.skip_pool_indices:
-                    skips.append(indices)
-                else:
-                    skips.append(out_prev)
-        return out, skips
+    DEFAULT_BATCH_SIZE_3D = 2
+    DEFAULT_PATCH_SIZE_3D = (64, 192, 160)
+    SPACING_FACTOR_BETWEEN_STAGES = 2
+    BASE_NUM_FEATURES_3D = 30
+    MAX_NUMPOOL_3D = 999
+    MAX_NUM_FILTERS_3D = 320
 
+    DEFAULT_PATCH_SIZE_2D = (256, 256)
+    BASE_NUM_FEATURES_2D = 30
+    DEFAULT_BATCH_SIZE_2D = 50
+    MAX_NUMPOOL_2D = 999
+    MAX_FILTERS_2D = 480
+
+    use_this_for_batch_size_computation_2D = 19739648
+    use_this_for_batch_size_computation_3D = 520000000  # 505789440
+
+    def __init__(self, input_channels, base_num_features, num_classes, num_pool, num_conv_per_stage=2,
+                 feat_map_mul_on_downscale=2, conv_op=nn.Conv2d,
+                 norm_op=nn.BatchNorm2d, norm_op_kwargs=None,
+                 dropout_op=nn.Dropout2d, dropout_op_kwargs=None,
+                 nonlin=nn.LeakyReLU, nonlin_kwargs=None, deep_supervision=True, dropout_in_localization=False,
+                 final_nonlin=None, weightInitializer=InitWeights_He(1e-2), pool_op_kernel_sizes=None,
+                 conv_kernel_sizes=None,
+                 upscale_logits=False, convolutional_pooling=False, convolutional_upsampling=False,
+                 max_num_features=None, basic_block=ConvDropoutNormNonlin,
+                 seg_output_use_bias=False
+                 ):
+        super(encoder, self).__init__()
+        self.final_num_features = None
+        self.convolutional_upsampling = convolutional_upsampling
+        self.convolutional_pooling = convolutional_pooling
+        self.upscale_logits = upscale_logits
+        if nonlin_kwargs is None:
+            nonlin_kwargs = {'negative_slope': 1e-2, 'inplace': True}
+        if dropout_op_kwargs is None:
+            dropout_op_kwargs = {'p': 0.5, 'inplace': True}
+        if norm_op_kwargs is None:
+            norm_op_kwargs = {'eps': 1e-5, 'affine': True, 'momentum': 0.1}
+
+        self.conv_kwargs = {'stride': 1, 'dilation': 1, 'bias': True}
+
+        self.nonlin = nonlin
+        self.nonlin_kwargs = nonlin_kwargs
+        self.dropout_op_kwargs = dropout_op_kwargs
+        self.norm_op_kwargs = norm_op_kwargs
+        self.weightInitializer = weightInitializer
+        self.conv_op = conv_op
+        self.norm_op = norm_op
+        self.dropout_op = dropout_op
+        self.num_classes = num_classes
+        self.final_nonlin = final_nonlin
+        self._deep_supervision = deep_supervision
+        self.do_ds = deep_supervision
+
+        pool_op = nn.MaxPool2d
+        if pool_op_kernel_sizes is None:
+            pool_op_kernel_sizes = [(2, 2)] * num_pool
+        if conv_kernel_sizes is None:
+            conv_kernel_sizes = [(3, 3)] * (num_pool + 1)
+
+        self.input_shape_must_be_divisible_by = np.prod(pool_op_kernel_sizes, 0, dtype=np.int64)
+        self.pool_op_kernel_sizes = pool_op_kernel_sizes
+        self.conv_kernel_sizes = conv_kernel_sizes
+
+        self.conv_pad_sizes = []
+        for krnl in self.conv_kernel_sizes:
+            self.conv_pad_sizes.append([1 if i == 3 else 0 for i in krnl])
+
+        if max_num_features is None:
+            self.max_num_features = self.MAX_FILTERS_2D
+        else:
+            self.max_num_features = max_num_features
+
+        output_features = base_num_features
+        input_features = input_channels
+
+        self.conv_blocks_context = []
+        self.td = []
+
+        for d in range(num_pool):
+            # determine the first stride
+            if d != 0 and self.convolutional_pooling:
+                first_stride = pool_op_kernel_sizes[d - 1]
+            else:
+                first_stride = None
+
+            self.conv_kwargs['kernel_size'] = self.conv_kernel_sizes[d]
+            self.conv_kwargs['padding'] = self.conv_pad_sizes[d]
+            # add convolutions
+            self.conv_blocks_context.append(StackedConvLayers(input_features, output_features, num_conv_per_stage,
+                                                              self.conv_op, self.conv_kwargs, self.norm_op,
+                                                              self.norm_op_kwargs, self.dropout_op,
+                                                              self.dropout_op_kwargs, self.nonlin, self.nonlin_kwargs,
+                                                              first_stride, basic_block=basic_block))
+        if not self.convolutional_pooling:
+            self.td.append(pool_op(pool_op_kernel_sizes[d]))
+        input_features = output_features
+        output_features = int(np.round(output_features * feat_map_mul_on_downscale))
+        output_features = min(output_features, self.max_num_features)
+
+        # now the bottleneck.
+        # determine the first stride
+        if self.convolutional_pooling:
+            first_stride = pool_op_kernel_sizes[-1]
+        else:
+            first_stride = None
+
+        # the output of the last conv must match the number of features from the skip connection if we are not using
+        # convolutional upsampling. If we use convolutional upsampling then the reduction in feature maps will be
+        # done by the transposed conv
+        if self.convolutional_upsampling:
+            self.final_num_features = output_features
+        else:
+            self.final_num_features = self.conv_blocks_context[-1].output_channels
+
+        self.conv_kwargs['kernel_size'] = self.conv_kernel_sizes[num_pool]
+        self.conv_kwargs['padding'] = self.conv_pad_sizes[num_pool]
+        self.conv_blocks_context.append(nn.Sequential(
+            StackedConvLayers(input_features, output_features, num_conv_per_stage - 1, self.conv_op, self.conv_kwargs,
+                              self.norm_op, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs, self.nonlin,
+                              self.nonlin_kwargs, first_stride, basic_block=basic_block),
+            StackedConvLayers(output_features, self.final_num_features, 1, self.conv_op, self.conv_kwargs,
+                              self.norm_op, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs, self.nonlin,
+                              self.nonlin_kwargs, basic_block=basic_block)))
+
+        # if we don't want to do dropout in the localization pathway then we set the dropout prob to zero here
+        if not dropout_in_localization:
+            old_dropout_p = self.dropout_op_kwargs['p']
+            self.dropout_op_kwargs['p'] = 0.0
+
+        self.conv_blocks_context = nn.ModuleList(self.conv_blocks_context)
+        self.td = nn.ModuleList(self.td)
+
+        if self.upscale_logits:
+            self.upscale_logits_ops = nn.ModuleList(
+                self.upscale_logits_ops)  # lambda x:x is not a Module so we need to distinguish here
+
+        if self.weightInitializer is not None:
+            self.apply(self.weightInitializer)
+            # self.apply(print_module_training_status
+
+    def forward(self, x):
+        skips = []
+        for d in range(len(self.conv_blocks_context) - 1):
+            x = self.conv_blocks_context[d](x)
+            skips.append(x)
+            if not self.convolutional_pooling:
+                x = self.td[d](x)
+        x = self.conv_blocks_context[-1](x)
+        return x
+
+
+class decoder(nn.Module):
+    DEFAULT_BATCH_SIZE_3D = 2
+    DEFAULT_PATCH_SIZE_3D = (64, 192, 160)
+    SPACING_FACTOR_BETWEEN_STAGES = 2
+    BASE_NUM_FEATURES_3D = 30
+    MAX_NUMPOOL_3D = 999
+    MAX_NUM_FILTERS_3D = 320
+
+    DEFAULT_PATCH_SIZE_2D = (256, 256)
+    BASE_NUM_FEATURES_2D = 30
+    DEFAULT_BATCH_SIZE_2D = 50
+    MAX_NUMPOOL_2D = 999
+    MAX_FILTERS_2D = 480
+
+    use_this_for_batch_size_computation_2D = 19739648
+    use_this_for_batch_size_computation_3D = 520000000  # 505789440
+    def __init__(self, final_num_features, num_classes, num_pool, num_conv_per_stage=2,
+                conv_op=nn.Conv2d,
+                norm_op=nn.BatchNorm2d, norm_op_kwargs=None,
+                dropout_op=nn.Dropout2d, dropout_op_kwargs=None,
+                nonlin=nn.LeakyReLU, nonlin_kwargs=None, deep_supervision=True,
+                final_nonlin=None, weightInitializer=InitWeights_He(1e-2), pool_op_kernel_sizes=None,
+                conv_kernel_sizes=None,
+                upscale_logits=False, convolutional_pooling=False, convolutional_upsampling=False,
+                max_num_features=None, basic_block=ConvDropoutNormNonlin,
+                seg_output_use_bias=False
+                 ):
+        super(decoder, self).__init__()
+        self.convolutional_upsampling = convolutional_upsampling
+        self.convolutional_pooling = convolutional_pooling
+        self.upscale_logits = upscale_logits
+        if nonlin_kwargs is None:
+            nonlin_kwargs = {'negative_slope': 1e-2, 'inplace': True}
+        if dropout_op_kwargs is None:
+            dropout_op_kwargs = {'p': 0.5, 'inplace': True}
+        if norm_op_kwargs is None:
+            norm_op_kwargs = {'eps': 1e-5, 'affine': True, 'momentum': 0.1}
+
+        self.conv_kwargs = {'stride': 1, 'dilation': 1, 'bias': True}
+
+        self.nonlin = nonlin
+        self.nonlin_kwargs = nonlin_kwargs
+        self.dropout_op_kwargs = dropout_op_kwargs
+        self.norm_op_kwargs = norm_op_kwargs
+        self.weightInitializer = weightInitializer
+        self.conv_op = conv_op
+        self.norm_op = norm_op
+        self.dropout_op = dropout_op
+        self.num_classes = num_classes
+        self.final_nonlin = final_nonlin
+        self._deep_supervision = deep_supervision
+        self.do_ds = deep_supervision
+
+        self.conv_blocks_localization = []
+        self.td = []
+        self.tu = []
+        self.seg_outputs = []
+
+        upsample_mode = 'bilinear'
+        transpconv = nn.ConvTranspose2d
+        if pool_op_kernel_sizes is None:
+            pool_op_kernel_sizes = [(2, 2)] * num_pool
+        if conv_kernel_sizes is None:
+            conv_kernel_sizes = [(3, 3)] * (num_pool + 1)
+
+        self.input_shape_must_be_divisible_by = np.prod(pool_op_kernel_sizes, 0, dtype=np.int64)
+        self.pool_op_kernel_sizes = pool_op_kernel_sizes
+        self.conv_kernel_sizes = conv_kernel_sizes
+
+        self.conv_pad_sizes = []
+        for krnl in self.conv_kernel_sizes:
+            self.conv_pad_sizes.append([1 if i == 3 else 0 for i in krnl])
+
+        if max_num_features is None:
+            if self.conv_op == nn.Conv3d:
+                self.max_num_features = self.MAX_NUM_FILTERS_3D
+            else:
+                self.max_num_features = self.MAX_FILTERS_2D
+        else:
+            self.max_num_features = max_num_features
+
+        for u in range(num_pool):
+            # this should be taken from the encoder
+            nfeatures_from_down = final_num_features
+            nfeatures_from_skip = self.conv_blocks_context[
+                -(2 + u)].output_channels  # self.conv_blocks_context[-1] is bottleneck, so start with -2
+            n_features_after_tu_and_concat = nfeatures_from_skip * 2
+
+            # the first conv reduces the number of features to match those of skip
+            # the following convs work on that number of features
+            # if not convolutional upsampling then the final conv reduces the num of features again
+            if u != num_pool - 1 and not self.convolutional_upsampling:
+                final_num_features = self.conv_blocks_context[-(3 + u)].output_channels
+            else:
+                final_num_features = nfeatures_from_skip
+
+            if not self.convolutional_upsampling:
+                self.tu.append(Upsample(scale_factor=pool_op_kernel_sizes[-(u + 1)], mode=upsample_mode))
+            else:
+                self.tu.append(transpconv(nfeatures_from_down, nfeatures_from_skip, pool_op_kernel_sizes[-(u + 1)],
+                                          pool_op_kernel_sizes[-(u + 1)], bias=False))
+
+            self.conv_kwargs['kernel_size'] = self.conv_kernel_sizes[- (u + 1)]
+            self.conv_kwargs['padding'] = self.conv_pad_sizes[- (u + 1)]
+            self.conv_blocks_localization.append(nn.Sequential(
+                StackedConvLayers(n_features_after_tu_and_concat, nfeatures_from_skip, num_conv_per_stage - 1,
+                                  self.conv_op, self.conv_kwargs, self.norm_op, self.norm_op_kwargs, self.dropout_op,
+                                  self.dropout_op_kwargs, self.nonlin, self.nonlin_kwargs, basic_block=basic_block),
+                StackedConvLayers(nfeatures_from_skip, final_num_features, 1, self.conv_op, self.conv_kwargs,
+                                  self.norm_op, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs,
+                                  self.nonlin, self.nonlin_kwargs, basic_block=basic_block)
+            ))
+
+        for ds in range(len(self.conv_blocks_localization)):
+            self.seg_outputs.append(conv_op(self.conv_blocks_localization[ds][-1].output_channels, num_classes,
+                                            1, 1, 0, 1, 1, seg_output_use_bias))
+
+        self.upscale_logits_ops = []
+        cum_upsample = np.cumprod(np.vstack(pool_op_kernel_sizes), axis=0)[::-1]
+        for usl in range(num_pool - 1):
+            if self.upscale_logits:
+                self.upscale_logits_ops.append(Upsample(scale_factor=tuple([int(i) for i in cum_upsample[usl + 1]]),
+                                                        mode=upsample_mode))
+            else:
+                self.upscale_logits_ops.append(lambda x: x)
+
+        self.conv_blocks_localization = nn.ModuleList(self.conv_blocks_localization)
+        self.tu = nn.ModuleList(self.tu)
+        self.seg_outputs = nn.ModuleList(self.seg_outputs)
+        if self.upscale_logits:
+            self.upscale_logits_ops = nn.ModuleList(
+                self.upscale_logits_ops)  # lambda x:x is not a Module so we need to distinguish here
+
+        if self.weightInitializer is not None:
+            self.apply(self.weightInitializer)
+
+    def forward(self, x, skips):
+        seg_outputs = []
+        for u in range(len(self.tu)):
+            x = self.tu[u](x)
+            x = torch.cat((x, skips[-(u + 1)]), dim=1)
+            x = self.conv_blocks_localization[u](x)
+            seg_outputs.append(self.final_nonlin(self.seg_outputs[u](x)))
+
+        if self._deep_supervision and self.do_ds:
+            return tuple([seg_outputs[-1]] + [i(j) for i, j in
+                                              zip(list(self.upscale_logits_ops)[::-1], seg_outputs[:-1][::-1])])
+        else:
+            return seg_outputs[-1]
 
 class switching_normalization(nn.Module):
     def __init__(self, normalization, *args, **kwargs):
@@ -269,196 +479,16 @@ class switching_normalization(nn.Module):
         self.norm0 = normalization(*args, **kwargs)
         self.norm1 = normalization(*args, **kwargs)
         self.mode = 0
+
     def set_mode(self, mode):
         assert mode in [0, 1]
         self.mode = mode
+
     def forward(self, x):
-        if self.mode==0:
+        if self.mode == 0:
             return self.norm0(x)
         else:
             return self.norm1(x)
-    
-
-class decoder(nn.Module):
-    def __init__(self, input_shape, output_shape, num_conv_blocks, block_type,
-                 num_channels_list, num_classes=None, skip=True, dropout=0.,
-                 normalization=instance_normalization, norm_kwargs=None,
-                 padding_mode='constant', kernel_size=3, upsample_mode='conv',
-                 init='kaiming_normal_', nonlinearity='ReLU',
-                 long_skip_merge_mode=None, ndim=2):
-        super(decoder, self).__init__()
-        
-        # ndim must be only 2 or 3.
-        if ndim not in [2, 3]:
-            raise ValueError("`ndim` must be either 2 or 3")
-        
-        # num_channels should be specified once for every block.
-        if len(num_channels_list)!=num_conv_blocks:
-            raise ValueError("`num_channels_list` must have the same number "
-                             "of entries as there are blocks.")
-        
-        # long_skip_merge_mode settings.
-        valid_modes = [None, 'skinny_cat', 'cat', 'pool']
-        if long_skip_merge_mode not in valid_modes:
-            raise ValueError("`long_skip_merge_mode` must be one of {}."
-                             "".format(", ".join(["\'{}\'".format(mode)
-                                                  for mode in valid_modes])))
-        
-        self.input_shape = input_shape
-        self.output_shape = output_shape
-        self.num_conv_blocks = num_conv_blocks
-        self.block_type = block_type
-        self.num_channels_list = num_channels_list
-        self.num_classes = num_classes
-        self.skip = skip
-        self.dropout = dropout
-        self.normalization = normalization
-        self.norm_kwargs = {} if norm_kwargs is None else norm_kwargs
-        self.padding_mode = padding_mode
-        self.kernel_size = kernel_size
-        self.upsample_mode = upsample_mode
-        self.init = init
-        self.nonlinearity = nonlinearity
-        self.long_skip_merge_mode = long_skip_merge_mode
-        self.ndim = ndim
-        
-        self.in_channels  = self.input_shape[0]
-        self.out_channels = self.output_shape[0]
-        
-        # Normalization switch (translation, segmentation modes).
-        def normalization_switch(*args, **kwargs):
-            return switching_normalization(*args,
-                                           normalization=self.normalization,
-                                           **kwargs)
-        
-        '''
-        Set up blocks.
-        '''
-        self.cats   = nn.ModuleList()
-        self.blocks = nn.ModuleList()
-        shape = self.input_shape
-        last_channels = shape[0]
-        for n in range(self.num_conv_blocks):
-            def _select(a, b=None):
-                return a if n>0 else b
-            block = self.block_type(
-                in_channels=last_channels,
-                num_filters=self.num_channels_list[n],
-                upsample=True,
-                upsample_mode=self.upsample_mode,
-                skip=_select(self.skip, False),
-                dropout=self.dropout,
-                normalization=_select(normalization_switch),
-                norm_kwargs=self.norm_kwargs,
-                padding_mode=self.padding_mode,
-                kernel_size=self.kernel_size,
-                init=self.init,
-                nonlinearity=_select(self.nonlinearity),
-                ndim=self.ndim)
-            self.blocks.append(block)
-            shape = get_output_shape(block, shape)
-            last_channels = self.num_channels_list[n]
-            if   self.long_skip_merge_mode=='skinny_cat':
-                cat = conv_block(in_channels=self.num_channels_list[n],
-                                 num_filters=1,
-                                 skip=False,
-                                 normalization=instance_normalization,
-                                 nonlinearity=None,
-                                 kernel_size=1,
-                                 init=self.init,
-                                 ndim=self.ndim)
-                self.cats.append(cat)
-                last_channels += 1
-            elif self.long_skip_merge_mode=='cat':
-                last_channels *= 2
-            else:
-                pass
-            
-        '''
-        Final output - change number of channels.
-        '''
-        self.pre_conv = norm_nlin_conv(in_channels=last_channels,
-                                       out_channels=last_channels,  # NOTE
-                                       kernel_size=self.kernel_size,
-                                       init=self.init,              # NOTE
-                                       normalization=normalization_switch,
-                                       norm_kwargs=self.norm_kwargs,
-                                       nonlinearity=self.nonlinearity,
-                                       padding_mode=self.padding_mode)
-        kwargs_out_conv = {
-            'in_channels': last_channels,
-            'out_channels': output_shape[0],
-            'kernel_size': 7,
-            'normalization': self.normalization,
-            'norm_kwargs': self.norm_kwargs,
-            'nonlinearity': self.nonlinearity,
-            'padding_mode': self.padding_mode,
-            'init': self.init,
-            'ndim': self.ndim}
-        self.out_conv = [norm_nlin_conv(**kwargs_out_conv),
-                         norm_nlin_conv(**kwargs_out_conv)]     # 1 per mode.
-        self.out_conv = nn.ModuleList(self.out_conv)
-        
-        # Classifier for segmentation (mode 1).
-        if self.num_classes is not None:
-            self.classifier = convolution(
-                in_channels=self.out_channels,
-                out_channels=self.num_classes,
-                kernel_size=1,
-                ndim=self.ndim)
-        
-        
-    def forward(self, z, skip_info=None, mode=0):
-        # Set mode (0: trans, 1: seg).
-        assert mode in [0, 1]
-        for m in self.modules():
-            if isinstance(m, switching_normalization):
-                m.set_mode(mode)
-        
-        # Compute output.
-        out = z
-        if skip_info is not None and mode==0:
-            skip_info = skip_info[::-1]
-        for n, block in enumerate(self.blocks):
-            if (self.long_skip_merge_mode=='pool' and skip_info is not None
-                                                  and n<len(skip_info)):
-                skip = skip_info[n]
-                out = adjust_to_size(out, skip.size()[2:])
-                out = block(out, unpool_indices=skip)
-            elif (self.long_skip_merge_mode is not None
-                                                  and skip_info is not None
-                                                  and n<len(skip_info)):
-                skip = skip_info[n]
-                out = block(out)
-                out = adjust_to_size(out, skip.size()[2:])
-                if   self.long_skip_merge_mode=='skinny_cat':
-                    cat = self.cats[n]
-                    out = torch.cat([out, cat(skip)], dim=1)
-                elif self.long_skip_merge_mode=='cat':
-                    out = torch.cat([out, skip], dim=1)
-                elif self.long_skip_merge_mode=='sum':
-                    out = out+skip
-                else:
-                    ValueError()
-            else:
-                out = block(out)
-            if not out.is_contiguous():
-                out = out.contiguous()
-        out = self.pre_conv(out)
-        out = self.out_conv[mode](out)
-        if mode==0:
-            out = torch.tanh(out)
-            return out, skip_info
-        elif mode==1:
-            out = self.classifier(out)
-            if self.num_classes==1:
-                out = torch.sigmoid(out)
-            else:
-                out = torch.softmax(out, dim=1)
-            return out
-        else:
-            AssertionError()
-
 
 class mi_estimation_network(nn.Module):
     def __init__(self, x_size, z_size, n_hidden):
