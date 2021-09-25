@@ -40,6 +40,8 @@ def build_model(lambda_disc=3,
                 lambda_seg=0.01,
                 lambda_enforce_sum=None,
                 mixed_precision=True):
+
+    # this should be probably removed
     N = 512 # Number of features at the bottleneck.
     n = 128 # Number of features to sample at the bottleneck.
     image_size = (1, 256, 256)
@@ -55,61 +57,14 @@ def build_model(lambda_disc=3,
                       +lambda_seg)
         lambda_scale = lambda_enforce_sum/lambda_sum
     
-    encoder_kwargs = {
-        'input_shape'         : image_size,
-        'num_conv_blocks'     : 6,
-        'block_type'          : conv_block,
-        'num_channels_list'   : [N//32, N//16, N//8, N//4, N//2, N],
-        'skip'                : True,
-        'dropout'             : 0.,
-        'normalization'       : instance_normalization,
-        'norm_kwargs'         : None,
-        'padding_mode'        : 'reflect',
-        'kernel_size'         : 3,
-        'init'                : 'kaiming_normal_',
-        'nonlinearity'        : lambda : nn.ReLU(inplace=True),
-        'skip_pool_indices'   : False,
-        'ndim'                : 2}
+    encoder_kwargs = {}
     encoder_instance = encoder(**get_dataset_properties())
     enc_out_shape = encoder_instance.final_num_features
-    final_num_features =  encoder_instance.final_num_features
+    final_num_features = encoder_instance.final_num_features
     
-    decoder_common_kwargs = {
-        'input_shape'         : (N-n,)+enc_out_shape[1:],
-        'output_shape'        : image_size,
-        'num_conv_blocks'     : 5,
-        'block_type'          : conv_block,
-        'num_channels_list'   : [N//2, N//4, N//8, N//16, N//32],
-        'skip'                : True,
-        'dropout'             : 0.,
-        'normalization'       : layer_normalization,
-        'norm_kwargs'         : None,
-        'padding_mode'        : 'reflect',
-        'kernel_size'         : 3,
-        'init'                : 'kaiming_normal_',
-        'upsample_mode'       : 'repeat',
-        'nonlinearity'        : lambda : nn.ReLU(inplace=True),
-        'long_skip_merge_mode': 'skinny_cat',
-        'ndim'                : 2}
+    decoder_common_kwargs = {}
 
-    decoder_residual_kwargs = {
-        'input_shape'         : enc_out_shape,
-        'output_shape'        : image_size,
-        'num_conv_blocks'     : 5,
-        'block_type'          : conv_block,
-        'num_channels_list'   : [N//2, N//4, N//8, N//16, N//32],
-        'num_classes'         : 1,
-        'skip'                : False,
-        'dropout'             : 0.,
-        'normalization'       : layer_normalization,
-        'norm_kwargs'         : None,
-        'padding_mode'        : 'reflect',
-        'kernel_size'         : 5,
-        'init'                : 'kaiming_normal_',
-        'upsample_mode'       : 'repeat',
-        'nonlinearity'        : lambda : nn.ReLU(inplace=True),
-        'long_skip_merge_mode': 'skinny_cat',
-        'ndim'                : 2}
+    decoder_residual_kwargs = {}
 
     discriminator_kwargs = {
         'input_dim'           : image_size[0],
@@ -125,6 +80,7 @@ def build_model(lambda_disc=3,
     x_shape = (N-n,)+tuple(enc_out_shape[1:])
     z_shape = (n,)+tuple(enc_out_shape[1:])
     print("DEBUG: sample_shape={}".format(z_shape))
+
     submodel = {
         'encoder'           : encoder_instance,
         'decoder_common'    : decoder(final_num_features, **get_dataset_properties("")),
@@ -171,19 +127,11 @@ def build_model(lambda_disc=3,
 
 
 class encoder(nn.Module):
-    DEFAULT_BATCH_SIZE_3D = 2
-    DEFAULT_PATCH_SIZE_3D = (64, 192, 160)
     SPACING_FACTOR_BETWEEN_STAGES = 2
-    BASE_NUM_FEATURES_3D = 30
-    MAX_NUMPOOL_3D = 999
-    MAX_NUM_FILTERS_3D = 320
-
     DEFAULT_PATCH_SIZE_2D = (256, 256)
     BASE_NUM_FEATURES_2D = 30
     DEFAULT_BATCH_SIZE_2D = 50
-    MAX_NUMPOOL_2D = 999
     MAX_FILTERS_2D = 480
-
     use_this_for_batch_size_computation_2D = 19739648
     use_this_for_batch_size_computation_3D = 520000000  # 505789440
 
@@ -195,8 +143,7 @@ class encoder(nn.Module):
                  final_nonlin=None, weightInitializer=InitWeights_He(1e-2), pool_op_kernel_sizes=None,
                  conv_kernel_sizes=None,
                  upscale_logits=False, convolutional_pooling=False, convolutional_upsampling=False,
-                 max_num_features=None, basic_block=ConvDropoutNormNonlin,
-                 seg_output_use_bias=False
+                 max_num_features=None, basic_block=ConvDropoutNormNonlin, seg_output_use_bias=False
                  ):
         super(encoder, self).__init__()
         self.final_num_features = None
@@ -265,11 +212,11 @@ class encoder(nn.Module):
                                                               self.norm_op_kwargs, self.dropout_op,
                                                               self.dropout_op_kwargs, self.nonlin, self.nonlin_kwargs,
                                                               first_stride, basic_block=basic_block))
-        if not self.convolutional_pooling:
-            self.td.append(pool_op(pool_op_kernel_sizes[d]))
-        input_features = output_features
-        output_features = int(np.round(output_features * feat_map_mul_on_downscale))
-        output_features = min(output_features, self.max_num_features)
+            if not self.convolutional_pooling:
+                self.td.append(pool_op(pool_op_kernel_sizes[d]))
+            input_features = output_features
+            output_features = int(np.round(output_features * feat_map_mul_on_downscale))
+            output_features = min(output_features, self.max_num_features)
 
         # now the bottleneck.
         # determine the first stride
@@ -324,21 +271,14 @@ class encoder(nn.Module):
 
 
 class decoder(nn.Module):
-    DEFAULT_BATCH_SIZE_3D = 2
-    DEFAULT_PATCH_SIZE_3D = (64, 192, 160)
     SPACING_FACTOR_BETWEEN_STAGES = 2
-    BASE_NUM_FEATURES_3D = 30
-    MAX_NUMPOOL_3D = 999
-    MAX_NUM_FILTERS_3D = 320
-
     DEFAULT_PATCH_SIZE_2D = (256, 256)
     BASE_NUM_FEATURES_2D = 30
     DEFAULT_BATCH_SIZE_2D = 50
-    MAX_NUMPOOL_2D = 999
     MAX_FILTERS_2D = 480
-
     use_this_for_batch_size_computation_2D = 19739648
     use_this_for_batch_size_computation_3D = 520000000  # 505789440
+
     def __init__(self, final_num_features, num_classes, num_pool, num_conv_per_stage=2,
                 conv_op=nn.Conv2d,
                 norm_op=nn.BatchNorm2d, norm_op_kwargs=None,
