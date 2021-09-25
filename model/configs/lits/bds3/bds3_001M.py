@@ -4,6 +4,7 @@ from collections import OrderedDict
 import torch
 from nnunet.network_architecture.generic_UNet import Generic_UNet, StackedConvLayers, ConvDropoutNormNonlin, Upsample
 from nnunet.network_architecture.initialization import InitWeights_He
+from nnunet.utilities.nd_softmax import softmax_helper
 from torch import nn
 from torch.nn.utils import remove_spectral_norm
 from torch.functional import F
@@ -44,7 +45,7 @@ def build_model(lambda_disc=3,
     # this should be probably removed
     N = 512 # Number of features at the bottleneck.
     n = 128 # Number of features to sample at the bottleneck.
-    image_size = (1, 256, 256)
+    image_size = (2, 256, 256)
     
     # Rescale lambdas if a sum is enforced.
     lambda_scale = 1.
@@ -61,6 +62,7 @@ def build_model(lambda_disc=3,
     encoder_instance = encoder(**get_dataset_properties())
     enc_out_shape = encoder_instance.final_num_features
     final_num_features = encoder_instance.final_num_features
+
     
     decoder_common_kwargs = {}
 
@@ -77,14 +79,19 @@ def build_model(lambda_disc=3,
         'padding_mode'        : 'reflect',
         'init'                : 'kaiming_normal_'}
     
-    x_shape = (N-n,)+tuple(enc_out_shape[1:])
-    z_shape = (n,)+tuple(enc_out_shape[1:])
+    z_shape = (480, 480)
     print("DEBUG: sample_shape={}".format(z_shape))
 
     submodel = {
         'encoder'           : encoder_instance,
-        'decoder_common'    : decoder(final_num_features, **get_dataset_properties("")),
-        'decoder_residual'  : decoder(final_num_features, **get_dataset_properties("")),
+        'decoder_common'    : decoder(final_num_features,
+                                      encoder_instance.conv_blocks_context,
+                                      # out_conv,
+                                      **get_dataset_properties("")),
+        'decoder_residual'  : decoder(final_num_features,
+                                      encoder_instance.conv_blocks_context,
+                                      # out_conv,
+                                      **get_dataset_properties("")),
         'segmenter'         : None,
         'mutual_information': None,
         'disc_A'            : munit_discriminator(**discriminator_kwargs),
@@ -93,8 +100,8 @@ def build_model(lambda_disc=3,
         if m is None:
             continue
         recursive_spectral_norm(m)
-    remove_spectral_norm(submodel['decoder_residual'].out_conv[1].conv.op)
-    remove_spectral_norm(submodel['decoder_residual'].classifier.op)
+    #remove_spectral_norm(submodel['decoder_residual'].out_conv[1].conv.op)
+    #remove_spectral_norm(submodel['decoder_residual'].classifier.op)
     
     # If mixed precision mode, create the amp gradient scaler.
     scaler = None
@@ -140,10 +147,11 @@ class encoder(nn.Module):
                  norm_op=nn.BatchNorm2d, norm_op_kwargs=None,
                  dropout_op=nn.Dropout2d, dropout_op_kwargs=None,
                  nonlin=nn.LeakyReLU, nonlin_kwargs=None, deep_supervision=True, dropout_in_localization=False,
-                 final_nonlin=None, weightInitializer=InitWeights_He(1e-2), pool_op_kernel_sizes=None,
+                 final_nonlin=softmax_helper, weightInitializer=InitWeights_He(1e-2), pool_op_kernel_sizes=None,
                  conv_kernel_sizes=None,
                  upscale_logits=False, convolutional_pooling=False, convolutional_upsampling=False,
-                 max_num_features=None, basic_block=ConvDropoutNormNonlin, seg_output_use_bias=False
+                 max_num_features=None, basic_block=ConvDropoutNormNonlin,
+                 seg_output_use_bias=False
                  ):
         super(encoder, self).__init__()
         self.final_num_features = None
@@ -279,16 +287,17 @@ class decoder(nn.Module):
     use_this_for_batch_size_computation_2D = 19739648
     use_this_for_batch_size_computation_3D = 520000000  # 505789440
 
-    def __init__(self, final_num_features, num_classes, num_pool, num_conv_per_stage=2,
-                conv_op=nn.Conv2d,
-                norm_op=nn.BatchNorm2d, norm_op_kwargs=None,
-                dropout_op=nn.Dropout2d, dropout_op_kwargs=None,
-                nonlin=nn.LeakyReLU, nonlin_kwargs=None, deep_supervision=True,
-                final_nonlin=None, weightInitializer=InitWeights_He(1e-2), pool_op_kernel_sizes=None,
-                conv_kernel_sizes=None,
-                upscale_logits=False, convolutional_pooling=False, convolutional_upsampling=False,
-                max_num_features=None, basic_block=ConvDropoutNormNonlin,
-                seg_output_use_bias=False
+    def __init__(self, final_num_features, conv_blocks_context,
+                 input_channels, base_num_features, num_classes, num_pool, num_conv_per_stage=2,
+                 feat_map_mul_on_downscale=2, conv_op=nn.Conv2d,
+                 norm_op=nn.BatchNorm2d, norm_op_kwargs=None,
+                 dropout_op=nn.Dropout2d, dropout_op_kwargs=None,
+                 nonlin=nn.LeakyReLU, nonlin_kwargs=None, deep_supervision=True, dropout_in_localization=False,
+                 final_nonlin=softmax_helper, weightInitializer=InitWeights_He(1e-2), pool_op_kernel_sizes=None,
+                 conv_kernel_sizes=None,
+                 upscale_logits=False, convolutional_pooling=False, convolutional_upsampling=False,
+                 max_num_features=None, basic_block=ConvDropoutNormNonlin,
+                 seg_output_use_bias=False
                  ):
         super(decoder, self).__init__()
         self.convolutional_upsampling = convolutional_upsampling
@@ -347,7 +356,7 @@ class decoder(nn.Module):
         for u in range(num_pool):
             # this should be taken from the encoder
             nfeatures_from_down = final_num_features
-            nfeatures_from_skip = self.conv_blocks_context[
+            nfeatures_from_skip = conv_blocks_context[
                 -(2 + u)].output_channels  # self.conv_blocks_context[-1] is bottleneck, so start with -2
             n_features_after_tu_and_concat = nfeatures_from_skip * 2
 
