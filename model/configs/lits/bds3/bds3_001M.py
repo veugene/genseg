@@ -77,7 +77,9 @@ def build_model(lambda_disc=3,
         'padding_mode': 'reflect',
         'init': 'kaiming_normal_'}
 
-    z_shape = (2, 480, 480)
+    # TODO we need to calculate the out shape of encoder (bottleneck (?)) manually.
+    enc_out_shape = [8, 480, 2, 2]
+    z_shape = (n,) + tuple(enc_out_shape[1:])
     print("DEBUG: sample_shape={}".format(z_shape))
 
     submodel = {
@@ -98,6 +100,7 @@ def build_model(lambda_disc=3,
         if m is None:
             continue
         recursive_spectral_norm(m)
+    # TODO: do we have spectral nom in decoder residual atm? (?)
     # remove_spectral_norm(submodel['decoder_residual'].out_conv[1].conv.op)
     # remove_spectral_norm(submodel['decoder_residual'].classifier.op)
 
@@ -266,14 +269,21 @@ class encoder(nn.Module):
             # self.apply(print_module_training_status
 
     def forward(self, x):
+        print("Forward function START")
+        print(x.shape)
         skips = []
+
         for d in range(len(self.conv_blocks_context) - 1):
-            print(self.conv_blocks_context[d](x))
             x = self.conv_blocks_context[d](x)
             skips.append(x)
             if not self.convolutional_pooling:
                 x = self.td[d](x)
         x = self.conv_blocks_context[-1](x)
+
+        print("FORWARD FUNCTION END")
+        print(x.shape)
+        print(len(skips))
+
         return x, skips
 
 
@@ -321,8 +331,10 @@ class decoder(nn.Module):
         self.dropout_op = dropout_op
         self.num_classes = num_classes
         self.final_nonlin = final_nonlin
-        self._deep_supervision = deep_supervision
-        self.do_ds = deep_supervision
+
+        # TODO: replace as True, as nnunet architecture uses this.
+        self._deep_supervision = False
+        self.do_ds = False
 
         self.conv_blocks_localization = []
         self.td = []

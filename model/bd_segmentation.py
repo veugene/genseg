@@ -668,6 +668,7 @@ class _loss_G(nn.Module):
                 s_BA, s_AA, c_AB, c_BB, z_BA, s_A, c_A, u_A, c_B, c_BA, u_BA,
                 x_AA_list, x_AB_list, x_BB_list, x_BA_list, skip_A, skip_B,
                 x_AA_ae=None, x_BB_ae=None, class_A=None, class_B=None):
+        print("'G' FORWARD FUNCTION")
         # Mutual information loss for generator.
         loss_mi_gen = defaultdict(int)
         if self.net['mi'] is not None and self.lambda_mi:
