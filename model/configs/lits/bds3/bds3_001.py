@@ -117,7 +117,9 @@ def build_model(lambda_disc=3,
         'nonlinearity'        : lambda : nn.LeakyReLU(0.2, inplace=True),
         'padding_mode'        : 'reflect',
         'init'                : 'kaiming_normal_'}
-    
+
+    print('ENC OUT SHAPE')
+    print(enc_out_shape[1:])
     x_shape = (N-n,)+tuple(enc_out_shape[1:])
     z_shape = (n,)+tuple(enc_out_shape[1:])
     print("DEBUG: sample_shape={}".format(z_shape))
@@ -243,6 +245,8 @@ class encoder(nn.Module):
         self.output_shape = shape
     
     def forward(self, input):
+        print("ENCODER Forward function START")
+        print(input.shape)
         skips = []
         size = input.size()
         out = input
@@ -408,6 +412,8 @@ class decoder(nn.Module):
                 ndim=self.ndim)
         
     def forward(self, z, skip_info=None, mode=0):
+
+
         # Set mode (0: trans, 1: seg).
         assert mode in [0, 1]
         for m in self.modules():
@@ -446,9 +452,11 @@ class decoder(nn.Module):
         out = self.pre_conv(out)
         out = self.out_conv[mode](out)
         if mode==0:
+            print("MODE 0")
             out = torch.tanh(out)
             return out, skip_info
         elif mode==1:
+            print("MODE 1")
             out = self.classifier(out)
             if self.num_classes==1:
                 out = torch.sigmoid(out)

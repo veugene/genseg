@@ -271,7 +271,7 @@ class switching_normalization(nn.Module):
         self.mode = 0
     def set_mode(self, mode):
         assert mode in [0, 1]
-        self.mode = mode
+        self.mode = mod
     def forward(self, x):
         if self.mode==0:
             return self.norm0(x)
@@ -447,9 +447,11 @@ class decoder(nn.Module):
         out = self.pre_conv(out)
         out = self.out_conv[mode](out)
         if mode==0:
+            print("MODE 0")
             out = torch.tanh(out)
             return out, skip_info
         elif mode==1:
+            print("MODE 1")
             out = self.classifier(out)
             if self.num_classes==1:
                 out = torch.sigmoid(out)

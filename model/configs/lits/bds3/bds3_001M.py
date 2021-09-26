@@ -62,9 +62,9 @@ def build_model(lambda_disc=3,
     enc_out_shape = encoder_instance.final_num_features
     final_num_features = encoder_instance.final_num_features
 
-    decoder_common_kwargs = {}
+    decoder_common_kwargs = {'mode': 0}
 
-    decoder_residual_kwargs = {}
+    decoder_residual_kwargs = {'mode': 1}
 
     discriminator_kwargs = {
         'input_dim': image_size[0],
@@ -77,18 +77,18 @@ def build_model(lambda_disc=3,
         'padding_mode': 'reflect',
         'init': 'kaiming_normal_'}
 
-    z_shape = (2, 480, 480)
+    # TODO we need to calculate the out shape of encoder (bottleneck (?)) manually.
+    enc_out_shape = [8, 2, 2]
+    z_shape = (n,) + tuple(enc_out_shape[1:])
     print("DEBUG: sample_shape={}".format(z_shape))
 
     submodel = {
         'encoder': encoder_instance,
-        'decoder_common': decoder(final_num_features,
+        'decoder_common': decoder(352,
                                   encoder_instance.conv_blocks_context,
-                                  # out_conv,
                                   **get_dataset_properties("")),
         'decoder_residual': decoder(final_num_features,
                                     encoder_instance.conv_blocks_context,
-                                    # out_conv,
                                     **get_dataset_properties("")),
         'segmenter': None,
         'mutual_information': None,
@@ -98,6 +98,7 @@ def build_model(lambda_disc=3,
         if m is None:
             continue
         recursive_spectral_norm(m)
+    # TODO: do we have spectral nom in decoder residual atm? (?)
     # remove_spectral_norm(submodel['decoder_residual'].out_conv[1].conv.op)
     # remove_spectral_norm(submodel['decoder_residual'].classifier.op)
 
@@ -266,14 +267,21 @@ class encoder(nn.Module):
             # self.apply(print_module_training_status
 
     def forward(self, x):
+        print("ENCODER Forward function START")
+        print(x.shape)
         skips = []
+
         for d in range(len(self.conv_blocks_context) - 1):
-            print(self.conv_blocks_context[d](x))
             x = self.conv_blocks_context[d](x)
             skips.append(x)
             if not self.convolutional_pooling:
                 x = self.td[d](x)
         x = self.conv_blocks_context[-1](x)
+
+        print("FORWARD FUNCTION END")
+        print(x.shape)
+        print(len(skips))
+
         return x, skips
 
 
@@ -321,8 +329,10 @@ class decoder(nn.Module):
         self.dropout_op = dropout_op
         self.num_classes = num_classes
         self.final_nonlin = final_nonlin
-        self._deep_supervision = deep_supervision
-        self.do_ds = deep_supervision
+
+        # TODO: replace as True, as nnunet architecture uses this.
+        self._deep_supervision = False
+        self.do_ds = False
 
         self.conv_blocks_localization = []
         self.td = []
@@ -385,6 +395,7 @@ class decoder(nn.Module):
             ))
 
         for ds in range(len(self.conv_blocks_localization)):
+            # TODO: this has to be changed.
             self.seg_outputs.append(conv_op(self.conv_blocks_localization[ds][-1].output_channels, num_classes,
                                             1, 1, 0, 1, 1, seg_output_use_bias))
 
@@ -407,38 +418,25 @@ class decoder(nn.Module):
         if self.weightInitializer is not None:
             self.apply(self.weightInitializer)
 
-    def forward(self, x, skip_info):
+    def forward(self, x, skip_info, mode=0):
         seg_outputs = []
         for u in range(len(self.tu)):
             x = self.tu[u](x)
             x = torch.cat((x, skip_info[-(u + 1)]), dim=1)
             x = self.conv_blocks_localization[u](x)
             seg_outputs.append(self.final_nonlin(self.seg_outputs[u](x)))
-
-        if self._deep_supervision and self.do_ds:
-            return tuple([seg_outputs[-1]] + [i(j) for i, j in
-                                              zip(list(self.upscale_logits_ops)[::-1], seg_outputs[:-1][::-1])]), skip_info
-        else:
+        #   DEEP SUPERVISION - LET'S REMOVE THAT FOR A WHILE
+        #if self._deep_supervision and self.do_ds:
+        #    return tuple([seg_outputs[-1]] + [i(j) for i, j in
+        #                                      zip(list(self.upscale_logits_ops)[::-1], seg_outputs[:-1][::-1])]), skip_info
+        # TODO treba zistit, co je toto??? (preco oni vracaju mode = 0 a mode = 1....? v normalnom sa riesi
+        print("DECODER OUTPUT")
+        print("seg_outputs")
+        print(seg_outputs[-1].shape)
+        if mode == 0:
             return seg_outputs[-1], skip_info
-
-
-class switching_normalization(nn.Module):
-    def __init__(self, normalization, *args, **kwargs):
-        super(switching_normalization, self).__init__()
-        self.norm0 = normalization(*args, **kwargs)
-        self.norm1 = normalization(*args, **kwargs)
-        self.mode = 0
-
-    def set_mode(self, mode):
-        assert mode in [0, 1]
-        self.mode = mode
-
-    def forward(self, x):
-        if self.mode == 0:
-            return self.norm0(x)
-        else:
-            return self.norm1(x)
-
+        elif mode == 1:
+            return seg_outputs[-1]
 
 class mi_estimation_network(nn.Module):
     def __init__(self, x_size, z_size, n_hidden):
