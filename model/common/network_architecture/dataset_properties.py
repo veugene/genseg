@@ -10,7 +10,7 @@ def get_dataset_properties(path=None):
          # plans
         'input_channels': 2,
         'base_num_features': 30,
-        'num_classes': 2,
+        'num_classes': 3,
         'num_pool': 7,
         # Static in nnunet
         'num_conv_per_stage': 2,

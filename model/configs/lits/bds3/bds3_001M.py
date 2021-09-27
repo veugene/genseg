@@ -44,7 +44,7 @@ def build_model(lambda_disc=3,
     # this should be probably removed
     N = 512  # Number of features at the bottleneck.
     n = 128  # Number of features to sample at the bottleneck.
-    image_size = (2, 480, 480)
+    image_size = (1, 480, 480)
 
     # Rescale lambdas if a sum is enforced.
     lambda_scale = 1.
