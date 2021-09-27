@@ -1,10 +1,5 @@
-# like 106 for brats
-
 from collections import OrderedDict
 import torch
-from nnunet.network_architecture.generic_UNet import Generic_UNet, StackedConvLayers, ConvDropoutNormNonlin, Upsample
-from nnunet.network_architecture.initialization import InitWeights_He
-from nnunet.utilities.nd_softmax import softmax_helper
 from torch import nn
 from torch.nn.utils import remove_spectral_norm
 from torch.functional import F
@@ -31,14 +26,17 @@ from model.common.network.basic import (adjust_to_size,
 from model.common.losses import dist_ratio_mse_abs
 from model.bd_segmentation import segmentation_model
 
+from nnunet.network_architecture.generic_UNet import Generic_UNet, StackedConvLayers, ConvDropoutNormNonlin, Upsample
+from nnunet.network_architecture.initialization import InitWeights_He
+from nnunet.utilities.nd_softmax import softmax_helper
 
-def get_dataset_properties(path=None):
+def get_dataset_properties(dataset_name = "Task701_2dBrainTumourF1"):
     nnunet_architecture_config_files = {
         # plans
-        'input_channels': 1,
-        'base_num_features': 30,
+        'input_channels': 4,
+        'base_num_features': 32,
         'num_classes': 1,
-        'num_pool': 7,
+        'num_pool': 5,
         # Static in nnunet
         'num_conv_per_stage': 2,
         'feat_map_mul_on_downscale': 2,
@@ -53,8 +51,8 @@ def get_dataset_properties(path=None):
         'dropout_in_localization': False,
         'final_nonlin': lambda x: x,
         'weightInitializer': InitWeights_He(1e-2),
-        'pool_op_kernel_sizes': [[2, 2], [2, 2], [2, 2], [2, 2], [2, 2], [2, 2], [2, 2]],
-        'conv_kernel_sizes': [[3, 3], [3, 3], [3, 3], [3, 3], [3, 3], [3, 3], [3, 3], [3, 3]],
+        'pool_op_kernel_sizes': [[2, 2], [2, 2], [2, 2], [2, 2], [2, 1]],
+        'conv_kernel_sizes': [[3, 3], [3, 3], [3, 3], [3, 3], [3, 3], [3, 3]],
         'upscale_logits': False,
         'convolutional_pooling': True,
         'convolutional_upsampling': True,
@@ -64,105 +62,96 @@ def get_dataset_properties(path=None):
     }
     return nnunet_architecture_config_files
 
-
 def build_model(lambda_disc=3,
                 lambda_x_id=50,
                 lambda_z_id=1,
                 lambda_f_id=0,
                 lambda_cyc=50,
                 lambda_seg=0.01,
-                lambda_enforce_sum=None,
-                mixed_precision=True):
-    # this should be probably removed
-    N = 512  # Number of features at the bottleneck.
-    n = 128  # Number of features to sample at the bottleneck.
-    image_size = (2, 480, 480)
-
+                lambda_enforce_sum=None):
+    N = 512 # Number of features at the bottleneck.
+    n = 128 # Number of features to sample at the bottleneck.
+    image_size = (4, 240, 120)
+    
     # Rescale lambdas if a sum is enforced.
     lambda_scale = 1.
     if lambda_enforce_sum is not None:
-        lambda_sum = (lambda_disc
-                      + lambda_x_id
-                      + lambda_z_id
-                      + lambda_f_id
-                      + lambda_cyc
-                      + lambda_seg)
-        lambda_scale = lambda_enforce_sum / lambda_sum
+        lambda_sum = ( lambda_disc
+                      +lambda_x_id
+                      +lambda_z_id
+                      +lambda_f_id
+                      +lambda_cyc
+                      +lambda_seg)
+        lambda_scale = lambda_enforce_sum/lambda_sum
 
     encoder_kwargs = {}
     encoder_instance = encoder(**get_dataset_properties())
-    enc_out_shape = encoder_instance.final_num_features
+    enc_out_shape = [480, 8, 8]
+    #print(('enc_out_shape')
+    #print((enc_out_shape)
     final_num_features = encoder_instance.final_num_features
 
-    decoder_common_kwargs = {'mode': 0}
+    decoder_common_kwargs = {**get_dataset_properties()}
 
-    decoder_residual_kwargs = {'mode': 1}
-
+    decoder_residual_kwargs = {**get_dataset_properties()}
+    
     discriminator_kwargs = {
-        'input_dim': 1,
-        'num_channels_list': [N // 8, N // 4, N // 2, N],
-        'num_scales': 3,
-        'normalization': layer_normalization,
-        'norm_kwargs': None,
-        'kernel_size': 4,
-        'nonlinearity': lambda: nn.LeakyReLU(0.2, inplace=True),
-        'padding_mode': 'reflect',
-        'init': 'kaiming_normal_'}
-
-    # TODO we need to calculate the out shape of encoder (bottleneck (?)) manually.
-    enc_out_shape = [8, 2, 2]
-
-    z_shape = (n,) + tuple(enc_out_shape[1:])
-    #print((("DEBUG: sample_shape={}".format(z_shape))
-
+        'input_dim'           : image_size[0],
+        'num_channels_list'   : [N//8, N//4, N//2, N],
+        'num_scales'          : 3,
+        'normalization'       : layer_normalization,
+        'norm_kwargs'         : None,
+        'kernel_size'         : 4,
+        'nonlinearity'        : lambda : nn.LeakyReLU(0.2, inplace=True),
+        'padding_mode'        : 'reflect',
+        'init'                : 'kaiming_normal_'}
+    
+    x_shape = (N-n,)+tuple(enc_out_shape[1:])
+    z_shape = (n,)+tuple(enc_out_shape[1:])
+    #print(("DEBUG: sample_shape={}".format(z_shape))
     submodel = {
-        'encoder': encoder_instance,
+        'encoder'           : encoder_instance,
         'decoder_common': decoder(352,
                                   encoder_instance.conv_blocks_context,
                                   **get_dataset_properties("")),
         'decoder_residual': decoder(final_num_features,
                                     encoder_instance.conv_blocks_context,
                                     **get_dataset_properties("")),
-        'segmenter': None,
-        'mutual_information': None,
-        'disc_A': munit_discriminator(**discriminator_kwargs),
-        'disc_B': munit_discriminator(**discriminator_kwargs)}
+        'segmenter'         : None,
+        'mutual_information': mi_estimation_network(
+                                            x_size=np.product(x_shape),
+                                            z_size=np.product(z_shape),
+                                            n_hidden=1000),
+        'disc_A'            : munit_discriminator(**discriminator_kwargs),
+        'disc_B'            : munit_discriminator(**discriminator_kwargs)}
     for m in submodel.values():
         if m is None:
             continue
         recursive_spectral_norm(m)
-    # TODO: do we have spectral norm in decoder residual atm? (?)
-    remove_spectral_norm(submodel['decoder_residual'].out_conv[1].conv.op)
-    remove_spectral_norm(submodel['decoder_residual'].classifier.op)
 
-    # If mixed precision mode, create the amp gradient scaler.
-    scaler = None
-    if mixed_precision:
-        ##print((("DEBUG using mixed precision")
-        scaler = torch.cuda.amp.GradScaler()
-
+    # TODO: leave it here.
+    # remove_spectral_norm(submodel['decoder_residual'].out_conv[1].conv.op)
+    # remove_spectral_norm(submodel['decoder_residual'].classifier.op)
+    
     model = segmentation_model(**submodel,
-                               scaler=scaler,
                                shape_sample=z_shape,
                                loss_gan='hinge',
-                               loss_seg=dice_loss(),
+                               loss_seg=dice_loss([1,2,4]),
                                relativistic=False,
                                rng=np.random.RandomState(1234),
-                               lambda_disc=lambda_disc * lambda_scale,
-                               lambda_x_id=lambda_x_id * lambda_scale,
-                               lambda_z_id=lambda_z_id * lambda_scale,
-                               lambda_f_id=lambda_f_id * lambda_scale,
-                               lambda_cyc=lambda_cyc * lambda_scale,
-                               lambda_seg=lambda_seg * lambda_scale)
-
-    out = OrderedDict((
+                               lambda_disc=lambda_disc*lambda_scale,
+                               lambda_x_id=lambda_x_id*lambda_scale,
+                               lambda_z_id=lambda_z_id*lambda_scale,
+                               lambda_f_id=lambda_f_id*lambda_scale,
+                               lambda_cyc=lambda_cyc*lambda_scale,
+                               lambda_seg=lambda_seg*lambda_scale)
+    
+    return OrderedDict((
         ('G', model),
         ('D', nn.ModuleList([model.separate_networks['disc_A'],
                              model.separate_networks['disc_B']])),
-    ))
-    if mixed_precision:
-        out['scaler'] = model.scaler
-    return out
+        ('E', model.separate_networks['mi_estimator'])
+        ))
 
 
 class encoder(nn.Module):
@@ -217,8 +206,8 @@ class encoder(nn.Module):
             pool_op_kernel_sizes = [(2, 2)] * num_pool
         if conv_kernel_sizes is None:
             conv_kernel_sizes = [(3, 3)] * (num_pool + 1)
-
         self.input_shape_must_be_divisible_by = np.prod(pool_op_kernel_sizes, 0, dtype=np.int64)
+
         self.pool_op_kernel_sizes = pool_op_kernel_sizes
         self.conv_kernel_sizes = conv_kernel_sizes
 
@@ -297,12 +286,11 @@ class encoder(nn.Module):
 
         if self.weightInitializer is not None:
             self.apply(self.weightInitializer)
-            # self.apply(##print((_module_training_status
+            # self.apply(#print(_module_training_status
 
     def forward(self, x):
-        ##print((("ENCODER Forward function START")
-        ##print((("Forward function START")
-        ##print(((x.shape)
+        #print(("ENCODER Forward function START")
+        #print((x.shape)
         skips = []
 
         for d in range(len(self.conv_blocks_context) - 1):
@@ -311,11 +299,10 @@ class encoder(nn.Module):
             if not self.convolutional_pooling:
                 x = self.td[d](x)
         x = self.conv_blocks_context[-1](x)
+        #print((x.shape)
+        #print((len(skips))
 
-        ##print((("FORWARD FUNCTION END")
-        ##print(((x.shape)
-        ##print(((len(skips))
-
+        #print(("FORWARD FUNCTION END")
         return x, skips
 
 
@@ -458,25 +445,32 @@ class decoder(nn.Module):
     def forward(self, x, skip_info, mode=0):
         seg_outputs = []
         for u in range(len(self.tu)):
+            #print(('x shape')
+            #print((x.shape)
+            #print(('skip info shape')
+            #print((skip_info[-(u+1)].shape)
             x = self.tu[u](x)
             x = torch.cat((x, skip_info[-(u + 1)]), dim=1)
             x = self.conv_blocks_localization[u](x)
-            ##print((('x in decoder')
-            ##print(((x.shape)
+            # TODO this is not right cuz we
             if mode == 0:
+                    #print(('TANH')
                     seg_outputs.append(self.segm_nonlin_tanh(self.seg_outputs[u](x)))
             elif mode == 1:
                 if self.num_classes == 1:
+                    #print(('SIGMOID')
                     seg_outputs.append(self.segm_nonlin_sigmoid(self.seg_outputs[u](x)))
                 else:
+                    #print(('SOFTMAX')
                     seg_outputs.append(self.segm_nonlin_softmax(self.seg_outputs[u](x)))
         #   DEEP SUPERVISION - LET'S REMOVE THAT FOR A WHILE
         #if self._deep_supervision and self.do_ds:
         #    return tuple([seg_outputs[-1]] + [i(j) for i, j in
         #                                      zip(list(self.upscale_logits_ops)[::-1], seg_outputs[:-1][::-1])]), skip_info
-        ##print((("DECODER OUTPUT")
-        ##print((("seg_outputs")
-        ##print(((seg_outputs[-1].shape)
+        # TODO treba zistit, co je toto??? (preco oni vracaju mode = 0 a mode = 1....? v normalnom sa riesi
+        #print(("DECODER OUTPUT")
+        #print(("seg_outputs")
+        #print((seg_outputs[-1].shape)
 
 
         if mode == 0:
@@ -491,17 +485,15 @@ class mi_estimation_network(nn.Module):
         self.z_size = z_size
         self.n_hidden = n_hidden
         modules = []
-        modules.append(nn.Linear(x_size + z_size, self.n_hidden))
+        modules.append(nn.Linear(x_size+z_size, self.n_hidden))
         modules.append(nn.ReLU())
         for i in range(2):
             modules.append(nn.Linear(self.n_hidden, self.n_hidden))
             modules.append(nn.ReLU())
         modules.append(nn.Linear(self.n_hidden, 1))
         self.model = nn.Sequential(*tuple(modules))
-
+    
     def forward(self, x, z):
         out = self.model(torch.cat([x.view(x.size(0), -1),
                                     z.view(z.size(0), -1)], dim=-1))
         return out
-
-
