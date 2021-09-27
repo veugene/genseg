@@ -79,6 +79,7 @@ def build_model(lambda_disc=3,
 
     # TODO we need to calculate the out shape of encoder (bottleneck (?)) manually.
     enc_out_shape = [8, 2, 2]
+
     z_shape = (n,) + tuple(enc_out_shape[1:])
     print("DEBUG: sample_shape={}".format(z_shape))
 
@@ -268,6 +269,7 @@ class encoder(nn.Module):
 
     def forward(self, x):
         print("ENCODER Forward function START")
+        print("Forward function START")
         print(x.shape)
         skips = []
 
