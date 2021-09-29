@@ -1,4 +1,7 @@
 # like 106 for brats
+# TODO: we need to turn off the classifier becuase nnunet is a segmenter, not a reconstructor (for mode 0 in residual decoder
+# TODO: spectral loss is probably OK now, but needs refactoring due to previous comment
+# TODO: normalization switches needs to be implemented as well in this (mode=0, mode=1)...
 
 from collections import OrderedDict
 import torch
@@ -94,10 +97,6 @@ def build_model(lambda_disc=3,
     enc_out_shape = encoder_instance.final_num_features
     final_num_features = encoder_instance.final_num_features
 
-    decoder_common_kwargs = {'mode': 0}
-
-    decoder_residual_kwargs = {'mode': 1}
-
     discriminator_kwargs = {
         'input_dim': 1,
         'num_channels_list': [N // 8, N // 4, N // 2, N],
@@ -115,14 +114,20 @@ def build_model(lambda_disc=3,
     z_shape = (n,) + tuple(enc_out_shape[1:])
     #print((("DEBUG: sample_shape={}".format(z_shape))
 
+    decoder_common_kwargs = get_dataset_properties("")
+    decoder_common_kwargs["num_classes"] = None
+
+    decoder_residual_kwargs = get_dataset_properties("")
+
+
     submodel = {
         'encoder': encoder_instance,
         'decoder_common': decoder(352,
                                   encoder_instance.conv_blocks_context,
-                                  **get_dataset_properties("")),
+                                  **decoder_common_kwargs),
         'decoder_residual': decoder(final_num_features,
                                     encoder_instance.conv_blocks_context,
-                                    **get_dataset_properties("")),
+                                    **decoder_residual_kwargs),
         'segmenter': None,
         'mutual_information': None,
         'disc_A': munit_discriminator(**discriminator_kwargs),
@@ -132,8 +137,8 @@ def build_model(lambda_disc=3,
             continue
         recursive_spectral_norm(m)
     # TODO: do we have spectral norm in decoder residual atm? (?)
-    remove_spectral_norm(submodel['decoder_residual'].out_conv[1].conv.op)
-    remove_spectral_norm(submodel['decoder_residual'].classifier.op)
+    remove_spectral_norm(submodel['decoder_residual'].conv_blocks_localization[-1][-1].blocks[-1].conv)
+    remove_spectral_norm(submodel['decoder_residual'].seg_outputs[-1])
 
     # If mixed precision mode, create the amp gradient scaler.
     scaler = None
@@ -165,6 +170,23 @@ def build_model(lambda_disc=3,
     return out
 
 
+class switching_normalization(nn.Module):
+    def __init__(self, normalization, *args, **kwargs):
+        super(switching_normalization, self).__init__()
+        self.norm0 = normalization(*args, **kwargs)
+        self.norm1 = normalization(*args, **kwargs)
+        self.mode = 0
+
+    def set_mode(self, mode):
+        assert mode in [0, 1]
+        self.mode = mode
+
+    def forward(self, x):
+        if self.mode == 0:
+            return self.norm0(x)
+        else:
+            return self.norm1(x)
+
 class encoder(nn.Module):
     SPACING_FACTOR_BETWEEN_STAGES = 2
     DEFAULT_PATCH_SIZE_2D = (256, 256)
@@ -190,6 +212,7 @@ class encoder(nn.Module):
         self.convolutional_upsampling = convolutional_upsampling
         self.convolutional_pooling = convolutional_pooling
         self.upscale_logits = upscale_logits
+
         if nonlin_kwargs is None:
             nonlin_kwargs = {'negative_slope': 1e-2, 'inplace': True}
         if dropout_op_kwargs is None:
@@ -300,9 +323,6 @@ class encoder(nn.Module):
             # self.apply(##print((_module_training_status
 
     def forward(self, x):
-        ##print((("ENCODER Forward function START")
-        ##print((("Forward function START")
-        ##print(((x.shape)
         skips = []
 
         for d in range(len(self.conv_blocks_context) - 1):
@@ -311,10 +331,6 @@ class encoder(nn.Module):
             if not self.convolutional_pooling:
                 x = self.td[d](x)
         x = self.conv_blocks_context[-1](x)
-
-        ##print((("FORWARD FUNCTION END")
-        ##print(((x.shape)
-        ##print(((len(skips))
 
         return x, skips
 
@@ -362,6 +378,7 @@ class decoder(nn.Module):
         self.norm_op = norm_op
         self.dropout_op = dropout_op
         self.num_classes = num_classes
+
         # we replace the argument from the plans as we need softmax/sigmoid as well as the tanh function for decoder.
         # self.final_nonlin = final_nonlin
         self.segm_nonlin_softmax = lambda x: F.softmax(x, 1)
@@ -432,7 +449,6 @@ class decoder(nn.Module):
             ))
 
         for ds in range(len(self.conv_blocks_localization)):
-            # TODO: this has to be changed.
             self.seg_outputs.append(conv_op(self.conv_blocks_localization[ds][-1].output_channels, num_classes,
                                             1, 1, 0, 1, 1, seg_output_use_bias))
 
@@ -461,8 +477,6 @@ class decoder(nn.Module):
             x = self.tu[u](x)
             x = torch.cat((x, skip_info[-(u + 1)]), dim=1)
             x = self.conv_blocks_localization[u](x)
-            ##print((('x in decoder')
-            ##print(((x.shape)
             if mode == 0:
                     seg_outputs.append(self.segm_nonlin_tanh(self.seg_outputs[u](x)))
             elif mode == 1:
@@ -470,14 +484,11 @@ class decoder(nn.Module):
                     seg_outputs.append(self.segm_nonlin_sigmoid(self.seg_outputs[u](x)))
                 else:
                     seg_outputs.append(self.segm_nonlin_softmax(self.seg_outputs[u](x)))
+
         #   DEEP SUPERVISION - LET'S REMOVE THAT FOR A WHILE
         #if self._deep_supervision and self.do_ds:
         #    return tuple([seg_outputs[-1]] + [i(j) for i, j in
         #                                      zip(list(self.upscale_logits_ops)[::-1], seg_outputs[:-1][::-1])]), skip_info
-        ##print((("DECODER OUTPUT")
-        ##print((("seg_outputs")
-        ##print(((seg_outputs[-1].shape)
-
 
         if mode == 0:
             return seg_outputs[-1], skip_info
