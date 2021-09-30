@@ -135,7 +135,11 @@ def build_model(lambda_disc=3,
         recursive_spectral_norm(m)
     remove_spectral_norm(submodel['decoder_residual'].out_conv[1].conv.op)
     remove_spectral_norm(submodel['decoder_residual'].classifier.op)
-    
+
+
+    print(submodel["decoder_common"])
+    print(submodel["decoder_residual"])
+
     # If mixed precision mode, create the amp gradient scaler.
     scaler = None
     if mixed_precision:
@@ -406,7 +410,7 @@ class decoder(nn.Module):
                 out_channels=self.num_classes,
                 kernel_size=1,
                 ndim=self.ndim)
-        
+
         
     def forward(self, z, skip_info=None, mode=0):
         # Set mode (0: trans, 1: seg).
@@ -444,8 +448,12 @@ class decoder(nn.Module):
                 out = block(out)
             if not out.is_contiguous():
                 out = out.contiguous()
+        print("FORWARD FUNCTION")
+        print(out.shape)
         out = self.pre_conv(out)
+        print(out.shape)
         out = self.out_conv[mode](out)
+        print(out.shape)
         if mode==0:
             out = torch.tanh(out)
             return out, skip_info

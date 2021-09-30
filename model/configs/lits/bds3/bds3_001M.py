@@ -1,7 +1,11 @@
 # like 106 for brats
-# TODO: we need to turn off the classifier becuase nnunet is a segmenter, not a reconstructor (for mode 0 in residual decoder
-# TODO: spectral loss is probably OK now, but needs refactoring due to previous comment
+# TODO: we need to turn off the classifier becuase nnunet is a segmenter, not a reconstructor (for mode 0 in residual decoder)
+# TODO: it will be implemented as a next CONV layer that reconstructs the image after the last conv (it will have 3 conv in the output layers, just as the original)
+# TODO: spectral loss is probably OK now, but needs refactoring due to previous comment (turn it off on the last conv -> norm layer + the classifier)
 # TODO: normalization switches needs to be implemented as well in this (mode=0, mode=1)...
+
+
+# TODO: OK, so we need to : 1/ ADD new layer BEFORE seg outputs
 
 from collections import OrderedDict
 import torch
@@ -135,6 +139,8 @@ def build_model(lambda_disc=3,
         if m is None:
             continue
         recursive_spectral_norm(m)
+    print(submodel["decoder_common"])
+    print(submodel["decoder_residual"])
     # TODO: do we have spectral norm in decoder residual atm? (?)
     remove_spectral_norm(submodel['decoder_residual'].conv_blocks_localization[-1][-1].blocks[-1].conv)
     remove_spectral_norm(submodel['decoder_residual'].seg_outputs[-1])
@@ -446,9 +452,10 @@ class decoder(nn.Module):
                                   self.nonlin, self.nonlin_kwargs, basic_block=basic_block)
             ))
 
-        for ds in range(len(self.conv_blocks_localization)):
-            self.seg_outputs.append(conv_op(self.conv_blocks_localization[ds][-1].output_channels, num_classes,
-                                            1, 1, 0, 1, 1, seg_output_use_bias))
+        if num_classes is not None:
+            for ds in range(len(self.conv_blocks_localization)):
+                self.seg_outputs.append(conv_op(self.conv_blocks_localization[ds][-1].output_channels, num_classes,
+                                                1, 1, 0, 1, 1, seg_output_use_bias))
 
         self.upscale_logits_ops = []
         cum_upsample = np.cumprod(np.vstack(pool_op_kernel_sizes), axis=0)[::-1]
@@ -460,8 +467,10 @@ class decoder(nn.Module):
                 self.upscale_logits_ops.append(lambda x: x)
 
         self.conv_blocks_localization = nn.ModuleList(self.conv_blocks_localization)
+
         self.tu = nn.ModuleList(self.tu)
-        self.seg_outputs = nn.ModuleList(self.seg_outputs)
+        if num_classes is not None:
+            self.seg_outputs = nn.ModuleList(self.seg_outputs)
         if self.upscale_logits:
             self.upscale_logits_ops = nn.ModuleList(
                 self.upscale_logits_ops)  # lambda x:x is not a Module so we need to distinguish here
@@ -471,12 +480,16 @@ class decoder(nn.Module):
 
     def forward(self, x, skip_info, mode=0):
         seg_outputs = []
+        results_mode_0 = []
+        # TU is transpose / upsample, conv_blocks_localization 2 convs in a row
+
         for u in range(len(self.tu)):
             x = self.tu[u](x)
             x = torch.cat((x, skip_info[-(u + 1)]), dim=1)
             x = self.conv_blocks_localization[u](x)
             if mode == 0:
-                    seg_outputs.append(self.segm_nonlin_tanh(self.seg_outputs[u](x)))
+                    # I think that seg_outputs is a classificator already, and we don't want it in mode 0.
+                    results_mode_0.append(self.segm_nonlin_tanh(x))
             elif mode == 1:
                 if self.num_classes == 1:
                     seg_outputs.append(self.segm_nonlin_sigmoid(self.seg_outputs[u](x)))
@@ -489,8 +502,12 @@ class decoder(nn.Module):
         #                                      zip(list(self.upscale_logits_ops)[::-1], seg_outputs[:-1][::-1])]), skip_info
 
         if mode == 0:
-            return seg_outputs[-1], skip_info
+            print("results_mode_0")
+            print(results_mode_0[-1].shape)
+            return results_mode_0[-1], skip_info
         elif mode == 1:
+            print("seg_outputs")
+            print(seg_outputs[-1].shape)
             return seg_outputs[-1]
 
 class mi_estimation_network(nn.Module):

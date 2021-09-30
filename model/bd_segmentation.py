@@ -415,6 +415,7 @@ class _forward(nn.Module):
             or self.lambda_x_id
             or self.lambda_z_id):
                 s_B, skip_B = self.encoder(x_B)
+        print("encoder OK")
         
         # Helper function for summing either two tensors or pairs of tensors
         # across two lists of tensors.
