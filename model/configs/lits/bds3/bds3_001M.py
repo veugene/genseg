@@ -5,6 +5,7 @@
 # TODO: normalization switches needs to be implemented as well in this (mode=0, mode=1)...
 # TODO QUESTION1: what is _select() during normlaization and skip in creating block (bds3_001L.py)
 
+
 from collections import OrderedDict
 import torch
 from nnunet.network_architecture.generic_UNet import Generic_UNet, StackedConvLayers, ConvDropoutNormNonlin, Upsample
@@ -134,6 +135,7 @@ def build_model(lambda_disc=3,
         if m is None:
             continue
         recursive_spectral_norm(m)
+
     remove_spectral_norm(submodel['decoder_residual'].conv_blocks_localization[-1][-1].blocks[-1].conv)
     remove_spectral_norm(submodel['decoder_residual'].seg_outputs[-1])
 
