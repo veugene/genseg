@@ -345,6 +345,8 @@ class decoder(nn.Module):
         for n in range(self.num_conv_blocks):
             def _select(a, b=None):
                 return a if n>0 else b
+            print('Normalization switch')
+            print(_select(normalization_switch))
             block = self.block_type(
                 in_channels=last_channels,
                 num_filters=self.num_channels_list[n],

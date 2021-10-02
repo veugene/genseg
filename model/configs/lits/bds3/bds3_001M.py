@@ -4,6 +4,7 @@
 # TODO: spectral loss is probably OK now, but needs refactoring due to previous comment (turn it off on the last conv -> norm layer + the classifier)
 # TODO: normalization switches needs to be implemented as well in this (mode=0, mode=1)...
 
+# TODO QUESTION1: what is _select() during normlaization and skip in creating block (bds3_001L.py)
 
 # TODO: OK, so we need to : 1/ ADD new layer BEFORE seg outputs
 
@@ -115,7 +116,6 @@ def build_model(lambda_disc=3,
     enc_out_shape = [8, 2, 2]
 
     z_shape = (n,) + tuple(enc_out_shape[1:])
-    #print((("DEBUG: sample_shape={}".format(z_shape))
 
     decoder_common_kwargs = get_dataset_properties("")
     decoder_common_kwargs["num_classes"] = None
@@ -139,8 +139,6 @@ def build_model(lambda_disc=3,
         if m is None:
             continue
         recursive_spectral_norm(m)
-    print(submodel["decoder_common"])
-    print(submodel["decoder_residual"])
     # TODO: do we have spectral norm in decoder residual atm? (?)
     remove_spectral_norm(submodel['decoder_residual'].conv_blocks_localization[-1][-1].blocks[-1].conv)
     remove_spectral_norm(submodel['decoder_residual'].seg_outputs[-1])
@@ -383,6 +381,12 @@ class decoder(nn.Module):
         self.dropout_op = dropout_op
         self.num_classes = num_classes
 
+        # Normalization switch (translation, segmentation modes).
+        def normalization_switch(*args, **kwargs):
+            return switching_normalization(*args,
+                                           normalization=self.normalization,
+                                           **kwargs)
+
         # we replace the argument from the plans as we need softmax/sigmoid as well as the tanh function for decoder.
         # self.final_nonlin = final_nonlin
         self.segm_nonlin_softmax = lambda x: F.softmax(x, 1)
@@ -443,14 +447,25 @@ class decoder(nn.Module):
 
             self.conv_kwargs['kernel_size'] = self.conv_kernel_sizes[- (u + 1)]
             self.conv_kwargs['padding'] = self.conv_pad_sizes[- (u + 1)]
-            self.conv_blocks_localization.append(nn.Sequential(
-                StackedConvLayers(n_features_after_tu_and_concat, nfeatures_from_skip, num_conv_per_stage - 1,
-                                  self.conv_op, self.conv_kwargs, self.norm_op, self.norm_op_kwargs, self.dropout_op,
-                                  self.dropout_op_kwargs, self.nonlin, self.nonlin_kwargs, basic_block=basic_block),
-                StackedConvLayers(nfeatures_from_skip, final_num_features, 1, self.conv_op, self.conv_kwargs,
-                                  self.norm_op, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs,
-                                  self.nonlin, self.nonlin_kwargs, basic_block=basic_block)
-            ))
+            if u != num_pool - 1:
+                self.conv_blocks_localization.append(nn.Sequential(
+                    StackedConvLayers(n_features_after_tu_and_concat, nfeatures_from_skip, num_conv_per_stage - 1,
+                                      self.conv_op, self.conv_kwargs, self.norm_op, self.norm_op_kwargs, self.dropout_op,
+                                      self.dropout_op_kwargs, self.nonlin, self.nonlin_kwargs, basic_block=basic_block),
+                    StackedConvLayers(nfeatures_from_skip, final_num_features, 1, self.conv_op, self.conv_kwargs,
+                                      self.norm_op, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs,
+                                      self.nonlin, self.nonlin_kwargs, basic_block=basic_block)
+                ))
+            else:
+                self.conv_blocks_localization.append(nn.Sequential(
+                    StackedConvLayers(n_features_after_tu_and_concat, nfeatures_from_skip, num_conv_per_stage - 1,
+                                      self.conv_op, self.conv_kwargs, self.norm_op, self.norm_op_kwargs,
+                                      self.dropout_op,
+                                      self.dropout_op_kwargs, self.nonlin, self.nonlin_kwargs, basic_block=basic_block),
+                    StackedConvLayers(nfeatures_from_skip, input_channels, 1, self.conv_op, self.conv_kwargs,
+                                      self.norm_op, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs,
+                                      self.nonlin, self.nonlin_kwargs, basic_block=basic_block)
+                ))
 
         if num_classes is not None:
             for ds in range(len(self.conv_blocks_localization)):
@@ -468,6 +483,8 @@ class decoder(nn.Module):
 
         self.conv_blocks_localization = nn.ModuleList(self.conv_blocks_localization)
 
+
+
         self.tu = nn.ModuleList(self.tu)
         if num_classes is not None:
             self.seg_outputs = nn.ModuleList(self.seg_outputs)
@@ -479,6 +496,9 @@ class decoder(nn.Module):
             self.apply(self.weightInitializer)
 
     def forward(self, x, skip_info, mode=0):
+        for m in self.modules():
+            if isinstance(m, switching_normalization):
+                m.set_mode(mode)
         seg_outputs = []
         results_mode_0 = []
         # TU is transpose / upsample, conv_blocks_localization 2 convs in a row
@@ -502,12 +522,8 @@ class decoder(nn.Module):
         #                                      zip(list(self.upscale_logits_ops)[::-1], seg_outputs[:-1][::-1])]), skip_info
 
         if mode == 0:
-            print("results_mode_0")
-            print(results_mode_0[-1].shape)
             return results_mode_0[-1], skip_info
         elif mode == 1:
-            print("seg_outputs")
-            print(seg_outputs[-1].shape)
             return seg_outputs[-1]
 
 class mi_estimation_network(nn.Module):
