@@ -62,14 +62,14 @@ def build_model(long_skip='skinny_cat'):
     encoder_instance = encoder(**get_dataset_properties())
     final_num_features = encoder_instance.final_num_features
 
-    decoder_common_kwargs = get_dataset_properties("")
-    decoder_common_kwargs["num_classes"] = None
-
     decoder_seg = get_dataset_properties("")
+    decoder_rec = get_dataset_properties("")
+    decoder_rec["num_classes"] = 0
     model = segmentation_model(encoder=encoder_instance,
-                               decoder_rec=decoder(352,
-                                  encoder_instance.conv_blocks_context,
-                                  **decoder_common_kwargs),
+                               decoder_rec=decoder(
+                                   final_num_features,
+                                   encoder_instance.conv_blocks_context,
+                                   **decoder_rec),
                                decoder_seg=decoder(
                                    final_num_features,
                                    encoder_instance.conv_blocks_context,
@@ -382,22 +382,26 @@ class decoder(nn.Module):
 
     def forward(self, x, skip_info):
         seg_outputs = []
-
+        results_mode_0 = []
         for u in range(len(self.tu)):
             x = self.tu[u](x)
             x = adjust_to_size(x, skip_info[-(u + 1)].size()[2:])
             x = torch.cat((x, skip_info[-(u + 1)]), dim=1)
             x = self.conv_blocks_localization[u](x)
-            if self.num_classes == 1:
+            if self.num_classes is None:
+                results_mode_0.append(self.segm_nonlin_tanh(x))
+            elif self.num_classes == 1:
                 seg_outputs.append(self.segm_nonlin_sigmoid(self.seg_outputs[u](x)))
             else:
                 seg_outputs.append(self.segm_nonlin_softmax(self.seg_outputs[u](x)))
-
         #   DEEP SUPERVISION - LET'S REMOVE THAT FOR A WHILE
         # if self._deep_supervision and self.do_ds:
         #    return tuple([seg_outputs[-1]] + [i(j) for i, j in
         #                                      zip(list(self.upscale_logits_ops)[::-1], seg_outputs[:-1][::-1])]), skip_info
-        return seg_outputs[-1]
+        if self.num_classes is None:
+            return results_mode_0[-1], skip_info
+        else:
+            return seg_outputs[-1]
 
 
 class multi_class_dice_loss(object):
