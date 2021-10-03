@@ -119,10 +119,7 @@ def build_model(lambda_disc=3,
                                     encoder_instance.conv_blocks_context,
                                     **decoder_residual_kwargs),
         'segmenter'         : None,
-        'mutual_information': mi_estimation_network(
-                                            x_size=np.product(x_shape),
-                                            z_size=np.product(z_shape),
-                                            n_hidden=1000),
+        'mutual_information': None,
         'disc_A'            : munit_discriminator(**discriminator_kwargs),
         'disc_B'            : munit_discriminator(**discriminator_kwargs)}
 
@@ -150,8 +147,7 @@ def build_model(lambda_disc=3,
     return OrderedDict((
         ('G', model),
         ('D', nn.ModuleList([model.separate_networks['disc_A'],
-                             model.separate_networks['disc_B']])),
-        ('E', model.separate_networks['mi_estimator'])
+                             model.separate_networks['disc_B']]))
         ))
 
 
