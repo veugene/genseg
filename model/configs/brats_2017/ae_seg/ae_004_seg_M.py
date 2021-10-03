@@ -30,7 +30,7 @@ def get_dataset_properties(path=None):
         # plans
         'input_channels': 4,
         'base_num_features': 32,
-        'num_classes': 1,
+        'num_classes': 4,
         'num_pool': 5,
         # Static in nnunet
         'num_conv_per_stage': 2,
@@ -348,7 +348,7 @@ class decoder(nn.Module):
                                       self.conv_op, self.conv_kwargs, self.norm_op, self.norm_op_kwargs,
                                       self.dropout_op,
                                       self.dropout_op_kwargs, self.nonlin, self.nonlin_kwargs, basic_block=basic_block),
-                    StackedConvLayers(nfeatures_from_skip, input_channels, 1, self.conv_op, self.conv_kwargs,
+                    StackedConvLayers(nfeatures_from_skip, 4, 1, self.conv_op, self.conv_kwargs,
                                       self.norm_op, self.norm_op_kwargs, self.dropout_op,
                                       self.dropout_op_kwargs,
                                       self.nonlin, self.nonlin_kwargs, basic_block=basic_block)
@@ -398,9 +398,14 @@ class decoder(nn.Module):
         # if self._deep_supervision and self.do_ds:
         #    return tuple([seg_outputs[-1]] + [i(j) for i, j in
         #                                      zip(list(self.upscale_logits_ops)[::-1], seg_outputs[:-1][::-1])]), skip_info
+        print("NUM CLASSES")
+        print(self.num_classes)
+
         if self.num_classes is None:
             return results_mode_0[-1], skip_info
         else:
+            print("SEG OUTPUT SHAPE")
+            print(seg_outputs[-1].shape)
             return seg_outputs[-1]
 
 
