@@ -148,8 +148,8 @@ def get_slices(inputs, size, hist):
 
     # Canonical normalization : consider only liver tissue. Use statistics
     # from the entire liver.
-    vol = (vol - vol[seg == 1].mean()) / (vol[seg == 1].std() * 5 + 1)  # fit in tanh
-
+    vol = (vol-vol[seg==1].mean())/(vol[seg==1].std()*5+1)  # fit in tanh
+    
     # Get axial slices.
     vol_slices_h = vol[indices_h]
     vol_slices_s = vol[indices_s]
@@ -163,7 +163,7 @@ def get_slices(inputs, size, hist):
     vol_slices_s, seg_slices_s = crop_and_resize(vol_slices_s,
                                                  seg_slices_s,
                                                  size=(size, size))
-
+    
     # Get positional histogram values for slices. These will be used to
     # determine the relative frequency with which healthy slices are sampled
     # during training.
@@ -173,7 +173,7 @@ def get_slices(inputs, size, hist):
     # Outputs.
     h = vol_slices_h
     s = vol_slices_s
-    m = np.uint8(seg_slices_s == 2)
+    m = np.uint8(seg_slices_s==2)
     return h, s, m, histogram_values
 
 
@@ -181,11 +181,11 @@ def crop_and_resize(stack_vol, stack_seg, size):
     '''
     Set non-liver to zero, crop to the liver, and then resize to (size, size).
     '''
-    out_vol = np.zeros((len(stack_vol),) + size, dtype=stack_vol.dtype)
-    out_seg = np.zeros((len(stack_seg),) + size, dtype=stack_seg.dtype)
+    out_vol = np.zeros((len(stack_vol),)+size, dtype=stack_vol.dtype)
+    out_seg = np.zeros((len(stack_seg),)+size, dtype=stack_seg.dtype)
     for i, (vol_slice, seg_slice) in enumerate(zip(stack_vol, stack_seg)):
-        bbox = ndimage.find_objects(seg_slice > 0)[0]
-        vol_slice[seg_slice == 0] = 0  # Set background to zero.
+        bbox = ndimage.find_objects(seg_slice>0)[0]
+        vol_slice[seg_slice==0] = 0     # Set background to zero.
         out_vol[i] = resize(vol_slice[bbox],
                             size=size,
                             interpolator=sitk.sitkLinear)
@@ -194,13 +194,12 @@ def crop_and_resize(stack_vol, stack_seg, size):
                             interpolator=sitk.sitkNearestNeighbor)
     return out_vol, out_seg
 
-
 def resize(image, size, interpolator=sitk.sitkLinear):
     sitk_image = sitk.GetImageFromArray(image)
-    new_spacing = [x * y / z for x, y, z in zip(
-        sitk_image.GetSpacing(),
-        sitk_image.GetSize(),
-        size)]
+    new_spacing = [x*y/z for x, y, z in zip(
+                   sitk_image.GetSpacing(),
+                   sitk_image.GetSize(),
+                   size)]
     sitk_out = sitk.Resample(sitk_image,
                              size,
                              sitk.Transform(),

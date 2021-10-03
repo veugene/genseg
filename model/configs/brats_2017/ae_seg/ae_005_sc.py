@@ -1,5 +1,3 @@
-# ae_001L with mse instead of mae
-
 import torch
 from torch import nn
 from torch.functional import F
@@ -24,11 +22,21 @@ from model.common.losses import (dist_ratio_mse_abs,
 from model.ae_segmentation import segmentation_model
 
 
-def build_model(long_skip='skinny_cat', lambda_rec=1, lambda_seg=1):
+def build_model(long_skip='skinny_cat',
+                lambda_rec=1,
+                lambda_seg=1,
+                lambda_enforce_sum=None):
     if long_skip=='none':
         long_skip = None
     N = 512 # Number of features at the bottleneck.
-    image_size = (1, 256, 256)
+    image_size = (4, 240, 120)
+    
+    # Rescale lambdas if a sum is enforced.
+    lambda_scale = 1.
+    if lambda_enforce_sum is not None:
+        lambda_sum = ( lambda_rec
+                      +lambda_seg)
+        lambda_scale = lambda_enforce_sum/lambda_sum
     
     encoder_kwargs = {
         'input_shape'         : image_size,
@@ -77,9 +85,9 @@ def build_model(long_skip='skinny_cat', lambda_rec=1, lambda_seg=1):
                                    num_classes=1,
                                    **decoder_kwargs),
                                loss_rec=mse,
-                               loss_seg=dice_loss(),
-                               lambda_rec=1.,
-                               lambda_seg=1.,
+                               loss_seg=dice_loss([1,2,4]),
+                               lambda_rec=lambda_rec*lambda_scale,
+                               lambda_seg=lambda_seg*lambda_scale,
                                rng=np.random.RandomState(1234))
     
     return {'G': model}

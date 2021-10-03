@@ -36,12 +36,15 @@ def _reduce(loss):
 
 
 class segmentation_model(nn.Module):
-    def __init__(self, student, teacher, loss_seg=None, lambda_con=10.,
-                 alpha_max=0.99, use_gradual_alpha=False):
+    def __init__(self, student, teacher, loss_seg=None, lambda_seg=1,
+                 lambda_con=0.01, alpha_max=0.99, use_gradual_alpha=False):
         super(segmentation_model, self).__init__()
         self.student    = student
-        self.teacher    = teacher
+        self.teacher    = [teacher]     # Disconnect parameters.
+        for param in self.teacher[0].parameters():
+            param.detach_()
         self.loss_seg   = loss_seg if loss_seg else dice_loss()
+        self.lambda_seg = lambda_seg
         self.lambda_con = lambda_con    # consistency weight
         self.alpha_max  = alpha_max     # for exponential moving average
         self.use_gradual_alpha = use_gradual_alpha
@@ -50,10 +53,12 @@ class segmentation_model(nn.Module):
 
     def cuda(self, *args, **kwargs):
         self.is_cuda = True
+        self.teacher[0].cuda()
         super(segmentation_model, self).cuda(*args, **kwargs)
 
     def cpu(self, *args, **kwargs):
         self.is_cuda = False
+        self.teacher[0].cpu()
         super(segmentation_model, self).cpu(*args, **kwargs)
 
     def forward(self, x_A, x_B=None, mask=None, optimizer=None, **kwargs):
@@ -98,7 +103,7 @@ class segmentation_model(nn.Module):
         
         # Segment.
         x_AM_student = self.student(x)
-        x_AM_teacher = self.teacher(x)
+        x_AM_teacher = self.teacher[0](x)
         
         # Student segmentation loss.
         x_AM_sup_student = None
@@ -113,12 +118,12 @@ class segmentation_model(nn.Module):
         x_AM_unsup_teacher = None
         if self.lambda_con and len(mask_indices) < len(mask):
             x_AM_unsup_student = x_AM_student[no_mask_indices]
-            x_AM_unsup_teacher = x_AM_teacher[no_mask_indices].detach()
+            x_AM_unsup_teacher = x_AM_teacher[no_mask_indices]
             loss_con = _mean(F.mse_loss(x_AM_unsup_student,
                                         x_AM_unsup_teacher))
         
         # Loss. Compute gradients, if requested.
-        loss = loss_seg + self.lambda_con*loss_con
+        loss = self.lambda_seg*loss_seg + self.lambda_con*loss_con
         if optimizer is not None:
             loss.mean().backward()
             optimizer.step()
@@ -126,7 +131,7 @@ class segmentation_model(nn.Module):
         # Update teacher's parameters as exponential moving average of
         # student's parameters.
         alpha = min(1 - 1./(self._iteration+1), self.alpha_max)
-        for ema_param, param in zip(self.teacher.parameters(),
+        for ema_param, param in zip(self.teacher[0].parameters(),
                                     self.student.parameters()):
             if self.use_gradual_alpha: # False proved to work better
                 ema_param.data.mul_(alpha).add_(1 - alpha, param.data)

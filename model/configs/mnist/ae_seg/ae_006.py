@@ -24,7 +24,9 @@ from model.common.losses import (dist_ratio_mse_abs,
 from model.ae_segmentation import segmentation_model
 
 
-def build_model():
+def build_model(long_skip='skinny_cat', lambda_rec=1., lambda_seg=1.):
+    if long_skip=='none':
+        long_skip = None
     N = 512 # Number of features at the bottleneck.
     image_size = (1, 48, 48)
     
@@ -71,13 +73,13 @@ def build_model():
                                    num_classes=None,
                                    **decoder_kwargs),
                                decoder_seg=decoder(
-                                   long_skip_merge_mode='skinny_cat',
+                                   long_skip_merge_mode=long_skip,
                                    num_classes=1,
                                    **decoder_kwargs),
                                loss_rec=mae,
                                loss_seg=dice_loss(),
-                               lambda_rec=1.,
-                               lambda_seg=0.01,
+                               lambda_rec=lambda_rec,
+                               lambda_seg=lambda_seg,
                                rng=np.random.RandomState(1234))
     
     return {'G': model}
@@ -199,7 +201,7 @@ class decoder(nn.Module):
                              "of entries as there are blocks.")
         
         # long_skip_merge_mode settings.
-        valid_modes = [None, 'skinny_cat', 'cat', 'pool']
+        valid_modes = [None, 'skinny_cat', 'cat', 'sum', 'pool']
         if long_skip_merge_mode not in valid_modes:
             raise ValueError("`long_skip_merge_mode` must be one of {}."
                              "".format(", ".join(["\'{}\'".format(mode)
@@ -328,6 +330,8 @@ class decoder(nn.Module):
                     ValueError()
             else:
                 out = block(out)
+                assert skip_info is not None    # Decoder must take skip_info.
+                out = adjust_to_size(out, skip_info[n].size()[2:])
             if not out.is_contiguous():
                 out = out.contiguous()
         out = self.pre_conv(out)

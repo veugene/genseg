@@ -23,15 +23,29 @@ from model.common.network.basic import (adjust_to_size,
 from model.mean_teacher_segmentation import segmentation_model
 
 
-def build_model():
+def build_model(long_skip='skinny_cat',
+                lambda_seg=1,
+                lambda_con=0.01,
+                lambda_enforce_sum=None,
+                alpha_max=0.99):
+    if long_skip=="none":
+        long_skip = None
     N = 512 # Number of features at the bottleneck.
+    
+    # Rescale lambdas if a sum is enforced.
+    lambda_scale = 1.
+    if lambda_enforce_sum is not None:
+        lambda_sum = ( lambda_con
+                      +lambda_seg)
+        lambda_scale = lambda_enforce_sum/lambda_sum
+    
     kwargs = {
         'in_channels'         : 4,
         'block_type'          : conv_block,
         'enc_layer_size'      : [N//32, N//16, N//8, N//4, N//2, N],
         'dec_layer_size'      : [N//2, N//4, N//8, N//16, N//32],
         'skip'                : True,
-        'long_skip_merge_mode': 'skinny_cat',
+        'long_skip_merge_mode': long_skip,
         'dropout'             : 0.4,
         'enc_normalization'   : instance_normalization,
         'dec_normalization'   : layer_normalization,
@@ -47,8 +61,9 @@ def build_model():
         student=encoder_decoder(**kwargs),
         teacher=encoder_decoder(**kwargs),
         loss_seg=dice_loss([1,2,4]),
-        lambda_con=10.,
-        alpha_max=0.99)
+        lambda_seg=lambda_seg*lambda_scale,
+        lambda_con=lambda_con*lambda_scale,
+        alpha_max=alpha_max)
     return {'G': model}
 
 
@@ -238,6 +253,7 @@ class encoder_decoder(nn.Module):
                     ValueError()
             else:
                 out = block(out)
+                out = adjust_to_size(out, skips[n].size()[2:])
             if not out.is_contiguous():
                 out = out.contiguous()
         out = self.pre_conv(out)

@@ -349,7 +349,10 @@ class image_logger(object):
                 draw = ImageDraw.Draw(arr_pil)
                 font = None
                 if self.fontname is not None:
-                    font = ImageFont.truetype(self.fontname, self.fontsize)
+                    try:
+                        font = ImageFont.truetype(self.fontname, self.fontsize)
+                    except OSError:
+                        font = ImageFont.load_default()
                 draw.text((0, 0), self._labels[i], fill=255, font=font)
                 arr = np.array(arr_pil)
             image_rows.append(arr)
