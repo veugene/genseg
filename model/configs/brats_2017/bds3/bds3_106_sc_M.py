@@ -487,6 +487,7 @@ class decoder(nn.Module):
 
         for u in range(len(self.tu)):
             x = self.tu[u](x)
+            x = adjust_to_size(x, skip_info[-(u+1)].size()[2:])
             x = torch.cat((x, skip_info[-(u + 1)]), dim=1)
             x = self.conv_blocks_localization[u](x)
             if mode == 0:
