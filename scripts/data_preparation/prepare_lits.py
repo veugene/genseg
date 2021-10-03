@@ -30,7 +30,6 @@ def get_parser():
     parser.add_argument('--path_create', type=str,
                         default='./data/lits/lits.h5',
                         help="path to save the prepared HDF5 dataset to")
-    parser.add_argument('--crop_to_liver', action='store_true')
     parser.add_argument('--min_lesion_width', type=int, default=6,
                         help="a slice is included as a sick slice only if at "
                              "least one lesion has this width or larger in "
@@ -138,7 +137,7 @@ def compute_position_histogram(liver_extents, lesion_indices, bins=10):
     return histogram(all_normalized_indices, bins=bins)
 
 
-def get_slices(inputs, size, hist, crop_to_liver):
+def get_slices(inputs, size, hist):
     vol_path, seg_path, liver_extent, indices_h, indices_s = inputs
     
     # Load volume, segmentation.
@@ -151,10 +150,6 @@ def get_slices(inputs, size, hist, crop_to_liver):
     # from the entire liver.
     vol = (vol-vol[seg==1].mean())/(vol[seg==1].std()*5+1)  # fit in tanh
     
-    # Crop to liver, if requested.
-    if crop_to_liver:
-        vol[seg==0] = 0
-    
     # Get axial slices.
     vol_slices_h = vol[indices_h]
     vol_slices_s = vol[indices_s]
@@ -162,18 +157,12 @@ def get_slices(inputs, size, hist, crop_to_liver):
     seg_slices_s = seg[indices_s]
     
     # Resize slices.
-    vol_slices_h = resize(vol_slices_h,
-                          size=(size, size),
-                          interpolator=sitk.sitkLinear)
-    vol_slices_s = resize(vol_slices_s,
-                          size=(size, size),
-                          interpolator=sitk.sitkLinear)
-    seg_slices_h = resize(seg_slices_h,
-                          size=(size, size),
-                          interpolator=sitk.sitkNearestNeighbor)
-    seg_slices_s = resize(seg_slices_s,
-                          size=(size, size),
-                          interpolator=sitk.sitkNearestNeighbor)
+    vol_slices_h, seg_slices_h = crop_and_resize(vol_slices_h,
+                                                 seg_slices_h,
+                                                 size=(size, size))
+    vol_slices_s, seg_slices_s = crop_and_resize(vol_slices_s,
+                                                 seg_slices_s,
+                                                 size=(size, size))
     
     # Get positional histogram values for slices. These will be used to
     # determine the relative frequency with which healthy slices are sampled
@@ -181,40 +170,46 @@ def get_slices(inputs, size, hist, crop_to_liver):
     histogram_values = [hist.get_value(idx, liver_extent) for idx in indices_h]
     histogram_values = np.array(histogram_values)
     
-    if crop_to_liver:
-        # Previously cropped to liver.
-        h = vol_slices_h
-        s = vol_slices_s
-        m = np.uint8(seg_slices_s==2)
-    else:
-        # Concatenate liver segmentation slice to image volume slice.
-        h = np.stack([vol_slices_h, seg_slices_h>0], axis=1)  # channel dim=1
-        s = np.stack([vol_slices_s, seg_slices_s>0], axis=1)
-        m = np.uint8(seg_slices_s==2)
-    
+    # Outputs.
+    h = vol_slices_h
+    s = vol_slices_s
+    m = np.uint8(seg_slices_s==2)
     return h, s, m, histogram_values
 
 
-def resize(stack, size, interpolator=sitk.sitkLinear):
-    if np.all(stack.shape[1:]==size):
-        return stack
-    out = np.zeros((len(stack),)+size, dtype=stack.dtype)
-    for i, image in enumerate(stack):
-        sitk_image = sitk.GetImageFromArray(image)
-        new_spacing = [x*y/z for x, y, z in zip(
-                    sitk_image.GetSpacing(),
-                    sitk_image.GetSize(),
-                    size)]
-        sitk_out = sitk.Resample(sitk_image,
-                                size,
-                                sitk.Transform(),
-                                interpolator,
-                                sitk_image.GetOrigin(),
-                                new_spacing,
-                                sitk_image.GetDirection(),
-                                0,
-                                sitk_image.GetPixelID())
-        out[i] = sitk.GetArrayFromImage(sitk_out)
+def crop_and_resize(stack_vol, stack_seg, size):
+    '''
+    Set non-liver to zero, crop to the liver, and then resize to (size, size).
+    '''
+    out_vol = np.zeros((len(stack_vol),)+size, dtype=stack_vol.dtype)
+    out_seg = np.zeros((len(stack_seg),)+size, dtype=stack_seg.dtype)
+    for i, (vol_slice, seg_slice) in enumerate(zip(stack_vol, stack_seg)):
+        bbox = ndimage.find_objects(seg_slice>0)[0]
+        vol_slice[seg_slice==0] = 0     # Set background to zero.
+        out_vol[i] = resize(vol_slice[bbox],
+                            size=size,
+                            interpolator=sitk.sitkLinear)
+        out_seg[i] = resize(seg_slice[bbox],
+                            size=size,
+                            interpolator=sitk.sitkNearestNeighbor)
+    return out_vol, out_seg
+
+def resize(image, size, interpolator=sitk.sitkLinear):
+    sitk_image = sitk.GetImageFromArray(image)
+    new_spacing = [x*y/z for x, y, z in zip(
+                   sitk_image.GetSpacing(),
+                   sitk_image.GetSize(),
+                   size)]
+    sitk_out = sitk.Resample(sitk_image,
+                             size,
+                             sitk.Transform(),
+                             interpolator,
+                             sitk_image.GetOrigin(),
+                             new_spacing,
+                             sitk_image.GetDirection(),
+                             0,
+                             sitk_image.GetPixelID())
+    out = sitk.GetArrayFromImage(sitk_out)
     return out
 
 
@@ -263,8 +258,7 @@ def prepare_dataset(args):
     with multiprocessing.Pool() as pool:
         iterator = pool.imap(partial(get_slices,
                                      size=args.resize,
-                                     hist=hist,
-                                     crop_to_liver=args.crop_to_liver),
+                                     hist=hist),
                              zip(paths_vol,
                                  paths_seg,
                                  all_liver_extents,
@@ -272,10 +266,7 @@ def prepare_dataset(args):
                                  all_lesion_indices))
         for i, out in enumerate(tqdm(iterator, total=NUM_CASES)):
             h, s, m, histogram_values = out
-            if args.crop_to_liver:
-                chunks = (1, args.resize, args.resize)
-            else:
-                chunks = (1, 2, args.resize, args.resize)
+            chunks = (1, args.resize, args.resize)
             if len(h):
                 f['h'].create_dataset(str(i),
                                       shape=h.shape,
