@@ -79,12 +79,14 @@ def build_model(lambda_disc=3,
         'skip'                : True,
         'dropout'             : 0.,
         'normalization'       : layer_normalization,
+         # nnunet uses the kwargs, they're not none.
         'norm_kwargs'         : None,
         'padding_mode'        : 'reflect',
         'kernel_size'         : 3,
         'init'                : 'kaiming_normal_',
         'upsample_mode'       : 'repeat',
         'nonlinearity'        : lambda : nn.ReLU(inplace=True),
+        # TODO DO WE NEED THIS?
         'long_skip_merge_mode': 'skinny_cat',
         'ndim'                : 2}
     
@@ -345,8 +347,7 @@ class decoder(nn.Module):
         for n in range(self.num_conv_blocks):
             def _select(a, b=None):
                 return a if n>0 else b
-            print('Normalization switch')
-            print(_select(normalization_switch))
+            # no skip connection for the first blcok (no norm, no nonlinearity)
             block = self.block_type(
                 in_channels=last_channels,
                 num_filters=self.num_channels_list[n],
@@ -450,12 +451,8 @@ class decoder(nn.Module):
                 out = block(out)
             if not out.is_contiguous():
                 out = out.contiguous()
-        print("FORWARD FUNCTION")
-        print(out.shape)
         out = self.pre_conv(out)
-        print(out.shape)
         out = self.out_conv[mode](out)
-        print(out.shape)
         if mode==0:
             out = torch.tanh(out)
             return out, skip_info

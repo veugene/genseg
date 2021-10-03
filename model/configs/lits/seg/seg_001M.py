@@ -1,3 +1,11 @@
+# like 106 for brats
+# TODO: we need to turn off the classifier becuase nnunet is a segmenter, not a reconstructor (for mode 0 in residual decoder) PROBABLY DONE
+# TODO: it will be implemented as a next CONV layer that reconstructs the image after the last conv (it will have 3 conv in the output layers, just as the original) PROBABLY DONE
+# TODO: spectral loss is probably OK now, but needs refactoring due to previous comment (turn it off on the last conv -> norm layer + the classifier) PROBABLY DONE
+# TODO: normalization switches needs to be implemented as well in this (mode=0, mode=1)...
+# TODO QUESTION1: what is _select() during normlaization and skip in creating block (bds3_001L.py)
+
+
 from collections import OrderedDict
 import torch
 from nnunet.network_architecture.generic_UNet import StackedConvLayers, ConvDropoutNormNonlin, Upsample
@@ -33,10 +41,10 @@ from model.bd_segmentation import segmentation_model
 def get_dataset_properties(path=None):
     nnunet_architecture_config_files = {
         # plans
-        'input_channels': 4,
-        'base_num_features': 32,
+        'input_channels': 1,
+        'base_num_features': 30,
         'num_classes': 1,
-        'num_pool': 5,
+        'num_pool': 7,
         # Static in nnunet
         'num_conv_per_stage': 2,
         'feat_map_mul_on_downscale': 2,
@@ -51,8 +59,8 @@ def get_dataset_properties(path=None):
         'dropout_in_localization': False,
         'final_nonlin': lambda x: x,
         'weightInitializer': InitWeights_He(1e-2),
-        'pool_op_kernel_sizes': [[2, 2], [2, 2], [2, 2], [2, 2], [2, 1]],
-        'conv_kernel_sizes': [[3, 3], [3, 3], [3, 3], [3, 3], [3, 3], [3, 3]],
+        'pool_op_kernel_sizes': [[2, 2], [2, 2], [2, 2], [2, 2], [2, 2], [2, 2], [2, 2]],
+        'conv_kernel_sizes': [[3, 3], [3, 3], [3, 3], [3, 3], [3, 3], [3, 3], [3, 3], [3, 3]],
         'upscale_logits': False,
         'convolutional_pooling': True,
         'convolutional_upsampling': True,
@@ -63,47 +71,27 @@ def get_dataset_properties(path=None):
     return nnunet_architecture_config_files
 
 
-def build_model(lambda_disc=3,
-                lambda_x_id=50,
-                lambda_z_id=1,
-                lambda_f_id=0,
-                lambda_cyc=50,
-                lambda_seg=0.01,
-                lambda_enforce_sum=None):
-    N = 512 # Number of features at the bottleneck.
-    n = 128 # Number of features to sample at the bottleneck.
-    image_size = (4, 240, 120)
-    
+def build_model():
     # Rescale lambdas if a sum is enforced.
-    lambda_scale = 1.
-    if lambda_enforce_sum is not None:
-        lambda_sum = ( lambda_disc
-                      +lambda_x_id
-                      +lambda_z_id
-                      +lambda_f_id
-                      +lambda_cyc
-                      +lambda_seg)
-        lambda_scale = lambda_enforce_sum/lambda_sum
-    
 
     encoder_instance = encoder(**get_dataset_properties())
-    enc_out_shape = [480, 8, 8]
     final_num_features = encoder_instance.final_num_features
 
     discriminator_kwargs = {
-        'input_dim'           : image_size[0],
-        'num_channels_list'   : [N//8, N//4, N//2, N],
-        'num_scales'          : 3,
-        'normalization'       : layer_normalization,
-        'norm_kwargs'         : None,
-        'kernel_size'         : 4,
-        'nonlinearity'        : lambda : nn.LeakyReLU(0.2, inplace=True),
-        'padding_mode'        : 'reflect',
-        'init'                : 'kaiming_normal_'}
-    
-    x_shape = (N-n,)+tuple(enc_out_shape[1:])
-    z_shape = (n,)+tuple(enc_out_shape[1:])
-    print("DEBUG: sample_shape={}".format(z_shape))
+        'input_dim': 1,
+        'num_channels_list': [N // 8, N // 4, N // 2, N],
+        'num_scales': 3,
+        'normalization': layer_normalization,
+        'norm_kwargs': None,
+        'kernel_size': 4,
+        'nonlinearity': lambda: nn.LeakyReLU(0.2, inplace=True),
+        'padding_mode': 'reflect',
+        'init': 'kaiming_normal_'}
+
+    # TODO we need to calculate the out shape of encoder (bottleneck (?)) manually.
+    enc_out_shape = [8, 2, 2]
+
+    z_shape = (n,) + tuple(enc_out_shape[1:])
 
     decoder_common_kwargs = get_dataset_properties("")
     decoder_common_kwargs["num_classes"] = None
@@ -111,21 +99,17 @@ def build_model(lambda_disc=3,
     decoder_residual_kwargs = get_dataset_properties("")
 
     submodel = {
-        'encoder'           : encoder_instance,
-        'decoder_common'    : decoder(352,
+        'encoder': encoder_instance,
+        'decoder_rec': decoder(352,
                                   encoder_instance.conv_blocks_context,
                                   **decoder_common_kwargs),
-        'decoder_residual'  : decoder(final_num_features,
+        'decoder_seg': decoder(final_num_features,
                                     encoder_instance.conv_blocks_context,
                                     **decoder_residual_kwargs),
-        'segmenter'         : None,
-        'mutual_information': mi_estimation_network(
-                                            x_size=np.product(x_shape),
-                                            z_size=np.product(z_shape),
-                                            n_hidden=1000),
-        'disc_A'            : munit_discriminator(**discriminator_kwargs),
-        'disc_B'            : munit_discriminator(**discriminator_kwargs)}
-
+        'segmenter': None,
+        'mutual_information': None,
+        'disc_A': munit_discriminator(**discriminator_kwargs),
+        'disc_B': munit_discriminator(**discriminator_kwargs)}
     for m in submodel.values():
         if m is None:
             continue
@@ -133,27 +117,55 @@ def build_model(lambda_disc=3,
 
     remove_spectral_norm(submodel['decoder_residual'].conv_blocks_localization[-1][-1].blocks[-1].conv)
     remove_spectral_norm(submodel['decoder_residual'].seg_outputs[-1])
-    
+
+    # If mixed precision mode, create the amp gradient scaler.
+    scaler = None
+    if mixed_precision:
+        ##print((("DEBUG using mixed precision")
+        scaler = torch.cuda.amp.GradScaler()
+
     model = segmentation_model(**submodel,
+                               scaler=scaler,
                                shape_sample=z_shape,
                                loss_gan='hinge',
-                               loss_seg=dice_loss([1,2,4]),
+                               loss_seg=dice_loss(),
                                relativistic=False,
                                rng=np.random.RandomState(1234),
-                               lambda_disc=lambda_disc*lambda_scale,
-                               lambda_x_id=lambda_x_id*lambda_scale,
-                               lambda_z_id=lambda_z_id*lambda_scale,
-                               lambda_f_id=lambda_f_id*lambda_scale,
-                               lambda_cyc=lambda_cyc*lambda_scale,
-                               lambda_seg=lambda_seg*lambda_scale)
-    
-    return OrderedDict((
+                               lambda_disc=lambda_disc * lambda_scale,
+                               lambda_x_id=lambda_x_id * lambda_scale,
+                               lambda_z_id=lambda_z_id * lambda_scale,
+                               lambda_f_id=lambda_f_id * lambda_scale,
+                               lambda_cyc=lambda_cyc * lambda_scale,
+                               lambda_seg=lambda_seg * lambda_scale)
+
+    out = OrderedDict((
         ('G', model),
         ('D', nn.ModuleList([model.separate_networks['disc_A'],
                              model.separate_networks['disc_B']])),
-        ('E', model.separate_networks['mi_estimator'])
-        ))
+    ))
+    if mixed_precision:
+        out['scaler'] = model.scaler
+    return out
 
+# we need to create for each normalization layer switching_normalization in the residual decoder
+# in the forward pass calculate norm based on the mode, this is already done by  first 3 lines
+
+class switching_normalization(nn.Module):
+    def __init__(self, normalization, output_channels, **kwargs):
+        super(switching_normalization, self).__init__()
+        self.norm0 = normalization(output_channels, **kwargs)
+        self.norm1 = normalization(output_channels, **kwargs)
+        self.mode = 0
+
+    def set_mode(self, mode):
+        assert mode in [0, 1]
+        self.mode = mode
+
+    def forward(self, x):
+        if self.mode == 0:
+            return self.norm0(x)
+        else:
+            return self.norm1(x)
 
 class encoder(nn.Module):
     SPACING_FACTOR_BETWEEN_STAGES = 2
@@ -301,23 +313,6 @@ class encoder(nn.Module):
         x = self.conv_blocks_context[-1](x)
         return x, skips
 
-class switching_normalization(nn.Module):
-    def __init__(self, normalization, output_channels, **kwargs):
-        super(switching_normalization, self).__init__()
-        self.norm0 = normalization(output_channels, **kwargs)
-        self.norm1 = normalization(output_channels, **kwargs)
-        self.mode = 0
-
-    def set_mode(self, mode):
-        assert mode in [0, 1]
-        self.mode = mode
-
-    def forward(self, x):
-        if self.mode == 0:
-            return self.norm0(x)
-        else:
-            return self.norm1(x)
-    
 
 class decoder(nn.Module):
     SPACING_FACTOR_BETWEEN_STAGES = 2
@@ -484,7 +479,8 @@ class decoder(nn.Module):
 
         seg_outputs = []
         results_mode_0 = []
-
+        print("DEBUG TU")
+        print(len(self.tu))
         for u in range(len(self.tu)):
             x = self.tu[u](x)
             x = torch.cat((x, skip_info[-(u + 1)]), dim=1)
@@ -514,15 +510,17 @@ class mi_estimation_network(nn.Module):
         self.z_size = z_size
         self.n_hidden = n_hidden
         modules = []
-        modules.append(nn.Linear(x_size+z_size, self.n_hidden))
+        modules.append(nn.Linear(x_size + z_size, self.n_hidden))
         modules.append(nn.ReLU())
         for i in range(2):
             modules.append(nn.Linear(self.n_hidden, self.n_hidden))
             modules.append(nn.ReLU())
         modules.append(nn.Linear(self.n_hidden, 1))
         self.model = nn.Sequential(*tuple(modules))
-    
+
     def forward(self, x, z):
         out = self.model(torch.cat([x.view(x.size(0), -1),
                                     z.view(z.size(0), -1)], dim=-1))
         return out
+
+

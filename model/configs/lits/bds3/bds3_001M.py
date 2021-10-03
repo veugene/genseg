@@ -8,7 +8,7 @@
 
 from collections import OrderedDict
 import torch
-from nnunet.network_architecture.generic_UNet import Generic_UNet, StackedConvLayers, ConvDropoutNormNonlin, Upsample
+from nnunet.network_architecture.generic_UNet import StackedConvLayers, ConvDropoutNormNonlin, Upsample
 from nnunet.network_architecture.initialization import InitWeights_He
 from nnunet.utilities.nd_softmax import softmax_helper
 from torch import nn
@@ -118,7 +118,6 @@ def build_model(lambda_disc=3,
 
     decoder_residual_kwargs = get_dataset_properties("")
 
-
     submodel = {
         'encoder': encoder_instance,
         'decoder_common': decoder(352,
@@ -168,12 +167,14 @@ def build_model(lambda_disc=3,
         out['scaler'] = model.scaler
     return out
 
+# we need to create for each normalization layer switching_normalization in the residual decoder
+# in the forward pass calculate norm based on the mode, this is already done by  first 3 lines
 
 class switching_normalization(nn.Module):
-    def __init__(self, normalization, *args, **kwargs):
+    def __init__(self, normalization, output_channels, **kwargs):
         super(switching_normalization, self).__init__()
-        self.norm0 = normalization(*args, **kwargs)
-        self.norm1 = normalization(*args, **kwargs)
+        self.norm0 = normalization(output_channels, **kwargs)
+        self.norm1 = normalization(output_channels, **kwargs)
         self.mode = 0
 
     def set_mode(self, mode):
@@ -378,9 +379,9 @@ class decoder(nn.Module):
         self.num_classes = num_classes
 
         # Normalization switch (translation, segmentation modes).
-        def normalization_switch(*args, **kwargs):
-            return switching_normalization(*args,
-                                           normalization=self.normalization,
+        def normalization_switch(output_channels, **kwargs):
+            return switching_normalization(self.norm_op,
+                                           output_channels,
                                            **kwargs)
 
         # we replace the argument from the plans as we need softmax/sigmoid as well as the tanh function for decoder.
@@ -446,20 +447,20 @@ class decoder(nn.Module):
             if u != num_pool - 1:
                 self.conv_blocks_localization.append(nn.Sequential(
                     StackedConvLayers(n_features_after_tu_and_concat, nfeatures_from_skip, num_conv_per_stage - 1,
-                                      self.conv_op, self.conv_kwargs, self.norm_op, self.norm_op_kwargs, self.dropout_op,
+                                      self.conv_op, self.conv_kwargs, normalization_switch, self.norm_op_kwargs, self.dropout_op,
                                       self.dropout_op_kwargs, self.nonlin, self.nonlin_kwargs, basic_block=basic_block),
                     StackedConvLayers(nfeatures_from_skip, final_num_features, 1, self.conv_op, self.conv_kwargs,
-                                      self.norm_op, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs,
+                                      normalization_switch, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs,
                                       self.nonlin, self.nonlin_kwargs, basic_block=basic_block)
                 ))
             else:
                 self.conv_blocks_localization.append(nn.Sequential(
                     StackedConvLayers(n_features_after_tu_and_concat, nfeatures_from_skip, num_conv_per_stage - 1,
-                                      self.conv_op, self.conv_kwargs, self.norm_op, self.norm_op_kwargs,
+                                      self.conv_op, self.conv_kwargs, normalization_switch, self.norm_op_kwargs,
                                       self.dropout_op,
                                       self.dropout_op_kwargs, self.nonlin, self.nonlin_kwargs, basic_block=basic_block),
                     StackedConvLayers(nfeatures_from_skip, input_channels, 1, self.conv_op, self.conv_kwargs,
-                                      self.norm_op, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs,
+                                      normalization_switch, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs,
                                       self.nonlin, self.nonlin_kwargs, basic_block=basic_block)
                 ))
 
@@ -495,16 +496,15 @@ class decoder(nn.Module):
         for m in self.modules():
             if isinstance(m, switching_normalization):
                 m.set_mode(mode)
+
         seg_outputs = []
         results_mode_0 = []
-        # TU is transpose / upsample, conv_blocks_localization 2 convs in a row
 
         for u in range(len(self.tu)):
             x = self.tu[u](x)
             x = torch.cat((x, skip_info[-(u + 1)]), dim=1)
             x = self.conv_blocks_localization[u](x)
             if mode == 0:
-                    # I think that seg_outputs is a classificator already, and we don't want it in mode 0.
                     results_mode_0.append(self.segm_nonlin_tanh(x))
             elif mode == 1:
                 if self.num_classes == 1:
