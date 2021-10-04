@@ -79,14 +79,12 @@ def build_model(lambda_disc=3,
         'skip'                : True,
         'dropout'             : 0.,
         'normalization'       : layer_normalization,
-         # nnunet uses the kwargs, they're not none.
         'norm_kwargs'         : None,
         'padding_mode'        : 'reflect',
         'kernel_size'         : 3,
         'init'                : 'kaiming_normal_',
         'upsample_mode'       : 'repeat',
         'nonlinearity'        : lambda : nn.ReLU(inplace=True),
-        # TODO DO WE NEED THIS?
         'long_skip_merge_mode': 'skinny_cat',
         'ndim'                : 2}
     
@@ -137,11 +135,7 @@ def build_model(lambda_disc=3,
         recursive_spectral_norm(m)
     remove_spectral_norm(submodel['decoder_residual'].out_conv[1].conv.op)
     remove_spectral_norm(submodel['decoder_residual'].classifier.op)
-
-
-    print(submodel["decoder_common"])
-    print(submodel["decoder_residual"])
-
+    
     # If mixed precision mode, create the amp gradient scaler.
     scaler = None
     if mixed_precision:
@@ -347,7 +341,6 @@ class decoder(nn.Module):
         for n in range(self.num_conv_blocks):
             def _select(a, b=None):
                 return a if n>0 else b
-            # no skip connection for the first blcok (no norm, no nonlinearity)
             block = self.block_type(
                 in_channels=last_channels,
                 num_filters=self.num_channels_list[n],
@@ -413,7 +406,7 @@ class decoder(nn.Module):
                 out_channels=self.num_classes,
                 kernel_size=1,
                 ndim=self.ndim)
-
+        
         
     def forward(self, z, skip_info=None, mode=0):
         # Set mode (0: trans, 1: seg).
