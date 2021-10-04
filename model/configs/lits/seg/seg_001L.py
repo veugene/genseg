@@ -64,7 +64,6 @@ def build_model():
     print("DEBUG: sample_shape={}".format(enc_out_shape))
 
     model = segmentation_model(encoder=encoder_instance,
-                               # we are not using this.
                                decoder_rec=decoder(
                                    long_skip_merge_mode=None,
                                    num_classes=None,
