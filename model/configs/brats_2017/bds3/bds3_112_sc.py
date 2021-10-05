@@ -152,7 +152,7 @@ def build_model(lambda_disc=3,
                                lambda_f_id=lambda_f_id*lambda_scale,
                                lambda_cyc=lambda_cyc*lambda_scale,
                                lambda_seg=lambda_seg*lambda_scale,
-                               disable_latent_split=True)
+                               debug_disable_latent_split=True)
     
     return OrderedDict((
         ('G', model),

@@ -87,8 +87,8 @@ class segmentation_model(nn.Module):
                  num_disc_updates=1, relativistic=False, grad_penalty=None,
                  disc_clip_norm=None,gen_clip_norm=None,  lambda_disc=1,
                  lambda_x_ae=10, lambda_x_id=10, lambda_z_id=1, lambda_f_id=1,
-                 lambda_seg=1, lambda_cyc=0,lambda_mi=0, lambda_slice=0.,
-                 debug_ac_gan=False,
+                 lambda_seg=1, lambda_cyc=0, lambda_mi=0, lambda_slice=0.,
+                 debug_ac_gan=False, debug_disable_latent_split=False,
                  rng=None):
         super(segmentation_model, self).__init__()
         lambdas = OrderedDict((
@@ -123,7 +123,8 @@ class segmentation_model(nn.Module):
                                                 grad_penalty_real=grad_penalty,
                                                 grad_penalty_fake=None,
                                                 grad_penalty_mean=0)),
-            ('debug_ac_gan',      debug_ac_gan)
+            ('debug_ac_gan',      debug_ac_gan),
+            ('debug_disable_latent_split', debug_disable_latent_split)
             ))
         self.separate_networks = OrderedDict((
             ('segmenter',         segmenter),
@@ -148,7 +149,7 @@ class segmentation_model(nn.Module):
         # Outputs are placed on CPU when there are multiple GPUs.
         keys_forward = ['encoder', 'decoder_common', 'decoder_residual',
                         'decoder_autoencode',  'segmenter', 'shape_sample',
-                        'scaler', 'rng']
+                        'scaler', 'rng', 'debug_disable_latent_split']
         kwargs_forward = dict([(key, val) for key, val in kwargs.items()
                                if key in keys_forward])
         self._forward = _forward(**kwargs_forward, **lambdas)
@@ -440,7 +441,7 @@ class _forward(nn.Module):
         c_A, u_A = torch.split(s_A, [s_A.size(1)-self.shape_sample[0],
                                      self.shape_sample[0]], dim=1)
         if self.lambda_disc or self.lambda_x_id or self.lambda_z_id:
-            if debug_disable_latent_split:
+            if self.debug_disable_latent_split:
                 x_AB, _ = self.decoder_common(s_A, **info_AB)
             else:
                 x_AB, _ = self.decoder_common(c_A, **info_AB)
@@ -461,7 +462,10 @@ class _forward(nn.Module):
             u_BA = self._z_sample(batch_size, rng=rng)
             c_B  = s_B[:,:s_B.size(1)-self.shape_sample[0]]
             z_BA = torch.cat([c_B, u_BA], dim=1)
-            x_BB, _ = self.decoder_common(c_B, **info_BA)
+            if self.debug_disable_latent_split:
+                x_BB, _ = self.decoder_common(s_B, **info_BA)
+            else:
+                x_BB, _ = self.decoder_common(c_B, **info_BA)
             x_BA_residual, _ = self.decoder_residual(z_BA, **info_BA)
             x_BA = add(x_BB, x_BA_residual)
             
@@ -507,7 +511,7 @@ class _forward(nn.Module):
                 info_BAB['class_info'] = class_B
             c_BA, u_BA = torch.split(s_BA, [s_BA.size(1)-self.shape_sample[0],
                                             self.shape_sample[0]], dim=1)
-            if debug_disable_latent_split:
+            if self.debug_disable_latent_split:
                 x_BAB, _ = self.decoder_common(s_BA, **info_BAB)
             else:
                 x_BAB, _ = self.decoder_common(c_BA, **info_BAB)
