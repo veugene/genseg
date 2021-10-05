@@ -214,12 +214,12 @@ def preprocessor_brats(data_augmentation_kwargs=None, label_warp=None,
         of every connected component of the mask.
     seed (int) : The seed for the random number generator.
     """
+    
+    # Set up rng.
+    rng = np.random.RandomState(seed)
         
     def process_element(inputs):
         h, s, m, hi, si = inputs
-        
-        # Set up rng.
-        rng = np.random.RandomState(seed)
         
         # Drop mask.
         if rng.choice([True, False], p=[label_dropout, 1-label_dropout]):
@@ -227,6 +227,7 @@ def preprocessor_brats(data_augmentation_kwargs=None, label_warp=None,
         
         # Crop mask.
         if m is not None and (   label_crop_rand is not None
+                              or label_crop_rand2 is not None
                               or label_crop_left is not None):
             m_out = m.copy()
             m_dilated = ndimage.morphology.binary_dilation(m)
