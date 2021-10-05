@@ -357,6 +357,8 @@ class segmentation_model(nn.Module):
         outputs['l_DB'] = _reduce([loss_disc['B']])
         outputs['l_gradnorm_D'] = gradnorm_D
         outputs['l_gradnorm_G'] = gradnorm_G
+        outputs['l_mi_est_A'] = loss_mi_est['A']
+        outputs['l_mi_est_BA'] = loss_mi_est['BA']
         
         return outputs
 
