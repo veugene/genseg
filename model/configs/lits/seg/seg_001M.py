@@ -1,11 +1,3 @@
-# like 106 for brats
-# TODO: we need to turn off the classifier becuase nnunet is a segmenter, not a reconstructor (for mode 0 in residual decoder) PROBABLY DONE
-# TODO: it will be implemented as a next CONV layer that reconstructs the image after the last conv (it will have 3 conv in the output layers, just as the original) PROBABLY DONE
-# TODO: spectral loss is probably OK now, but needs refactoring due to previous comment (turn it off on the last conv -> norm layer + the classifier) PROBABLY DONE
-# TODO: normalization switches needs to be implemented as well in this (mode=0, mode=1)...
-# TODO QUESTION1: what is _select() during normlaization and skip in creating block (bds3_001L.py)
-
-
 from collections import OrderedDict
 import torch
 from nnunet.network_architecture.generic_UNet import StackedConvLayers, ConvDropoutNormNonlin, Upsample
@@ -18,6 +10,8 @@ from torch.nn.utils import spectral_norm
 import numpy as np
 from fcn_maker.model import assemble_resunet
 from fcn_maker.loss import dice_loss
+
+from model.ae_segmentation import segmentation_model
 from model.common.network.basic import (adjust_to_size,
                                         batch_normalization,
                                         basic_block,
@@ -34,8 +28,7 @@ from model.common.network.basic import (adjust_to_size,
                                         pool_block,
                                         recursive_spectral_norm,
                                         repeat_block)
-from model.common.losses import dist_ratio_mse_abs
-from model.bd_segmentation import segmentation_model
+from model.common.losses import dist_ratio_mse_abs, mae
 
 
 def get_dataset_properties(path=None):
@@ -73,7 +66,8 @@ def get_dataset_properties(path=None):
 
 def build_model():
     # Rescale lambdas if a sum is enforced.
-
+    N=128
+    n=512
     encoder_instance = encoder(**get_dataset_properties())
     final_num_features = encoder_instance.final_num_features
 
@@ -98,74 +92,24 @@ def build_model():
 
     decoder_residual_kwargs = get_dataset_properties("")
 
-    submodel = {
-        'encoder': encoder_instance,
-        'decoder_rec': decoder(352,
+    model = segmentation_model(encoder=encoder_instance,
+                               # we are not using this.
+                               decoder_rec=decoder(352,
                                   encoder_instance.conv_blocks_context,
                                   **decoder_common_kwargs),
-        'decoder_seg': decoder(final_num_features,
+                               decoder_seg=decoder(final_num_features,
                                     encoder_instance.conv_blocks_context,
                                     **decoder_residual_kwargs),
-        'segmenter': None,
-        'mutual_information': None,
-        'disc_A': munit_discriminator(**discriminator_kwargs),
-        'disc_B': munit_discriminator(**discriminator_kwargs)}
-    for m in submodel.values():
-        if m is None:
-            continue
-        recursive_spectral_norm(m)
-
-    remove_spectral_norm(submodel['decoder_residual'].conv_blocks_localization[-1][-1].blocks[-1].conv)
-    remove_spectral_norm(submodel['decoder_residual'].seg_outputs[-1])
-
-    # If mixed precision mode, create the amp gradient scaler.
-    scaler = None
-    if mixed_precision:
-        ##print((("DEBUG using mixed precision")
-        scaler = torch.cuda.amp.GradScaler()
-
-    model = segmentation_model(**submodel,
-                               scaler=scaler,
-                               shape_sample=z_shape,
-                               loss_gan='hinge',
+                               loss_rec=mae,
                                loss_seg=dice_loss(),
-                               relativistic=False,
-                               rng=np.random.RandomState(1234),
-                               lambda_disc=lambda_disc * lambda_scale,
-                               lambda_x_id=lambda_x_id * lambda_scale,
-                               lambda_z_id=lambda_z_id * lambda_scale,
-                               lambda_f_id=lambda_f_id * lambda_scale,
-                               lambda_cyc=lambda_cyc * lambda_scale,
-                               lambda_seg=lambda_seg * lambda_scale)
+                               lambda_rec=0.,
+                               lambda_seg=1.,
+                               rng=np.random.RandomState(1234))
 
-    out = OrderedDict((
-        ('G', model),
-        ('D', nn.ModuleList([model.separate_networks['disc_A'],
-                             model.separate_networks['disc_B']])),
-    ))
-    if mixed_precision:
-        out['scaler'] = model.scaler
-    return out
+    return {'G': model}
 
 # we need to create for each normalization layer switching_normalization in the residual decoder
 # in the forward pass calculate norm based on the mode, this is already done by  first 3 lines
-
-class switching_normalization(nn.Module):
-    def __init__(self, normalization, output_channels, **kwargs):
-        super(switching_normalization, self).__init__()
-        self.norm0 = normalization(output_channels, **kwargs)
-        self.norm1 = normalization(output_channels, **kwargs)
-        self.mode = 0
-
-    def set_mode(self, mode):
-        assert mode in [0, 1]
-        self.mode = mode
-
-    def forward(self, x):
-        if self.mode == 0:
-            return self.norm0(x)
-        else:
-            return self.norm1(x)
 
 class encoder(nn.Module):
     SPACING_FACTOR_BETWEEN_STAGES = 2
@@ -358,12 +302,6 @@ class decoder(nn.Module):
         self.dropout_op = dropout_op
         self.num_classes = num_classes
 
-        # Normalization switch (translation, segmentation modes).
-        def normalization_switch(output_channels, **kwargs):
-            return switching_normalization(self.norm_op,
-                                           output_channels,
-                                           **kwargs)
-
         # we replace the argument from the plans as we need softmax/sigmoid as well as the tanh function for decoder.
         # self.final_nonlin = final_nonlin
         self.segm_nonlin_softmax = lambda x: F.softmax(x, 1)
@@ -427,20 +365,20 @@ class decoder(nn.Module):
             if u != num_pool - 1:
                 self.conv_blocks_localization.append(nn.Sequential(
                     StackedConvLayers(n_features_after_tu_and_concat, nfeatures_from_skip, num_conv_per_stage - 1,
-                                      self.conv_op, self.conv_kwargs, normalization_switch, self.norm_op_kwargs, self.dropout_op,
+                                      self.conv_op, self.conv_kwargs, self.norm_op, self.norm_op_kwargs, self.dropout_op,
                                       self.dropout_op_kwargs, self.nonlin, self.nonlin_kwargs, basic_block=basic_block),
                     StackedConvLayers(nfeatures_from_skip, final_num_features, 1, self.conv_op, self.conv_kwargs,
-                                      normalization_switch, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs,
+                                      self.norm_op, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs,
                                       self.nonlin, self.nonlin_kwargs, basic_block=basic_block)
                 ))
             else:
                 self.conv_blocks_localization.append(nn.Sequential(
                     StackedConvLayers(n_features_after_tu_and_concat, nfeatures_from_skip, num_conv_per_stage - 1,
-                                      self.conv_op, self.conv_kwargs, normalization_switch, self.norm_op_kwargs,
+                                      self.conv_op, self.conv_kwargs, self.norm_op, self.norm_op_kwargs,
                                       self.dropout_op,
                                       self.dropout_op_kwargs, self.nonlin, self.nonlin_kwargs, basic_block=basic_block),
                     StackedConvLayers(nfeatures_from_skip, input_channels, 1, self.conv_op, self.conv_kwargs,
-                                      normalization_switch, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs,
+                                      self.norm_op, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs,
                                       self.nonlin, self.nonlin_kwargs, basic_block=basic_block)
                 ))
 
@@ -473,54 +411,26 @@ class decoder(nn.Module):
             self.apply(self.weightInitializer)
 
     def forward(self, x, skip_info, mode=0):
-        for m in self.modules():
-            if isinstance(m, switching_normalization):
-                m.set_mode(mode)
-
         seg_outputs = []
         results_mode_0 = []
-        print("DEBUG TU")
         print(len(self.tu))
         for u in range(len(self.tu)):
             x = self.tu[u](x)
             x = torch.cat((x, skip_info[-(u + 1)]), dim=1)
             x = self.conv_blocks_localization[u](x)
-            if mode == 0:
-                    results_mode_0.append(self.segm_nonlin_tanh(x))
-            elif mode == 1:
-                if self.num_classes == 1:
-                    seg_outputs.append(self.segm_nonlin_sigmoid(self.seg_outputs[u](x)))
-                else:
-                    seg_outputs.append(self.segm_nonlin_softmax(self.seg_outputs[u](x)))
-
+            if self.num_classes is None:
+                results_mode_0.append(self.segm_nonlin_tanh(x))
+            elif self.num_classes == 1:
+                seg_outputs.append(self.segm_nonlin_sigmoid(self.seg_outputs[u](x)))
+            else:
+                seg_outputs.append(self.segm_nonlin_softmax(self.seg_outputs[u](x)))
         #   DEEP SUPERVISION - LET'S REMOVE THAT FOR A WHILE
         #if self._deep_supervision and self.do_ds:
         #    return tuple([seg_outputs[-1]] + [i(j) for i, j in
         #                                      zip(list(self.upscale_logits_ops)[::-1], seg_outputs[:-1][::-1])]), skip_info
 
-        if mode == 0:
+        if self.num_classes is None:
             return results_mode_0[-1], skip_info
-        elif mode == 1:
+        else:
             return seg_outputs[-1]
-
-class mi_estimation_network(nn.Module):
-    def __init__(self, x_size, z_size, n_hidden):
-        super(mi_estimation_network, self).__init__()
-        self.x_size = x_size
-        self.z_size = z_size
-        self.n_hidden = n_hidden
-        modules = []
-        modules.append(nn.Linear(x_size + z_size, self.n_hidden))
-        modules.append(nn.ReLU())
-        for i in range(2):
-            modules.append(nn.Linear(self.n_hidden, self.n_hidden))
-            modules.append(nn.ReLU())
-        modules.append(nn.Linear(self.n_hidden, 1))
-        self.model = nn.Sequential(*tuple(modules))
-
-    def forward(self, x, z):
-        out = self.model(torch.cat([x.view(x.size(0), -1),
-                                    z.view(z.size(0), -1)], dim=-1))
-        return out
-
 
