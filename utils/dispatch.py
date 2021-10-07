@@ -214,7 +214,7 @@ def _dispatch_canada(args):
                "pip install --no-index -r requirements.txt\n"
                "pip install {}\n"
                "source register_submodules.sh\n"
-               "".format(path_genseg_repository, path_python_daemon_wheel)
+               "".format(path_genseg_repository, path_python_daemon_wheel))
     cmd = subprocess.list2cmdline(sys.argv)       # Shell executable.
     cmd = cmd.replace(" --dispatch_canada",   "") # Remove recursion.
     cmd = "#!/bin/bash\n {}\n python3 {}".format(pre_cmd, cmd)  # Combine.

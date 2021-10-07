@@ -191,7 +191,7 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
 def preprocessor_brats(data_augmentation_kwargs=None, label_warp=None,
                        label_shift=None, label_dropout=0,
                        label_crop_rand=None, label_crop_rand2=None,
-                       label_crop_left=None, seed=None):
+                       label_crop_left=None):
     """
     Preprocessor function to pass to a data_flow, for BRATS data.
     
@@ -212,21 +212,24 @@ def preprocessor_brats(data_augmentation_kwargs=None, label_warp=None,
         set as a fraction of the connected component's width/height, in [0, 1].
     label_crop_left (float) : If true, crop out the left fraction (in [0, 1]) 
         of every connected component of the mask.
-    seed (int) : The seed for the random number generator.
     """
         
     def process_element(inputs):
         h, s, m, hi, si = inputs
         
         # Set up rng.
-        rng = np.random.RandomState(seed)
+        if m is not None:
+            seed = abs(hash(m.data.tobytes()))//2**32
+            rng = np.random.RandomState(seed)
         
         # Drop mask.
-        if rng.choice([True, False], p=[label_dropout, 1-label_dropout]):
-            m = None
+        if m is not None:
+            if rng.choice([True, False], p=[label_dropout, 1-label_dropout]):
+                m = None
         
         # Crop mask.
         if m is not None and (   label_crop_rand is not None
+                              or label_crop_rand2 is not None
                               or label_crop_left is not None):
             m_out = m.copy()
             m_dilated = ndimage.morphology.binary_dilation(m)

@@ -162,8 +162,7 @@ def run(args):
                                        label_dropout=args.label_dropout,
                                        label_crop_rand=args.label_crop_rand,
                                        label_crop_rand2=args.label_crop_rand2,
-                                       label_crop_left=args.label_crop_left,
-                                       seed=args.data_seed),
+                                       label_crop_left=args.label_crop_left),
                                    nb_io_workers=args.nb_io_workers,
                                    nb_proc_workers=args.nb_proc_workers,
                                    rng=np.random.RandomState(args.init_seed)),
@@ -285,9 +284,9 @@ def run(args):
             metrics[key]['DB']   = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_DB'])
             metrics[key]['miA']  = batchwise_loss_accumulator(
-                            output_transform=lambda x: x['l_mi_A'])
+                            output_transform=lambda x: x['l_mi_est_A'])
             metrics[key]['miBA'] = batchwise_loss_accumulator(
-                            output_transform=lambda x: x['l_mi_BA'])
+                            output_transform=lambda x: x['l_mi_est_BA'])
         elif isinstance(experiment_state.model['G'], model_mt):
             metrics[key]['seg']  = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_seg'])
