@@ -2,9 +2,10 @@ from collections import OrderedDict
 
 import h5py
 import numpy as np
+from scipy import ndimage
 
-from data_tools.wrap import multi_source_array
 from data_tools.data_augmentation import image_random_transform
+from data_tools.wrap import multi_source_array
 
  
 def prepare_data_brats17(path_hgg, path_lgg,
@@ -187,16 +188,85 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
     return data
 
 
-def preprocessor_brats(data_augmentation_kwargs=None):
+def preprocessor_brats(data_augmentation_kwargs=None, label_warp=None,
+                       label_shift=None, label_dropout=0,
+                       label_crop_rand=None, label_crop_rand2=None,
+                       label_crop_left=None):
     """
     Preprocessor function to pass to a data_flow, for BRATS data.
     
     data_augmentation_kwargs : Dictionary of keyword arguments to pass to
         the data augmentation code (image_stack_random_transform).
+    label_warp (float) : The sigma value of the spline warp applied to
+        to the target label mask during training in order to corrupt it. Used
+        for testing robustness to label noise.
+    label_shift (int) : The number of pixels to shift all training target masks
+        to the right.
+    label_dropout (float) : The probability in [0, 1] of discarding a slice's
+        segmentation mask.
+    label_crop_rand (float) : Crop out a randomly sized rectangle out of every
+        connected component of the mask. The minimum size of the rectangle is
+        set as a fraction of the connected component's bounding box, in [0, 1].
+    label_crop_rand2 (float) : Crop out a randomly sized rectangle out of every
+        connected component of the mask. The mean size in each dimension is
+        set as a fraction of the connected component's width/height, in [0, 1].
+    label_crop_left (float) : If true, crop out the left fraction (in [0, 1]) 
+        of every connected component of the mask.
     """
         
     def process_element(inputs):
         h, s, m, hi, si = inputs
+        
+        # Set up rng.
+        if m is not None:
+            seed = abs(hash(m.data.tobytes()))//2**32
+            rng = np.random.RandomState(seed)
+        
+        # Drop mask.
+        if m is not None:
+            if rng.choice([True, False], p=[label_dropout, 1-label_dropout]):
+                m = None
+        
+        # Crop mask.
+        if m is not None and (   label_crop_rand is not None
+                              or label_crop_rand2 is not None
+                              or label_crop_left is not None):
+            m_out = m.copy()
+            m_dilated = ndimage.morphology.binary_dilation(m)
+            m_labeled, n_obj = ndimage.label(m_dilated)
+            for bbox in ndimage.find_objects(m_labeled):
+                _, row, col = bbox
+                if label_crop_rand is not None:
+                    r = int(label_crop_rand*(row.stop-row.start))
+                    c = int(label_crop_rand*(col.stop-col.start))
+                    row_a = rng.randint(row.start, row.stop+1-r)
+                    row_b = rng.randint(row_a+r, row.stop+1)
+                    col_a = rng.randint(col.start, col.stop+1-c)
+                    col_b = rng.randint(col_a+c, col.stop+1)
+                    m_out[:, row_a:row_b, col_a:col_b] = 0
+                if label_crop_rand2 is not None:
+                    def get_p(n):
+                        mu = int(label_crop_rand2*n+0.5)     # mean
+                        m = (12*mu-6*n)/(n*(n+1)*(n+2))     # slope
+                        i = 1/(n+1)-m*n/2                   # intersection
+                        p = np.array([max(x*m+i, 0) for x in range(n+1)])
+                        p = p/p.sum()   # Precision errors can make p.sum() > 1
+                        return p
+                    width  = row.stop - row.start
+                    height = col.stop - col.start
+                    box_width  = rng.choice(range(width+1),  p=get_p(width))
+                    box_height = rng.choice(range(height+1), p=get_p(height))
+                    box_row_start = rng.randint(row.start,
+                                                row.stop+1-box_width)
+                    box_col_start = rng.randint(col.start,
+                                                col.stop+1-box_height)
+                    row_slice = slice(box_row_start, box_row_start+box_width)
+                    col_slice = slice(box_col_start, box_col_start+box_height)
+                    m_out[:, row_slice, col_slice] = 0
+                if label_crop_left is not None:
+                    crop_size = int(label_crop_left*(col.stop-col.start))
+                    m_out[:, row, col.start:col.start+crop_size] = 0
+            m = m_out
         
         # Float.
         h = h.astype(np.float32)
@@ -215,6 +285,20 @@ def preprocessor_brats(data_augmentation_kwargs=None):
                 s, m = _
             else:
                 s = _
+        
+        # Corrupt the mask by warping it.
+        if label_warp is not None:
+            if m is not None:
+                m = image_random_transform(m,
+                                           spline_warp=True,
+                                           warp_sigma=label_warp,
+                                           warp_grid_size=3,
+                                           n_warp_threads=1)
+        if label_shift is not None:
+            if m is not None:
+                m_shift = np.zeros(m.shape, dtype=m.dtype)
+                m_shift[:,label_shift:,:] = m[:,:-label_shift,:]
+                m = m_shift
         
         # Remove distant outlier intensities.
         if h is not None:

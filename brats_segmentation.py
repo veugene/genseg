@@ -37,6 +37,31 @@ def get_parser():
                        help="Save images into tensorboard event files.")
     g_exp.add_argument('--init_seed', type=int, default=1234)
     g_exp.add_argument('--data_seed', type=int, default=0)
+    g_exp.add_argument('--label_warp', type=float, default=None,
+                       help="The sigma value of the spline warp applied to "
+                            "to the target label mask during training in "
+                            "order to corrupt it. Used for testing "
+                            "robustness to label noise.")
+    g_exp.add_argument('--label_shift', type=int, default=None,
+                       help="The number of pixels to shift every training "
+                            "target mask. Used for testing robustness to "
+                            "label noise.")
+    g_exp.add_argument('--label_dropout', type=float, default=0,
+                       help="The probability of randomly dropping a reference "
+                            "segmentation mask in the training set.")
+    g_exp.add_argument('--label_permutation', type=float, default=0,
+                       help="The fraction of training slices for which labels "
+                            "are mismatched via permutation.")
+    g_exp.add_argument('--label_crop_rand', type=float, default=None,
+                       help="Crop out a randomly sized rectangle out of "
+                            "every connected component of the mask during "
+                            "training. The minimum size of the rectangle is "
+                            "set as a fraction of the connected component's "
+                            "bounding box.")
+    g_exp.add_argument('--label_crop_rand2', type=float, default=None)
+    g_exp.add_argument('--label_crop_left', type=float, default=None,
+                       help="Crop out the left fraction of every connected "
+                            "component of the mask during training.")
     return parser
 
 
@@ -64,7 +89,8 @@ def run(args):
     from utils.data.brats import (prepare_data_brats13s,
                                   prepare_data_brats17,
                                   preprocessor_brats)
-    from utils.data.common import data_flow_sampler
+    from utils.data.common import (data_flow_sampler,
+                                   permuted_view)
 
     from utils.experiment import experiment
     from utils.metrics import (batchwise_loss_accumulator,
@@ -115,6 +141,11 @@ def run(args):
                               masked_fraction=1.-args.labeled_fraction,
                               drop_masked=args.yield_only_labeled,
                               rng=np.random.RandomState(args.data_seed))
+    if args.label_permutation:
+        data['train']['m'] = permuted_view(
+            data['train']['m'],
+            fraction=args.label_permutation,
+            rng=np.random.RandomState(args.data_seed))
     get_data_list = lambda key : [data[key]['h'],
                                   data[key]['s'],
                                   data[key]['m'],
@@ -125,23 +156,27 @@ def run(args):
                                    sample_random=True,
                                    batch_size=args.batch_size_train,
                                    preprocessor=preprocessor_brats(
-                                       data_augmentation_kwargs=da_kwargs),
+                                       data_augmentation_kwargs=da_kwargs,
+                                       label_warp=args.label_warp,
+                                       label_shift=args.label_shift,
+                                       label_dropout=args.label_dropout,
+                                       label_crop_rand=args.label_crop_rand,
+                                       label_crop_rand2=args.label_crop_rand2,
+                                       label_crop_left=args.label_crop_left),
                                    nb_io_workers=args.nb_io_workers,
                                    nb_proc_workers=args.nb_proc_workers,
                                    rng=np.random.RandomState(args.init_seed)),
         'valid': data_flow_sampler(get_data_list('valid'),
                                    sample_random=True,
                                    batch_size=args.batch_size_valid,
-                                   preprocessor=preprocessor_brats(
-                                       data_augmentation_kwargs=None),
+                                   preprocessor=preprocessor_brats(),
                                    nb_io_workers=args.nb_io_workers,
                                    nb_proc_workers=args.nb_proc_workers,
                                    rng=np.random.RandomState(args.init_seed)),
         'test':  data_flow_sampler(get_data_list('test'),
                                    sample_random=True,
                                    batch_size=args.batch_size_valid,
-                                   preprocessor=preprocessor_brats(
-                                       data_augmentation_kwargs=None),
+                                   preprocessor=preprocessor_brats(),
                                    nb_io_workers=args.nb_io_workers,
                                    nb_proc_workers=args.nb_proc_workers,
                                    rng=np.random.RandomState(args.init_seed))}

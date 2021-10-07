@@ -109,3 +109,38 @@ class masked_view(delayed_view):
             idx = (idx,)+key_remainder
         idx = int(idx)  # Some libraries don't like np.integer
         return self.arr[idx]
+
+
+class permuted_view(delayed_view):
+    """
+    Given an array, permute some random subset of indices, making their
+    mapping intentionally incorrect.
+    
+    arr : The source array.
+    fraction : Fraction of elements to permute (length axis), in [0, 1.0].
+    rng : A numpy random number generator.
+    """
+    
+    def __init__(self, arr, fraction, rng=None):
+        super().__init__(arr=arr, shuffle=False, rng=rng)
+        if 0 > fraction or fraction > 1:
+            raise ValueError("In `permuted_view`, `fraction` must be set "
+                             "to a value in [0, 1.0] but was set to {}."
+                             "".format(fraction))
+        self.fraction = fraction
+        n = int(min(self.num_items, fraction*self.num_items+0.5))
+        permuted_indices = self.rng.choice(self.num_items,
+                                           size=n,
+                                           replace=False)
+        self.remap = dict(zip(permuted_indices, permuted_indices[::-1]))
+        
+    def _get_element(self, int_key, key_remainder=None):
+        if not isinstance(int_key, (int, np.integer)):
+            raise IndexError("cannot index with {}".format(type(int_key)))
+        if int_key in self.remap:
+            int_key = self.remap[int_key]
+        idx = self.arr_indices[int_key]
+        if key_remainder is not None:
+            idx = (idx,)+key_remainder
+        idx = int(idx)  # Some libraries don't like np.integer
+        return self.arr[idx]
