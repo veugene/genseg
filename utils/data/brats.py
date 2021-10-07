@@ -488,7 +488,7 @@ def nnunet_transform(img, seg=None):
             p_per_sample=0.3    # Passed as param.
         )
     ]
-    transforms += [MirrorTransform((0, 1, 2))]  # mirror_axes
+    transforms += [MirrorTransform((1, 2))]  # mirror_axes
     full_transform = Compose(transforms)
     
     # Transform.
