@@ -22,7 +22,7 @@ from model.common.losses import (dist_ratio_mse_abs,
 from model.ae_segmentation import segmentation_model
 
 
-def build_model():
+def build_model(long_skip='skinny_cat'):
     N = 512 # Number of features at the bottleneck.
     image_size = (4, 240, 120)
     
@@ -69,7 +69,7 @@ def build_model():
                                    num_classes=None,
                                    **decoder_kwargs),
                                decoder_seg=decoder(
-                                   long_skip_merge_mode='skinny_cat',
+                                   long_skip_merge_mode=long_skip,
                                    num_classes=4,
                                    **decoder_kwargs),
                                loss_rec=mae,
@@ -197,7 +197,7 @@ class decoder(nn.Module):
                              "of entries as there are blocks.")
         
         # long_skip_merge_mode settings.
-        valid_modes = [None, 'skinny_cat', 'cat', 'pool']
+        valid_modes = [None, 'skinny_cat', 'cat', 'sum', 'pool']
         if long_skip_merge_mode not in valid_modes:
             raise ValueError("`long_skip_merge_mode` must be one of {}."
                              "".format(", ".join(["\'{}\'".format(mode)

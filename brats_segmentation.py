@@ -180,7 +180,7 @@ def run(args):
         for key in filter(lambda x: x.startswith('x_'), outputs.keys()):
             if outputs['x_M'] is None:
                 outputs[key] = None
-            elif outputs[key] is not None and key!='x_M' and 'x_AM' not in key:
+            elif outputs[key] is not None and len(outputs)==len(M):
                 outputs[key] = outputs[key][indices]
         
         return outputs
@@ -311,19 +311,16 @@ def run(args):
                         v_new = v_new[:,channel]         # 4 sequences per img.
                     transformed[k_new] = v_new
             return transformed
-        for key in ['train', 'valid']:
-            save_image = image_logger(
-                initial_epoch=experiment_state.get_epoch(),
-                directory=os.path.join(experiment_state.experiment_path,
-                                    "images/{}".format(key)),
-                summary_tracker=(tracker if key=='valid'
-                                         and args.save_image_events else None),
-                num_vis=args.n_vis,
-                suffix=sequence_name,
-                output_name=sequence_name,
-                output_transform=output_transform,
-                fontsize=40)
-            save_image.attach(engines[key])
+        save_image = image_logger(
+            initial_epoch=experiment_state.get_epoch(),
+            directory=os.path.join(experiment_state.experiment_path, "images"),
+            summary_tracker=(tracker if args.save_image_events else None),
+            num_vis=args.n_vis,
+            suffix=sequence_name,
+            output_name=sequence_name,
+            output_transform=output_transform,
+            fontsize=40)
+        save_image.attach(engines['valid'])
     
     '''
     Train.

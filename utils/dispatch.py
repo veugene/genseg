@@ -1,12 +1,16 @@
 import argparse
 from datetime import datetime
-import os 
+import os
+import psutil
 import re
 import shutil
 import subprocess
 import sys
 import time
 import warnings
+
+
+SBATCH_TIMEOUT = 60
 
 
 """
@@ -98,6 +102,7 @@ def dispatch(parser, run):
         print("Dispatch on Compute Canada - daemonizing ({})."
               "".format(args.path))
         with daemon.DaemonContext(stdout=daemon_log_file,
+                                  stderr=daemon_log_file,
                                   working_directory=args.path):
             _dispatch_canada_daemon(args)
     elif args.model_from is None and not os.path.exists(args.path):
@@ -158,22 +163,60 @@ def _dispatch_ngc(args):
 
 
 def _dispatch_canada(args):
+    # Create a file that specifies that a job is being launched. This is to
+    # prevent more than one job to be run at the same time for the same
+    # experiment. This file contains the pid of the `sbatch` call; the output
+    # from this call is appended to the file once it is received. For a 
+    # successful call, this output should contain the slurm job ID.
+    regex = re.compile('lock\.\d+')
+    lock_files = list(filter(lambda fn : regex.search(fn),
+                             sorted(os.listdir())))
+    if len(lock_files):
+        lock_num = int(re.search('\d+', lock_files[-1]).group(0))+1
+    else:
+        lock_num = 0
+    lock_path = os.path.join(os.getcwd(), 'lock.{}'.format(lock_num))
+    lock = open(lock_path, 'w')
+    
+    # Prepare command for sbatch.
     pre_cmd = ("cd /scratch/veugene/ssl-seg-eugene\n"
                "source register_submodules.sh\n"
                "source activate genseg\n")
     cmd = subprocess.list2cmdline(sys.argv)       # Shell executable.
     cmd = cmd.replace(" --dispatch_canada",   "") # Remove recursion.
     cmd = "#!/bin/bash\n {}\n python3 {}".format(pre_cmd, cmd)  # Combine.
-    out = subprocess.check_output([
+    
+    # Open sbatch process.
+    proc = subprocess.Popen([
                     "sbatch",
                     "--account", args.account,
                     "--gres", 'gpu:{}'.format(args.cca_gpu),
                     "--cpus-per-task", str(args.cca_cpu),
                     "--mem", args.cca_mem,
                     "--time", args.time],
-                   input=cmd,
-                   encoding='utf-8')
-    print(out)
+                   encoding='utf-8',
+                   stderr=subprocess.STDOUT,
+                   stdout=subprocess.PIPE,
+                   stdin=subprocess.PIPE)
+    
+    # Record sbatch pid. Flush to make sure the file is written.
+    print(proc.pid, file=lock)
+    lock.flush()
+    
+    # Run the prepared command and wait for sbatch to complete.
+    # Raise an error if it times out.
+    try:
+        out, err = proc.communicate(input=cmd, timeout=SBATCH_TIMEOUT)
+        print(out, file=lock)
+        print(out)
+    except subprocess.TimeoutExpired as e:
+        print("Call to `sbatch` timed out after {}s : {}"
+              "".format(SBATCH_TIMEOUT, e))
+        proc.terminate()
+    
+    # Flush and close the lock file.
+    lock.close()
+    
     return out
 
 
@@ -252,17 +295,53 @@ def _get_status_canada(job_id):
 
 
 def _isrunning_canada(path):
-    # Read the daemon_log.txt to find all job IDs and check if at least one
-    # is active.
-    log_path = os.path.join(path, "daemon_log.txt")
-    if not os.path.exists(log_path):
+    # Check for lock files. If they exist, check for job IDs. If there is no
+    # job ID in a lock file, sbatch may still be running; check the sbatch PID.
+    # If the process is still running, wait. If there is no such process,
+    # assume the job has failed to launch.
+    
+    # If the path does not exist, nothing is running with that path.
+    if not os.path.exists(path):
         return False
-    with open(log_path, 'r') as f:
-        for line in f:
-            match = re.search("[0-9].*[0-9]$", line)
-            if match:
-                job_id = match.group(0)
-                status = _get_status_canada(job_id)
-                if status in ['RUNNING', 'PENDING']:
-                    return True
+    
+    # Helper to check if a lock is active.
+    def lock_is_active(lock_path):
+        with open(lock_path, 'r') as lock:
+            pid = int(lock.readline())
+            match = re.search("(?<=Submitted batch job )[0-9].*[0-9]$",
+                              lock.readline())
+        
+        # Check if the sbatch process still exists.
+        active = None
+        try:
+            proc = psutil.Process(pid)
+            if not 'sbatch' in proc.name():
+                raise psutil.NoSuchProcess
+        except psutil.NoSuchProcess:
+            active = False
+        
+        # If there is a job ID, check if it's active.
+        if match:
+            job_id = match.group(0)
+            status = _get_status_canada(job_id)
+            if status in ['RUNNING', 'PENDING']:
+                active = True
+            
+        return active
+    
+    # Check all lock files.
+    regex = re.compile('lock\.\d+')
+    lock_files = list(filter(lambda fn : regex.search(fn),
+                             sorted(os.listdir(path))))
+    for fn in lock_files:
+        active = None
+        while active not in [True, False]:
+            # Loop until the lock is found active or until the associated
+            # sbatch process exits.
+            active = lock_is_active(os.path.join(path, fn))
+            if active is not None:
+                break
+            time.sleep(1)
+        if active:
+            return True
     return False
