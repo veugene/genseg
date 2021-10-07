@@ -23,7 +23,9 @@ def get_parser():
     g_exp.add_argument('--weight_decay', type=float, default=1e-4)
     g_exp.add_argument('--labeled_fraction', type=float, default=0.1)
     g_exp.add_argument('--yield_only_labeled', action='store_true')
-    g_exp.add_argument('--augment_data', action='store_true')
+    g_exp_da = g_exp.add_mutually_exclusive_group()
+    g_exp_da.add_argument('--augment_data', action='store_true')
+    g_exp_da.add_argument('--augment_data_nnunet', action='store_true')
     g_exp.add_argument('--batch_size_train', type=int, default=20)
     g_exp.add_argument('--batch_size_valid', type=int, default=20)
     g_exp.add_argument('--epochs', type=int, default=200)
@@ -124,7 +126,9 @@ def run(args):
                  'spline_warp': True,
                  'warp_sigma': 5,
                  'warp_grid_size': 3}
-    if not args.augment_data:
+    if args.augment_data_nnunet:
+        da_kwargs='nnunet'
+    elif not args.augment_data:
         da_kwargs=None
     
     # Prepare data.
