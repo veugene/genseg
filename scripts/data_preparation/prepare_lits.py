@@ -169,7 +169,7 @@ def get_slices(inputs, size, hist):
     # during training.
     histogram_values = [hist.get_value(idx, liver_extent) for idx in indices_h]
     histogram_values = np.array(histogram_values)
-
+    
     # Outputs.
     h = vol_slices_h
     s = vol_slices_s
