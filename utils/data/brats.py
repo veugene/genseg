@@ -2,7 +2,6 @@ from collections import OrderedDict
 
 import h5py
 import numpy as np
-from nnunet.training.data_augmentation.custom_transforms import MaskTransform
 from scipy import ndimage
 
 from batchgenerators.transforms.abstract_transforms import Compose
@@ -300,7 +299,6 @@ def preprocessor_brats(data_augmentation_kwargs=None, label_warp=None,
             else:
                 s = _
         elif data_augmentation_kwargs=='nnunet_default':
-            print('using nnunet default')
             if h is not None:
                 h = nnunet_transform_default(h)
             if s is not None:
