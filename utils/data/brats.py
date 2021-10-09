@@ -2,6 +2,7 @@ from collections import OrderedDict
 
 import h5py
 import numpy as np
+from nnunet.training.data_augmentation.custom_transforms import MaskTransform
 from scipy import ndimage
 
 from batchgenerators.transforms.abstract_transforms import Compose
@@ -15,13 +16,14 @@ from batchgenerators.transforms.noise_transforms \
             GaussianBlurTransform)
 from batchgenerators.transforms.resample_transforms \
     import SimulateLowResolutionTransform
-from batchgenerators.transforms.spatial_transforms import MirrorTransform
+from batchgenerators.transforms.spatial_transforms import MirrorTransform, SpatialTransform
 from batchgenerators.transforms.spatial_transforms import SpatialTransform_2
 
 from data_tools.data_augmentation import image_random_transform
 from data_tools.wrap import multi_source_array
 
- 
+
+
 def prepare_data_brats17(path_hgg, path_lgg,
                          masked_fraction=0, drop_masked=False,
                          rng=None):
@@ -297,6 +299,17 @@ def preprocessor_brats(data_augmentation_kwargs=None, label_warp=None,
                 s, m = _
             else:
                 s = _
+        elif data_augmentation_kwargs=='nnunet_default':
+            print('using nnunet default')
+            if h is not None:
+                h = nnunet_transform_default(h)
+            if s is not None:
+                _ = nnunet_transform_default(s, m)
+            if m is not None:
+                assert s is not None
+                s, m = _
+            else:
+                s = _
         elif data_augmentation_kwargs is not None:
             if h is not None:
                 h = image_random_transform(h, **data_augmentation_kwargs,
@@ -502,3 +515,117 @@ def nnunet_transform(img, seg=None):
         return img_output
     seg_output = out['seg'][0]
     return img_output, seg_output
+
+def nnunet_transform_default(img, seg=None):
+    #
+    #"data_aug_params": "{'selected_data_channels': None,
+    # 'selected_seg_channels': [0],
+    # 'do_elastic': False,
+    # 'elastic_deform_alpha': (0.0, 200.0),
+    # 'elastic_deform_sigma': (9.0, 13.0),
+    # 'do_scaling': True,
+    # 'scale_range': (0.7, 1.4),
+    # 'do_rotation': True,
+    # 'rotation_x': (-3.141592653589793, 3.141592653589793),
+    # 'rotation_y': (-0.0, 0.0),
+    # 'rotation_z': (-0.0, 0.0),
+    # 'random_crop': False,
+    # 'random_crop_dist_to_border':  # None,
+    # 'do_gamma': True,
+    # 'gamma_retain_stats': True,
+    # 'gamma_range': (0.7, 1.5),
+    # 'p_gamma': 0.3,
+    # 'num_threads': 12,
+    # 'num_cached_per_thread': 1,
+    # 'do_mirror': True,
+    # 'mirror_axes': (0, 1),
+    # 'p_eldef': 0.2,
+    # 'p_scale': 0.2,
+    # 'p_rot': 0.2,
+    # 'dummy_2D': False,
+    # 'mask_was_used_for_normalization': OrderedDict([(0, True), (1, True), (2, True), (3, True)]),
+    # 'all_segmentation_labels': None,
+    # 'move_last_seg_chanel_to_data': False,
+    # 'border_mode_data': 'constant',
+    # 'cascade_do_cascade_augmentations': False,
+    # 'cascade_random_binary_transform_p': 0.4,
+    # 'cascade_random_binary_transform_size': (1, 8),
+    # 'cascade_remove_conn_comp_p': 0.2,
+    # 'cascade_remove_conn_comp_max_size_percent_threshold': 0.15,
+    # 'cascade_remove_conn_comp_fill_with_other_class_p': 0.0,
+    # 'independent_scale_factor_for_each_axis': False,
+    # 'patch_size_for_spatialtransform': array([192, 160])}",
+
+    transforms = []
+    transforms += [SpatialTransform(
+        None,
+        patch_center_dist_from_border=None,
+        do_elastic_deform=False,
+        alpha=(0.0, 200.0),
+        sigma=(9.0, 13.0),
+        do_rotation=True, angle_x=(-0.2617993877991494, 0.2617993877991494), angle_y=(-0.0, 0.0),
+        angle_z=(-0.0, 0.0), p_rot_per_axis=1,
+        do_scale=True, scale=(0.9, 1.1),
+        border_mode_data='constant', border_cval_data=0, order_data=3,
+        border_mode_seg="constant", border_cval_seg=0,
+        order_seg=0, random_crop=False, p_el_per_sample=0.2,
+        p_scale_per_sample=0.2, p_rot_per_sample=0.2,
+        independent_scale_for_each_axis=True
+    )]
+    transforms += [
+        GaussianNoiseTransform(p_per_sample=0.1),
+        GaussianBlurTransform((0.5, 1.), different_sigma_per_channel=True, p_per_sample=0.2,
+                              p_per_channel=0.5),
+        BrightnessMultiplicativeTransform(multiplier_range=(0.75, 1.25), p_per_sample=0.15)
+    ]
+    transforms += [(ContrastAugmentationTransform(p_per_sample=0.15)),
+                   SimulateLowResolutionTransform(zoom_range=(0.5, 1),
+                                                  per_channel=True, p_per_channel=0.5,
+                                                  order_downsample=0, order_upsample=3, p_per_sample=0.25,
+                                                  ignore_axes=None)]
+    transforms += [
+        GammaTransform((0.7, 1.5),
+                       True,
+                       True,
+                       retain_stats=True,
+                       p_per_sample=0.1)
+    ]
+
+    transforms += [
+        GammaTransform((0.7, 1.5),
+                       False,
+                       True,
+                       retain_stats=True,
+                       p_per_sample=0.3)
+    ]
+
+    transforms += [
+        MirrorTransform((0,1))
+    ]
+
+    # transforms += [
+    #     MaskTransform(OrderedDict([(0, False)]), mask_idx_in_seg=0, set_outside_to=0)
+    # ]
+
+    # TODO; check whether delete or not
+    # transforms += [
+    #    RemoveLabelTransform(-1, 0)
+    # ]
+    # transforms += [
+    #    RenameTransform('seg', 'target', True)
+    # ]
+
+    full_transform = Compose(transforms)
+
+    # Transform.
+    img_input = img[None]
+    seg_input = seg
+    if seg is not None:
+        seg_input = seg[None]
+    out = full_transform(data=img_input, seg=seg_input)
+    img_output = out['data'][0]
+    if seg is None:
+        return img_output
+    seg_output = out['seg'][0]
+    return img_output, seg_output
+
