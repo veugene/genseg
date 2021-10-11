@@ -127,11 +127,9 @@ def build_model(lambda_disc=3,
 
     for m in submodel.keys():
         if m == 'decoder_residual':
-            print('DONT APPLY SPECTRAL NORM ON RESIDUAL DECODER')
             continue
         if submodel[m] is None:
             continue
-        print(submodel[m])
         recursive_spectral_norm(submodel[m])
 
 
