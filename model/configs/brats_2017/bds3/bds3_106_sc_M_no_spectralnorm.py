@@ -126,11 +126,12 @@ def build_model(lambda_disc=3,
         'disc_B'            : munit_discriminator(**discriminator_kwargs)}
 
     for m in submodel.keys():
-        if m == 'decoder_residual':
-            continue
         if submodel[m] is None:
             continue
-        recursive_spectral_norm(submodel[m])
+        if m == 'decoder_residual' or 'decoder_common':
+            continue
+        else:
+            recursive_spectral_norm(submodel[m])
 
 
     model = segmentation_model(**submodel,
