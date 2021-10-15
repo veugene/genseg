@@ -8,6 +8,8 @@ from torch.utils.data import Dataset
 from data_tools.data_augmentation import image_random_transform
 from data_tools.wrap import multi_source_array
 
+from utils.data.brats import nnunet_transform_default_3d
+
 
 def prepare_data_lits(path, masked_fraction=0, drop_masked=False,
                       data_augmentation_kwargs=None, split_seed=0,
@@ -206,12 +208,18 @@ class LITSDataset(Dataset):
         s = s.astype(np.float32)
         
         # Data augmentation.
-        if self.da_kwargs is not None:
+        if self.da_kwargs == 'nnunet_default_3d':
+            h = nnunet_transform_default_3d(h)
+            s = nnunet_transform_default_3d(s, m)
+            if m is not None:
+                s, m = s
+
+        elif self.da_kwargs is not None:
             h = image_random_transform(h, **self.da_kwargs)
             s = image_random_transform(s, m, **self.da_kwargs)
             if m is not None:
                 s, m = s
-        
+
         # Remove distant outlier intensities.
         if h is not None:
             h = np.clip(h, -1., 1.)

@@ -23,6 +23,8 @@ def get_parser():
     g_exp_da = g_exp.add_mutually_exclusive_group()
     g_exp_da.add_argument('--augment_data', action='store_true')
     g_exp_da.add_argument('--augment_data_nnunet', action='store_true')
+    g_exp_da.add_argument('--augment_data_nnunet_default', action='store_true')
+    g_exp_da.add_argument('--augment_data_nnunet_default_3d', action='store_true')
     g_exp.add_argument('--batch_size_train', type=int, default=20)
     g_exp.add_argument('--batch_size_valid', type=int, default=20)
     g_exp.add_argument('--epochs', type=int, default=200)
@@ -103,6 +105,8 @@ def run(args):
                  'warp_grid_size': 3}
     if args.augment_data_nnunet:
         da_kwargs='nnunet'
+    if args.augment_data_nnunet_default_3d:
+        da_kwargs='nnunet_default_3d'
     elif not args.augment_data:
         da_kwargs=None
     
