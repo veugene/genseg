@@ -3,10 +3,18 @@ from collections import OrderedDict
 import h5py
 import numpy as np
 import torch
+from batchgenerators.transforms.abstract_transforms import Compose
+from batchgenerators.transforms.color_transforms import BrightnessMultiplicativeTransform, BrightnessTransform, \
+    ContrastAugmentationTransform, GammaTransform
+from batchgenerators.transforms.noise_transforms import GaussianNoiseTransform, GaussianBlurTransform
+from batchgenerators.transforms.resample_transforms import SimulateLowResolutionTransform
+from batchgenerators.transforms.spatial_transforms import MirrorTransform, SpatialTransform
 from torch.utils.data import Dataset
 
 from data_tools.data_augmentation import image_random_transform
 from data_tools.wrap import multi_source_array
+
+
 
 def prepare_data_lits(path, masked_fraction=0, drop_masked=False,
                       data_augmentation_kwargs=None, split_seed=0,
@@ -252,7 +260,7 @@ def nnunet_transform_default_3d(img, seg=None, border_val_seg=-1, order_seg=0, o
               'cascade_random_binary_transform_size': (1, 8), 'cascade_remove_conn_comp_p': 0.2,
               'cascade_remove_conn_comp_max_size_percent_threshold': 0.15,
               'cascade_remove_conn_comp_fill_with_other_class_p': 0.0, 'independent_scale_factor_for_each_axis': False,
-              'patch_size_for_spatialtransform': array([128, 128, 128])}
+              'patch_size_for_spatialtransform': np.array([128, 128, 128])}
 
     ignore_axes = None
 
