@@ -237,7 +237,7 @@ def collate_lits(batch):
 
 
 def nnunet_transform_default_3d(img, seg=None, border_val_seg=-1, order_seg=0, order_data=3):
-    params = {'selected_data_channels': one, 'selected_seg_channels': [0],
+    params = {'selected_data_channels': None, 'selected_seg_channels': [0],
               'do_elastic': False, 'elastic_deform_alpha': (0.0, 900.0), 'elastic_deform_sigma': (9.0, 13.0),
               'do_scaling': True, 'scale_range': (0.7, 1.4), 'do_rotation': True,
               'rotation_x': (-0.5235987755982988, 0.5235987755982988),
