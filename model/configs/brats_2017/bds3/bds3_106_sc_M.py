@@ -92,7 +92,7 @@ def build_model(lambda_disc=3,
 
     discriminator_kwargs = {
         'input_dim'           : image_size[0],
-        'num_channels_list'   : [N//8, N//4, N/2, N],
+        'num_channels_list'   : [N//8, N//4, N//2, N],
         'num_scales'          : 3,
         'normalization'       : layer_normalization,
         'norm_kwargs'         : None,
@@ -128,8 +128,8 @@ def build_model(lambda_disc=3,
             continue
         recursive_spectral_norm(m)
 
-    remove_spectral_norm(submodel['decoder_residual'].conv_blocks_localization[-1][-1])
-    remove_spectral_norm(submodel['decoder_residual'].seg_outputs[-1])
+    #remove_spectral_norm(submodel['decoder_residual'].conv_blocks_localization[-1][-1])
+    #remove_spectral_norm(submodel['decoder_residual'].seg_outputs[-1])
     
     model = segmentation_model(**submodel,
                                shape_sample=z_shape,
@@ -442,21 +442,24 @@ class decoder(nn.Module):
                                       self.conv_op, self.conv_kwargs, normalization_switch, self.norm_op_kwargs,
                                       self.dropout_op,
                                       self.dropout_op_kwargs, self.nonlin, self.nonlin_kwargs, basic_block=basic_block),
-                    StackedConvLayers(nfeatures_from_skip, input_channels, 1, self.conv_op, self.conv_kwargs,
+                    nn.ModuleList(
+                        [StackedConvLayers(nfeatures_from_skip, input_channels, 1, self.conv_op, self.conv_kwargs,
                                       normalization_switch, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs,
-                                      self.nonlin, self.nonlin_kwargs, basic_block=basic_block)
+                                      self.nonlin, self.nonlin_kwargs, basic_block=basic_block),
+                        StackedConvLayers(nfeatures_from_skip, input_channels, 1, self.conv_op, self.conv_kwargs,
+                                      normalization_switch, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs,
+                                      self.nonlin, self.nonlin_kwargs, basic_block=basic_block)]
+                    )
                 ))
-
-        self.conv_blocks_localization[-1].append(conv_op(input_channels, input_channels, 3))
 
         if num_classes is not None:
             for ds in range(len(self.conv_blocks_localization)):
+                if ds == len(self.conv_blocks_localization) - 1:
+                    self.seg_outputs.append(conv_op(4, num_classes,
+                                                    1, 1, 0, 1, 1, seg_output_use_bias))
+                else:
                     self.seg_outputs.append(conv_op(self.conv_blocks_localization[ds][-1].output_channels, num_classes,
                                                     1, 1, 0, 1, 1, seg_output_use_bias))
-
-
-
-
 
         self.upscale_logits_ops = []
         cum_upsample = np.cumprod(np.vstack(pool_op_kernel_sizes), axis=0)[::-1]
@@ -485,7 +488,6 @@ class decoder(nn.Module):
         for m in self.modules():
             if isinstance(m, switching_normalization):
                 m.set_mode(mode)
-
         seg_outputs = []
         results_mode_0 = []
 
@@ -493,7 +495,11 @@ class decoder(nn.Module):
             x = self.tu[u](x)
             x = adjust_to_size(x, skip_info[-(u+1)].size()[2:])
             x = torch.cat((x, skip_info[-(u + 1)]), dim=1)
-            x = self.conv_blocks_localization[u](x)
+            if u != len(self.tu)-1:
+                x = self.conv_blocks_localization[u](x)
+            else: 
+                x = self.conv_blocks_localization[u][0](x)
+                x = self.conv_blocks_localization[u][1][mode](x)
             if mode == 0:
                     results_mode_0.append(self.segm_nonlin_tanh(x))
             elif mode == 1:
