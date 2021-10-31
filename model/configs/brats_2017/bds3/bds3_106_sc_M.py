@@ -92,7 +92,7 @@ def build_model(lambda_disc=3,
 
     discriminator_kwargs = {
         'input_dim'           : image_size[0],
-        'num_channels_list'   : [N//32, N//16, N//8, N//4, N/2, N],
+        'num_channels_list'   : [N//8, N//4, N/2, N],
         'num_scales'          : 3,
         'normalization'       : layer_normalization,
         'norm_kwargs'         : None,
