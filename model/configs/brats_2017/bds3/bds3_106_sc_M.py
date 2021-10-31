@@ -444,18 +444,13 @@ class decoder(nn.Module):
                                       self.dropout_op_kwargs, self.nonlin, self.nonlin_kwargs, basic_block=basic_block),
                     StackedConvLayers(nfeatures_from_skip, input_channels, 1, self.conv_op, self.conv_kwargs,
                                       normalization_switch, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs,
-                                      self.nonlin, self.nonlin_kwargs, basic_block=basic_block),
-                    conv_op(input_channels, input_channels, 1, 1, 0, 1, 1))
+                                      self.nonlin, self.nonlin_kwargs, basic_block=basic_block)
+                ))
 
-        if num_classes is not None:
-            self.conv_blocks_localization.append(nn.Conv2d(input_channels, input_channels, (3,3)))
+        self.conv_blocks_localization[-1].append(conv_op(input_channels, input_channels, 3))
 
         if num_classes is not None:
             for ds in range(len(self.conv_blocks_localization)):
-                if ds == len(self.conv_blocks_localization) - 1: 
-                    self.seg_outputs.append(conv_op(4, num_classes,
-                                                    1, 1, 0, 1, 1, seg_output_use_bias))
-                else:
                     self.seg_outputs.append(conv_op(self.conv_blocks_localization[ds][-1].output_channels, num_classes,
                                                     1, 1, 0, 1, 1, seg_output_use_bias))
 
