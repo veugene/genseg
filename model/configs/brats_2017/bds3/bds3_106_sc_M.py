@@ -92,7 +92,7 @@ def build_model(lambda_disc=3,
 
     discriminator_kwargs = {
         'input_dim'           : image_size[0],
-        'num_channels_list'   : [N//8, N//4, N//2, N],
+        'num_channels_list'   : [N//32, N//16, N//8, N//4, N/2, N],
         'num_scales'          : 3,
         'normalization'       : layer_normalization,
         'norm_kwargs'         : None,
@@ -446,7 +446,9 @@ class decoder(nn.Module):
                                       normalization_switch, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs,
                                       self.nonlin, self.nonlin_kwargs, basic_block=basic_block),
                     conv_op(input_channels, input_channels, 1, 1, 0, 1, 1))
-                )
+
+        if num_classes is not None:
+            self.conv_blocks_localization.append(nn.Conv2d(input_channels, input_channels, (3,3)))
 
         if num_classes is not None:
             for ds in range(len(self.conv_blocks_localization)):
@@ -504,11 +506,6 @@ class decoder(nn.Module):
                     seg_outputs.append(self.segm_nonlin_sigmoid(self.seg_outputs[u](x)))
                 else:
                     seg_outputs.append(self.segm_nonlin_softmax(self.seg_outputs[u](x)))
-
-        #   DEEP SUPERVISION - LET'S REMOVE THAT FOR A WHILE
-        #if self._deep_supervision and self.do_ds:
-        #    return tuple([seg_outputs[-1]] + [i(j) for i, j in
-        #                                      zip(list(self.upscale_logits_ops)[::-1], seg_outputs[:-1][::-1])]), skip_info
 
         if mode == 0:
             return results_mode_0[-1], skip_info
