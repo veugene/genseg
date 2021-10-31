@@ -443,12 +443,8 @@ class decoder(nn.Module):
                                       self.dropout_op,
                                       self.dropout_op_kwargs, self.nonlin, self.nonlin_kwargs, basic_block=basic_block),
                     nn.ModuleList(
-                        [StackedConvLayers(nfeatures_from_skip, input_channels, 1, self.conv_op, self.conv_kwargs,
-                                      normalization_switch, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs,
-                                      self.nonlin, self.nonlin_kwargs, basic_block=basic_block),
-                        StackedConvLayers(nfeatures_from_skip, input_channels, 1, self.conv_op, self.conv_kwargs,
-                                      normalization_switch, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs,
-                                      self.nonlin, self.nonlin_kwargs, basic_block=basic_block)]
+                        [conv_op(nfeatures_from_skip, input_channels, 3, padding=1),
+                        conv_op(nfeatures_from_skip, input_channels, 3, padding=1)]
                     )
                 ))
 
