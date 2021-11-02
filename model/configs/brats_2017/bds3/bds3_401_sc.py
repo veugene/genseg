@@ -1,4 +1,4 @@
-# Matej's nnunet made residual (NO short skip on residual decoder).
+# Matej's nnunet made residual (with short skip on residual decoder).
 
 from collections import OrderedDict
 import torch
@@ -164,7 +164,6 @@ def build_model(lambda_disc=3,
     decoder_common_kwargs["num_classes"] = None
 
     decoder_residual_kwargs = get_dataset_properties("")
-    decoder_residual_kwargs['basic_residual_block'] = decoder_residual_kwargs['basic_block']
 
     submodel = {
         'encoder'           : encoder_instance,
