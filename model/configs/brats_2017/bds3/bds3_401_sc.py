@@ -40,7 +40,7 @@ class ResidualConvDropoutNormNonlin(nn.Module):
                  dropout_op=nn.Dropout2d, dropout_op_kwargs=None,
                  nonlin=nn.LeakyReLU, nonlin_kwargs=None,
                  subsample=False, upsample=False,
-                 upsample_mode='repeat', init='kaiming_normal_'):
+                 upsample_mode='conv', init='kaiming_normal_'):
         super().__init__()
         self.block = ConvDropoutNormNonlin(
             input_channels=input_channels,
@@ -440,7 +440,7 @@ class decoder(nn.Module):
         self.tu = []
         self.seg_outputs = []
 
-        upsample_mode = 'bilinear'
+        upsample_mode = 'nearest'
         transpconv = nn.ConvTranspose2d
         if pool_op_kernel_sizes is None:
             pool_op_kernel_sizes = [(2, 2)] * num_pool
