@@ -287,6 +287,10 @@ def run(args):
         elif isinstance(experiment_state.model['G'], model_bd):
             metrics[key]['rec']  = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_rec'])
+            metrics[key]['rc']  = batchwise_loss_accumulator(
+                            output_transform=lambda x: x['l_rec_c'])
+            metrics[key]['c'] = batchwise_loss_accumulator(
+                            output_transform=lambda x: x['l_debug_c'])
             metrics[key]['G']    = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_G'])
             metrics[key]['DA']   = batchwise_loss_accumulator(
