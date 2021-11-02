@@ -202,6 +202,7 @@ def _dispatch_canada(args):
     path_genseg_repository = os.getenv('PATH_GENSEG_REPOSITORY')
     if path_genseg_repository is None:
         path_genseg_repository = "/home/veugene/home_projects/ssl-seg-eugene"
+    print(f"Using code in {path_genseg_repository}")
     path_python_daemon_wheel = os.getenv('PATH_PYTHON_DAEMON_WHEEL')
     if path_python_daemon_wheel is None:
         path_python_daemon_wheel = ("~/env/genseg/wheels/"
