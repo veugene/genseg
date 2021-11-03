@@ -5,7 +5,6 @@ from torch.nn.utils import (spectral_norm,
 from torch.nn import functional as F
 import numpy as np
 from fcn_maker.blocks import (adjust_to_size,
-                              convolution,
                               do_upsample,
                               get_nonlinearity,
                               get_initializer,

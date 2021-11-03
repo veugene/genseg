@@ -1,8 +1,10 @@
 # Matej's nnunet made residual (NO short skip on residual decoder).
 
 from collections import OrderedDict
+from copy import deepcopy
 import torch
-from nnunet.network_architecture.generic_UNet import StackedConvLayers, ConvDropoutNormNonlin, Upsample
+from nnunet.network_architecture.generic_UNet import ConvDropoutNormNonlin as ConvDropoutNormNonlin_orig
+from nnunet.network_architecture.generic_UNet import Upsample
 from nnunet.network_architecture.initialization import InitWeights_He
 from nnunet.utilities.nd_softmax import softmax_helper
 from torch import nn
@@ -31,6 +33,24 @@ from model.common.network.basic import (adjust_to_size,
                                         repeat_block)
 from model.common.losses import dist_ratio_mse_abs
 from model.bd_segmentation import segmentation_model
+
+
+class ConvDropoutNormNonlin(nn.Module):
+    # HACK: Allow subsample, upsample, and upsample_mode args -- and ignore them!
+    def __init__(self, input_channels, output_channels,
+                 conv_op=nn.Conv2d, conv_kwargs=None,
+                 norm_op=nn.BatchNorm2d, norm_op_kwargs=None,
+                 dropout_op=nn.Dropout2d, dropout_op_kwargs=None,
+                 nonlin=nn.LeakyReLU, nonlin_kwargs=None,
+                 subsample=False, upsample=False, upsample_mode='repeat'):
+        super().__init__()
+        self.block = ConvDropoutNormNonlin_orig(
+            input_channels, output_channels, conv_op, conv_kwargs,
+            norm_op, norm_op_kwargs, dropout_op, dropout_op_kwargs,
+            nonlin, nonlin_kwargs)
+    
+    def forward(self, x):
+        return self.block(x)
 
 
 class ResidualConvDropoutNormNonlin(nn.Module):
@@ -65,6 +85,76 @@ class ResidualConvDropoutNormNonlin(nn.Module):
     
     def forward(self, x):
         return self.shortcut(x, self.block(x))
+
+
+class StackedConvLayers(nn.Module):
+    # HACK: handle subsample and upsample in shortcut.
+    def __init__(self, input_feature_channels, output_feature_channels, num_convs,
+                 conv_op=nn.Conv2d, conv_kwargs=None,
+                 norm_op=nn.BatchNorm2d, norm_op_kwargs=None,
+                 dropout_op=nn.Dropout2d, dropout_op_kwargs=None,
+                 nonlin=nn.LeakyReLU, nonlin_kwargs=None, first_stride=None, basic_block=ConvDropoutNormNonlin,
+                 subsample=False, upsample=False):
+        '''
+        stacks ConvDropoutNormLReLU layers. initial_stride will only be applied to first layer in the stack. The other parameters affect all layers
+        :param input_feature_channels:
+        :param output_feature_channels:
+        :param num_convs:
+        :param dilation:
+        :param kernel_size:
+        :param padding:
+        :param dropout:
+        :param initial_stride:
+        :param conv_op:
+        :param norm_op:
+        :param dropout_op:
+        :param inplace:
+        :param neg_slope:
+        :param norm_affine:
+        :param conv_bias:
+        '''
+        self.input_channels = input_feature_channels
+        self.output_channels = output_feature_channels
+
+        if nonlin_kwargs is None:
+            nonlin_kwargs = {'negative_slope': 1e-2, 'inplace': True}
+        if dropout_op_kwargs is None:
+            dropout_op_kwargs = {'p': 0.5, 'inplace': True}
+        if norm_op_kwargs is None:
+            norm_op_kwargs = {'eps': 1e-5, 'affine': True, 'momentum': 0.1}
+        if conv_kwargs is None:
+            conv_kwargs = {'kernel_size': 3, 'stride': 1, 'padding': 1, 'dilation': 1, 'bias': True}
+
+        self.nonlin_kwargs = nonlin_kwargs
+        self.nonlin = nonlin
+        self.dropout_op = dropout_op
+        self.dropout_op_kwargs = dropout_op_kwargs
+        self.norm_op_kwargs = norm_op_kwargs
+        self.conv_kwargs = conv_kwargs
+        self.conv_op = conv_op
+        self.norm_op = norm_op
+
+        if first_stride is not None:
+            self.conv_kwargs_first_conv = deepcopy(conv_kwargs)
+            self.conv_kwargs_first_conv['stride'] = first_stride
+        else:
+            self.conv_kwargs_first_conv = conv_kwargs
+
+        super(StackedConvLayers, self).__init__()
+        self.blocks = nn.Sequential(
+            *([basic_block(input_feature_channels, output_feature_channels, self.conv_op,
+                           self.conv_kwargs_first_conv,
+                           self.norm_op, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs,
+                           self.nonlin, self.nonlin_kwargs,
+                           subsample=subsample)] +
+              [basic_block(output_feature_channels, output_feature_channels, self.conv_op,
+                           self.conv_kwargs,
+                           self.norm_op, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs,
+                           self.nonlin, self.nonlin_kwargs,
+                           upsample=upsample, upsample_mode='repeat') for _ in range(num_convs - 1)]))
+
+    def forward(self, x):
+        return self.blocks(x)
 
 
 class Conv(nn.Module):
@@ -184,8 +274,9 @@ def build_model(lambda_disc=3,
             continue
         recursive_spectral_norm(m)
 
-    #remove_spectral_norm(submodel['decoder_residual'].conv_blocks_localization[-1][-1])
-    #remove_spectral_norm(submodel['decoder_residual'].seg_outputs[-1])
+    remove_spectral_norm(submodel['decoder_residual'].conv_blocks_localization[-1][1][0])
+    remove_spectral_norm(submodel['decoder_residual'].conv_blocks_localization[-1][1][1])
+    remove_spectral_norm(submodel['decoder_residual'].seg_outputs[-1])
     
     model = segmentation_model(**submodel,
                                shape_sample=z_shape,
@@ -200,8 +291,8 @@ def build_model(lambda_disc=3,
                                lambda_cyc=lambda_cyc*lambda_scale,
                                lambda_seg=lambda_seg*lambda_scale)
 
-    #print(model)
-    #print(submodel['decoder_residual'])
+    #print(encoder_instance)
+    print(submodel['decoder_residual'])
     
     return OrderedDict((
         ('G', model),
@@ -299,7 +390,8 @@ class encoder(nn.Module):
                                                               self.conv_op, self.conv_kwargs, self.norm_op,
                                                               self.norm_op_kwargs, self.dropout_op,
                                                               self.dropout_op_kwargs, self.nonlin, self.nonlin_kwargs,
-                                                              first_stride, basic_block=block_type))
+                                                              first_stride, basic_block=block_type,
+                                                              subsample=True))
             if not self.convolutional_pooling:
                 self.td.append(pool_op(pool_op_kernel_sizes[d]))
             input_features = output_features
@@ -491,7 +583,8 @@ class decoder(nn.Module):
                 self.conv_blocks_localization.append(nn.Sequential(
                     StackedConvLayers(n_features_after_tu_and_concat, nfeatures_from_skip, num_conv_per_stage - 1,
                                       self.conv_op, self.conv_kwargs, normalization_switch, self.norm_op_kwargs, self.dropout_op,
-                                      self.dropout_op_kwargs, self.nonlin, self.nonlin_kwargs, basic_block=basic_residual_block),
+                                      self.dropout_op_kwargs, self.nonlin, self.nonlin_kwargs, basic_block=basic_residual_block,
+                                      upsample=True),
                     StackedConvLayers(nfeatures_from_skip, final_num_features, 1, self.conv_op, self.conv_kwargs,
                                       normalization_switch, self.norm_op_kwargs, self.dropout_op, self.dropout_op_kwargs,
                                       self.nonlin, self.nonlin_kwargs, basic_block=basic_residual_block)
@@ -501,7 +594,8 @@ class decoder(nn.Module):
                     StackedConvLayers(n_features_after_tu_and_concat, nfeatures_from_skip, num_conv_per_stage - 1,
                                       self.conv_op, self.conv_kwargs, normalization_switch, self.norm_op_kwargs,
                                       self.dropout_op,
-                                      self.dropout_op_kwargs, self.nonlin, self.nonlin_kwargs, basic_block=basic_block),
+                                      self.dropout_op_kwargs, self.nonlin, self.nonlin_kwargs, basic_block=basic_block,
+                                      upsample=True),
                     nn.ModuleList(
                         [conv_op(nfeatures_from_skip, input_channels, 3, padding=1),
                         conv_op(nfeatures_from_skip, input_channels, 3, padding=1)]
