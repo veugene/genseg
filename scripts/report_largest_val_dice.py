@@ -15,6 +15,9 @@ def get_args():
                              'best epoch into this directory.')
     parser.add_argument('--check_job_status', action='store_true',
                         help='If set, will print the status of every job.')
+    parser.add_argument('--training', action='store_true',
+                        help='If set, track training Dice instead of '
+                             'validation.')
     args= parser.parse_args()
     return args
 
@@ -24,7 +27,7 @@ def get_best_score(f):
     best_score = 0
     best_l_num = 0
     l_num = 0
-    regex = re.compile('(?<=val_dice\=)-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?')
+    regex = re.compile('(?<=dice\=)-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?')
     for l in lines:
         result = regex.search(l)
         if result:
@@ -98,8 +101,11 @@ if __name__=='__main__':
             status_str = f'{status[0]} : '
         
         # Get greatest validation score.
+        logname = 'val_log.txt'
+        if args.training:
+            logname = 'log.txt'
         try:
-            f = open(os.path.join(path, 'val_log.txt'), 'r')
+            f = open(os.path.join(path, logname), 'r')
             best_score, line_number = get_best_score(f)
             print(f'{status_str}{path} : line {line_number} : {best_score}')
         except:
