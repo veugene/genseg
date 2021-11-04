@@ -247,9 +247,7 @@ def _dispatch_canada(args):
         print("Call to `sbatch` timed out after {}s : {}"
               "".format(SBATCH_TIMEOUT, e))
         proc.terminate()
-    except Exception as e:
-        print(e)
-        proc.terminate()
+        exit()
     
     # Flush and close the lock file.
     lock.close()
