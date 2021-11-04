@@ -36,7 +36,7 @@ def get_best_score(f):
             if score < best_score:
                 best_score = score
                 best_l_num = l_num
-    return best_score, best_l_num
+    return best_score, best_l_num, len(lines)
 
 
 def copy_images(copy_from, copy_to, epoch):
@@ -98,7 +98,6 @@ if __name__=='__main__':
             if match:
                 job_id = match.group(0)
                 status = get_status_canada(job_id)
-            status_str = f'{status[0]} : '
         
         # Get greatest validation score.
         logname = 'val_log.txt'
@@ -106,9 +105,11 @@ if __name__=='__main__':
             logname = 'log.txt'
         try:
             f = open(os.path.join(path, logname), 'r')
-            best_score, line_number = get_best_score(f)
+            best_score, line_number, total_lines = get_best_score(f)
+            status_str = f'{status[0]} [{total_lines}] : '
             print(f'{status_str}{path} : line {line_number} : {best_score}')
         except:
+            status_str = f'{status[0]} [0] : '
             print(f'{status_str}{path} : None')
         
         # Copy images corresponding to the best epoch according to validation.
