@@ -64,7 +64,7 @@ def build_model(lambda_disc=3,
         'num_conv_blocks'     : 6,
         'block_type'          : conv_block,
         'num_channels_list'   : [32, 64, 128, 256, 480, 480],
-        'skip'                : False,
+        'skip'                : True,
         'dropout'             : 0.,
         'normalization'       : instance_normalization,
         'norm_kwargs'         : None,
@@ -82,16 +82,16 @@ def build_model(lambda_disc=3,
         'num_conv_blocks'     : 6,
         'block_type'          : conv_block,
         'num_channels_list'   : [480, 480, 256, 128, 64, 32],
-        'skip'                : False,
+        'skip'                : True,
         'dropout'             : 0.,
         'normalization'       : instance_normalization,
         'norm_kwargs'         : None,
         'padding_mode'        : 'reflect',
         'kernel_size'         : 3,
         'init'                : 'kaiming_normal_',
-        'upsample_mode'       : 'conv',
+        'upsample_mode'       : 'repeat',
         'nonlinearity'        : lambda : nn.ReLU(inplace=True),
-        'long_skip_merge_mode': 'cat',
+        'long_skip_merge_mode': 'skinny_cat',
         'ndim'                : 2}
     
     decoder_residual_kwargs = {
@@ -99,18 +99,18 @@ def build_model(lambda_disc=3,
         'out_channels'        : image_size[0],
         'num_conv_blocks'     : 6,
         'block_type'          : conv_block,
-        'num_channels_list'   : [352, 480, 256, 128, 64, 32],
+        'num_channels_list'   : [480, 480, 256, 128, 64, 32],
         'num_classes'         : 1,
         'skip'                : False,
         'dropout'             : 0.,
         'normalization'       : instance_normalization,
         'norm_kwargs'         : None,
         'padding_mode'        : 'reflect',
-        'kernel_size'         : 3,
+        'kernel_size'         : 5,
         'init'                : 'kaiming_normal_',
-        'upsample_mode'       : 'conv',
+        'upsample_mode'       : 'repeat',
         'nonlinearity'        : lambda : nn.ReLU(inplace=True),
-        'long_skip_merge_mode': 'cat',
+        'long_skip_merge_mode': 'skinny_cat',
         'ndim'                : 2}
     
     discriminator_kwargs = {
@@ -541,17 +541,35 @@ class conv_block(block_abstract):
 
 
 class do_upsample(torch.nn.Module):
-    def __init__(self, mode, ndim, init=None, stride=2, **conv_kwargs):
+    def __init__(self, mode, ndim, in_channels, out_channels,
+                 init=None, stride=2, **conv_kwargs):
         super(do_upsample, self).__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.op_list = nn.ModuleList()
         if mode=='repeat':
-            self.op = torch.nn.Upsample(scale_factor=2)
+            self.op_list.append(torch.nn.Upsample(scale_factor=2))
+            if in_channels != out_channels:
+                self.op_list.append(
+                    convolution(
+                        in_channels=in_channels,
+                        out_channels=out_channels,
+                        kernel_size=1,
+                        ndim=ndim,
+                        init=init
+                    )
+                )
         elif mode=='conv':
-            self.op = convolution_transpose(ndim=ndim,
-                                            stride=stride,
-                                            init=init,
-                                            **conv_kwargs)
-            self.in_channels = self.op.in_channels
-            self.out_channels = self.op.out_channels
+            self.op_list.append(
+                convolution_transpose(
+                    in_channels=in_channels,
+                    out_channels=out_channels,
+                    ndim=ndim,
+                    stride=stride,
+                    init=init,
+                    **conv_kwargs
+                )
+            )
         else:
             raise ValueError("Unrecognized upsample_mode: {}"
                              "".format(upsample_mode))
@@ -560,7 +578,10 @@ class do_upsample(torch.nn.Module):
         self.init = init
 
     def forward(self, input):
-        return self.op(input)
+        out = input
+        for op in self.op_list:
+            out = op(out)
+        return out
 
 
 class conv_norm_nlin(torch.nn.Module):
