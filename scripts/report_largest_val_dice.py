@@ -106,10 +106,12 @@ if __name__=='__main__':
         try:
             f = open(os.path.join(path, logname), 'r')
             best_score, line_number, total_lines = get_best_score(f)
-            status_str = f'{status[0]} [{total_lines}] : '
+            if args.check_job_status:
+                status_str = f'{status[0]} [{total_lines}] : '
             print(f'{status_str}{path} : line {line_number} : {best_score}')
         except:
-            status_str = f'{status[0]} [0] : '
+            if args.check_job_status:
+                status_str = f'{status[0]} [0] : '
             print(f'{status_str}{path} : None')
         
         # Copy images corresponding to the best epoch according to validation.
