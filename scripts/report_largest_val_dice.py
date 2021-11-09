@@ -16,8 +16,8 @@ def get_args():
     parser.add_argument('--check_job_status', action='store_true',
                         help='If set, will print the status of every job.')
     parser.add_argument('--training', action='store_true',
-                        help='If set, track training Dice instead of '
-                             'validation.')
+                        help='If set, also report the training Dice in the '
+                             'same epoch.')
     args= parser.parse_args()
     return args
 
@@ -37,6 +37,16 @@ def get_best_score(f):
                 best_score = score
                 best_l_num = l_num
     return best_score, best_l_num, len(lines)
+
+
+def parse_train_dice(f, line_number):
+    line = f.readlines()[line_number]
+    regex = re.compile('(?<=dice\=)-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?')
+    result = regex.search(line)
+    if result:
+        score = float(line[result.start():result.end()])
+        return score
+    return None
 
 
 def copy_images(copy_from, copy_to, epoch):
@@ -100,19 +110,28 @@ if __name__=='__main__':
                 status = get_status_canada(job_id)
         
         # Get greatest validation score.
-        logname = 'val_log.txt'
-        if args.training:
-            logname = 'log.txt'
         try:
-            f = open(os.path.join(path, logname), 'r')
+            f = open(os.path.join(path, 'val_log.txt'), 'r')
             best_score, line_number, total_lines = get_best_score(f)
             if args.check_job_status:
                 status_str = f'{status[0]} [{total_lines}] : '
-            print(f'{status_str}{path} : line {line_number} : {best_score}')
+            score_str = f'line {line_number} : {best_score}'
         except:
             if args.check_job_status:
                 status_str = f'{status[0]} [0] : '
-            print(f'{status_str}{path} : None')
+            score_str = 'None'
+        
+        # Get associated training score.
+        if args.training:
+            try:
+                f = open(os.path.join(path, 'log.txt'), 'r')
+                train_score = parse_train_dice(f, line_number)
+                score_str = f'{score_str} {train_score}'
+            except:
+                score_str = f'{score_str} None'
+        
+        # Print.
+        print(f'{status_str}{path} : {score_str}')
         
         # Copy images corresponding to the best epoch according to validation.
         if args.copy_images is not None:
