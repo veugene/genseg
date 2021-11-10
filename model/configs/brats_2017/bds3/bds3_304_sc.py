@@ -1,7 +1,7 @@
 # nnunet-like model inmplemented as bds3_106, using no new code imports.
 # Fixes wrong nlin and instance_norm settings of bds3_302_sc.py.
 #
-# NOTE: instance_norm uses 'affine' as True
+# NOTE: instance_norm uses 'affine' as default (False)
 #
 # NOTE: no short skip (like nnunet).
 #
@@ -74,7 +74,7 @@ def build_model(lambda_disc=3,
         'skip'                : residual,
         'dropout'             : 0.,
         'normalization'       : instance_normalization,
-        'norm_kwargs'         : {'affine': True},
+        'norm_kwargs'         : None,
         'padding_mode'        : 'reflect',
         'kernel_size'         : 3,
         'init'                : 'kaiming_normal_',
@@ -92,7 +92,7 @@ def build_model(lambda_disc=3,
         'skip'                : residual,
         'dropout'             : 0.,
         'normalization'       : instance_normalization,
-        'norm_kwargs'         : {'affine': True},
+        'norm_kwargs'         : None,
         'padding_mode'        : 'reflect',
         'kernel_size'         : 3,
         'init'                : 'kaiming_normal_',
@@ -111,7 +111,7 @@ def build_model(lambda_disc=3,
         'skip'                : False,
         'dropout'             : 0.,
         'normalization'       : instance_normalization,
-        'norm_kwargs'         : {'affine': True},
+        'norm_kwargs'         : None,
         'padding_mode'        : 'reflect',
         'kernel_size'         : residual_decoder_kernel,
         'init'                : 'kaiming_normal_',
