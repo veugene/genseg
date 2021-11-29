@@ -21,13 +21,24 @@ def parse():
         "Evaluate a BDS3 model on test set volumes. Each volumes is loaded "
         "from the image file. The model is applied to every full slice, not "
         "to every half-slice/hemisphere. Every stack of slices forming a "
-        "volume is one batch. No cropping to the brain is done.")
+        "volume is one batch. No cropping to the brain is done."
+        "\n"
+        "Given multiple models, computes an ensemble result. For each model, "
+        "additionally computes an ensemble over the 4 possible flips.")
     parser.add_argument('experiment_path', type=str)
     parser.add_argument('data_dir', type=str)
     parser.add_argument('save_results_to', type=str)
     parser.add_argument('--model_kwargs', type=str, default=None)
     parser.add_argument('--batch_size', type=int, default=80)
     return parser.parse_args()
+
+
+AUGMENTATIONS = [
+    lambda x: x,
+    lambda x: np.flip(x, axis=2),
+    lambda x: np.flip(x, axis=3),
+    lambda x: np.flip(np.flip(x, axis=3), axis=2)
+]
 
 
 def preprocess(volume):
@@ -125,21 +136,26 @@ if __name__=='__main__':
     print("Running model inference on test data.")
     if not os.path.exists(args.save_results_to):
         os.makedirs(args.save_results_to)
-    segmentation = None
     for i, (vol, dn) in enumerate(data_loader(args.data_dir)):
         vol = preprocess(vol)
-        for idx in range(0, len(vol), args.batch_size):
-            A = torch.from_numpy(vol[idx:idx+args.batch_size]).float().cuda()
-            B = torch.zeros(A.shape, dtype=torch.float, device=A.device)
-            M = [np.zeros((1,)+A.shape[2:], dtype=np.int64)
-                 for _ in range(len(A))]
-            outputs = model(A, B, M)
-            if segmentation is None:
-                seg_shape = (vol.shape[0], 1, vol.shape[2], vol.shape[3])
-                segmentation = np.zeros(seg_shape, dtype=np.uint8)
-            x_AM = outputs['x_AM'].detach().cpu().numpy()
-            x_AM_bin = x_AM > 0.5
-            segmentation[idx:idx+args.batch_size] = x_AM_bin
+        segmentation = None
+        for augment in AUGMENTATIONS:
+            vol_input = augment(vol)
+            for idx in range(0, len(vol), args.batch_size):
+                A_np = vol_input[idx:idx+args.batch_size].copy()
+                A = torch.from_numpy(A_np).float().cuda()
+                B = torch.zeros(A.shape, dtype=torch.float, device=A.device)
+                M = [np.zeros((1,)+A.shape[2:], dtype=np.int64)
+                    for _ in range(len(A))]
+                outputs = model(A, B, M)
+                if segmentation is None:
+                    seg_shape = (vol.shape[0], 1, vol.shape[2], vol.shape[3])
+                    segmentation = np.zeros(seg_shape, dtype=float)
+                x_AM = augment(outputs['x_AM'].detach().cpu().numpy())
+                x_AM_bin = x_AM > 0.5
+                segmentation[idx:idx+args.batch_size] += x_AM_bin
+        segmentation = segmentation / len(AUGMENTATIONS)
+        segmentation = segmentation.astype(np.uint8)
         sitk_seg = sitk.GetImageFromArray(segmentation[:,0])
         sitk.WriteImage(sitk_seg, os.path.join(args.save_results_to,
                                                f'{dn}.nii.gz'))
