@@ -53,7 +53,7 @@ def preprocess(volume):
 
 
 def data_loader(data_dir):
-    tags = ['flair', 't1ce', 't1', 't2']
+    tags = ['flair', 't1ce', 't1', 't2', 'seg']
     for dn in sorted(os.listdir(data_dir)):
         path = os.path.join(data_dir, dn)
         if not os.path.isdir(path):
@@ -64,10 +64,13 @@ def data_loader(data_dir):
         fn_dict = OrderedDict()
         for fn in sorted(os.listdir(path)):
             match = [t for t in tags if t in fn]
+            if len(match) == 0:
+                continue
             fn_dict[match[0]] = fn
             
         # Load files.
         vol_all = []
+        segmentation = None
         size = None
         for t in tags:
             vol = sitk.ReadImage(os.path.join(path, fn_dict[t]))
@@ -79,13 +82,17 @@ def data_loader(data_dir):
                 raise Exception("Expected {} to have a size of {} but got {}."
                                 "".format(fn_dict[t], size, vol_np.shape))
             
-            vol_np = vol_np.astype(np.float32)
-            vol_all.append(np.expand_dims(vol_np, 0))
+            if t=='seg':
+                segmentation = vol_np.astype(np.int64)
+                segmentation = np.expand_dims(segmentation, 1)
+            else:
+                vol_np = vol_np.astype(np.float32)
+                vol_all.append(np.expand_dims(vol_np, 1))
         
         # Concatenate on channel axis.
-        volume = np.concatenate(vol_all, axis=0).transpose([1,0,2,3])
+        volume = np.concatenate(vol_all, axis=1)
             
-        yield volume, dn
+        yield volume, segmentation, dn
 
 
 def load_model(experiment_path, model_kwargs):
@@ -142,11 +149,13 @@ if __name__=='__main__':
         models.append(m)
     
     print("Running model inference on test data.")
+    TP = FP = FN = 0
+    dice = None
     if not os.path.exists(args.save_results_to):
         os.makedirs(args.save_results_to)
-    for i, (vol, dn) in enumerate(data_loader(args.data_dir)):
+    for i, (vol, seg, dn) in enumerate(data_loader(args.data_dir)):
         vol = preprocess(vol)
-        segmentation = None
+        prediction = None
         for augment in AUGMENTATIONS:
             vol_input = augment(vol)
             for idx in range(0, len(vol), args.batch_size):
@@ -158,16 +167,28 @@ if __name__=='__main__':
                 for m in models:
                     with torch.no_grad():
                         outputs = m(A, B, M)
-                    if segmentation is None:
-                        seg_shape = (vol.shape[0], 1,
+                    if prediction is None:
+                        pred_shape = (vol.shape[0], 1,
                                      vol.shape[2], vol.shape[3])
-                        segmentation = np.zeros(seg_shape, dtype=float)
+                        prediction = np.zeros(pred_shape, dtype=float)
                     x_AM = augment(outputs['x_AM'].detach().cpu().numpy())
                     x_AM_bin = x_AM > 0.5
-                    segmentation[idx:idx+args.batch_size] += x_AM_bin
-        segmentation /= len(AUGMENTATIONS)*len(models)
-        segmentation = segmentation.astype(np.uint8)
-        sitk_seg = sitk.GetImageFromArray(segmentation[:,0])
-        sitk.WriteImage(sitk_seg, os.path.join(args.save_results_to,
-                                               f'{dn}.nii.gz'))
-        print(f'Processed {i+1}: {dn}')
+                    prediction[idx:idx+args.batch_size] += x_AM_bin
+        prediction /= len(AUGMENTATIONS)*len(models)
+        prediction = prediction.astype(np.uint8)
+        sitk_pred = sitk.GetImageFromArray(prediction[:,0])
+        sitk.WriteImage(sitk_pred, os.path.join(args.save_results_to,
+                                                f'{dn}.nii.gz'))
+        
+        # Compute values for Dice if there is a reference segmentation.
+        if seg is not None:
+            TP += np.count_nonzero(prediction[seg>0])
+            FP += np.count_nonzero(prediction[seg==0])
+            FN += np.count_nonzero(seg[prediction==0])
+            dice = 2*TP/(2*TP+FP+FN)
+        if dice is not None:
+            print(f'Processed {i+1}: {dn} -- accumulated Dice so far is {dice}')
+        else:
+            print(f'Processed {i+1}: {dn}')
+    if dice is not None:
+        print(f'Dice score is {2*TP/(2*TP+FP+FN)}.')
