@@ -25,9 +25,9 @@ def parse():
         "\n"
         "Given multiple models, computes an ensemble result. For each model, "
         "additionally computes an ensemble over the 4 possible flips.")
-    parser.add_argument('experiment_path', type=str)
     parser.add_argument('data_dir', type=str)
     parser.add_argument('save_results_to', type=str)
+    parser.add_argument('--experiment_path', type=str, nargs='+')
     parser.add_argument('--model_kwargs', type=str, default=None)
     parser.add_argument('--batch_size', type=int, default=80)
     return parser.parse_args()
@@ -88,30 +88,20 @@ def data_loader(data_dir):
         yield volume, dn
 
 
-class unidirectional_model(segmentation_model):
-    def __init__(self, *args, **kwargs):
-        print(args)
-        print(kwargs.keys())
-        super().__init__(*args, **kwargs)
-        self.debug_unidirectional = True
-
-
-if __name__=='__main__':
-    args = parse()
-    
+def load_model(experiment_path, model_kwargs):
     # Load args.
     print("Loading experiment arguments.")
-    args_path = os.path.join(args.experiment_path, 'args.txt')
+    args_path = os.path.join(experiment_path, 'args.txt')
     if not os.path.exists(args_path):
         raise ValueError(
-            f'No `args.txt` found in experiment path: {args.experiment_path}'
+            f'No `args.txt` found in experiment path: {experiment_path}'
         )
     model_parser = get_model_parser()
     with open(args_path, 'r') as f:
         saved_args = f.read().split('\n')[1:]
-        saved_args[saved_args.index('--path')+1] = args.experiment_path
-        if args.model_kwargs is not None:
-            saved_args[saved_args.index('--model_kwargs')+1] = args.model_kwargs
+        saved_args[saved_args.index('--path')+1] = experiment_path
+        if model_kwargs is not None:
+            saved_args[saved_args.index('--model_kwargs')+1] = model_kwargs
         model_args = model_parser.parse_args(args=saved_args)
     
     print("Loading checkpoint at best epoch by validation score.")
@@ -133,6 +123,24 @@ if __name__=='__main__':
     model._loss_D.net['mi'] = None
     model._loss_G.net['mi'] = None
     
+    return model
+
+
+class unidirectional_model(segmentation_model):
+    def __init__(self, *args, **kwargs):
+        print(args)
+        print(kwargs.keys())
+        super().__init__(*args, **kwargs)
+        self.debug_unidirectional = True
+
+
+if __name__=='__main__':
+    args = parse()
+    models = []
+    for path in args.experiment_path:
+        m = load_model(path, args.model_kwargs)
+        models.append(m)
+    
     print("Running model inference on test data.")
     if not os.path.exists(args.save_results_to):
         os.makedirs(args.save_results_to)
@@ -147,14 +155,17 @@ if __name__=='__main__':
                 B = torch.zeros(A.shape, dtype=torch.float, device=A.device)
                 M = [np.zeros((1,)+A.shape[2:], dtype=np.int64)
                     for _ in range(len(A))]
-                outputs = model(A, B, M)
-                if segmentation is None:
-                    seg_shape = (vol.shape[0], 1, vol.shape[2], vol.shape[3])
-                    segmentation = np.zeros(seg_shape, dtype=float)
-                x_AM = augment(outputs['x_AM'].detach().cpu().numpy())
-                x_AM_bin = x_AM > 0.5
-                segmentation[idx:idx+args.batch_size] += x_AM_bin
-        segmentation = segmentation / len(AUGMENTATIONS)
+                for m in models:
+                    with torch.no_grad():
+                        outputs = m(A, B, M)
+                    if segmentation is None:
+                        seg_shape = (vol.shape[0], 1,
+                                     vol.shape[2], vol.shape[3])
+                        segmentation = np.zeros(seg_shape, dtype=float)
+                    x_AM = augment(outputs['x_AM'].detach().cpu().numpy())
+                    x_AM_bin = x_AM > 0.5
+                    segmentation[idx:idx+args.batch_size] += x_AM_bin
+        segmentation /= len(AUGMENTATIONS)*len(models)
         segmentation = segmentation.astype(np.uint8)
         sitk_seg = sitk.GetImageFromArray(segmentation[:,0])
         sitk.WriteImage(sitk_seg, os.path.join(args.save_results_to,
