@@ -217,6 +217,7 @@ class segmentation_model(nn.Module):
         
         # Evaluate discriminator loss and update.
         loss_disc = defaultdict(int)
+        loss_mi_est = defaultdict(int)
         loss_D = gradnorm_D = 0
         if self.lambda_disc:
             if intermediates['x_BA_list'] is None:
@@ -363,7 +364,7 @@ class segmentation_model(nn.Module):
         outputs['l_gradnorm_G'] = gradnorm_G
         outputs['l_mi_est_A'] = loss_mi_est['A']
         outputs['l_mi_est_BA'] = loss_mi_est['BA']
-        outputs['l_debug_c'] = (hidden['c_A'].mean()+hidden['c_BA'].mean())/2
+        #outputs['l_debug_c'] = (hidden['c_A'].mean()+hidden['c_BA'].mean())/2
         
         return outputs
 
@@ -461,8 +462,14 @@ class _forward(nn.Module):
         # B->(B, dA)->A
         x_BA = x_BA_residual = x_BB = z_BA = u_BA = c_B = None
         x_BA_list = x_BB_list = None
-        if (not self.debug_unidirectional
-            or self.lambda_disc or self.lambda_x_id or self.lambda_z_id):
+        if (not self.debug_unidirectional and
+            (
+                self.lambda_disc or
+                self.lambda_x_id or
+                self.lambda_z_id or
+                self.lambda_cyc
+            )
+        ):
             info_BA = {'skip_info': skip_B}
             if class_A is not None:
                 info_BA['class_info'] = class_B
@@ -594,10 +601,11 @@ class _loss_D(nn.Module):
     def forward(self, x_A, x_B, out_BA, out_AB, c_A, u_A, c_BA, u_BA,
                 class_A=None, class_B=None):
         # Detach all tensors; updating discriminator, not generator.
-        if isinstance(out_BA, list):
-            out_BA = [x.detach() for x in out_BA]
-        else:
-            out_BA = out_BA.detach()
+        if not self.debug_unidirectional:
+            if isinstance(out_BA, list):
+                out_BA = [x.detach() for x in out_BA]
+            else:
+                out_BA = out_BA.detach()
         if isinstance(out_AB, list):
             out_AB = [x.detach() for x in out_AB]
         else:
@@ -612,8 +620,9 @@ class _loss_D(nn.Module):
         # If outputs are lists, get the last item (image).
         x_BA = out_BA
         x_AB = out_AB
-        if not isinstance(x_BA, torch.Tensor):
-            x_BA = out_BA[-1]
+        if not self.debug_unidirectional:
+            if not isinstance(x_BA, torch.Tensor):
+                x_BA = out_BA[-1]
         if not isinstance(x_AB, torch.Tensor):
             x_AB = out_AB[-1]
         
@@ -621,12 +630,14 @@ class _loss_D(nn.Module):
         kwargs_real = None if class_A is None else {'class_info': class_A}
         kwargs_fake = None if class_B is None else {'class_info': class_B}
         loss_disc = OrderedDict()
-        loss_disc_A = self._gan.D(self.net['disc_A'],
-                                  fake=out_BA,
-                                  real=x_A,
-                                  kwargs_real=kwargs_real,
-                                  kwargs_fake=kwargs_fake,
-                                  scaler=self.scaler)
+        loss_disc_A = 0
+        if not self.debug_unidirectional:
+            loss_disc_A = self._gan.D(self.net['disc_A'],
+                                      fake=out_BA,
+                                      real=x_A,
+                                      kwargs_real=kwargs_real,
+                                      kwargs_fake=kwargs_fake,
+                                      scaler=self.scaler)
         loss_disc['A'] = loss_disc_A
         kwargs_real = None if class_A is None else {'class_info': class_B}
         kwargs_fake = None if class_B is None else {'class_info': class_A}
