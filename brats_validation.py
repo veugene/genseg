@@ -12,7 +12,7 @@ import torch
 
 from brats_segmentation import get_parser as get_model_parser
 import model.bd_segmentation
-from model.bd_segmentation import segmentation_model
+from model.bd_segmentation import segmentation_model as genseg_model
 from utils.experiment import experiment
 
 
@@ -73,6 +73,9 @@ def data_loader(data_dir):
         segmentation = None
         size = None
         for t in tags:
+            if t not in fn_dict:
+                continue
+            
             vol = sitk.ReadImage(os.path.join(path, fn_dict[t]))
             vol_np = sitk.GetArrayFromImage(vol)
             
@@ -115,30 +118,22 @@ def load_model(experiment_path, model_kwargs):
     experiment_state = experiment(model_args)
     experiment_state.load_best_state()
     model = experiment_state.model['G']
+    if isinstance(model, genseg_model):
+        # Monkeypatch model to be unidirectional:
+        # - Avoid sampling a code of a fixed size (may be incompatible with
+        #   image size.
+        # - Avoid some unnecessary computation for inference.
+        model.debug_unidirectional = True
+        model._forward.debug_unidirectional = True
+        model._loss_D.debug_unidirectional = True
+        model._loss_G.debug_unidirectional = True
     
-    # Monkeypatch model to be unidirectional:
-    # - Avoid sampling a code of a fixed size (may be incompatible with image
-    #   size.
-    # - Avoid some unnecessary computation for inference.
-    model.debug_unidirectional = True
-    model._forward.debug_unidirectional = True
-    model._loss_D.debug_unidirectional = True
-    model._loss_G.debug_unidirectional = True
-    
-    # Monkeypatch MI network out.
-    model.separate_networks['mi_estimator'] = None
-    model._loss_D.net['mi'] = None
-    model._loss_G.net['mi'] = None
+        # Monkeypatch MI network out.
+        model.separate_networks['mi_estimator'] = None
+        model._loss_D.net['mi'] = None
+        model._loss_G.net['mi'] = None
     
     return model
-
-
-class unidirectional_model(segmentation_model):
-    def __init__(self, *args, **kwargs):
-        print(args)
-        print(kwargs.keys())
-        super().__init__(*args, **kwargs)
-        self.debug_unidirectional = True
 
 
 if __name__=='__main__':
