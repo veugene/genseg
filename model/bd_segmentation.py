@@ -364,7 +364,6 @@ class segmentation_model(nn.Module):
         outputs['l_gradnorm_G'] = gradnorm_G
         outputs['l_mi_est_A'] = loss_mi_est['A']
         outputs['l_mi_est_BA'] = loss_mi_est['BA']
-        #outputs['l_debug_c'] = (hidden['c_A'].mean()+hidden['c_BA'].mean())/2
         
         return outputs
 
