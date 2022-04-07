@@ -2,6 +2,8 @@ from __future__ import (print_function,
                         division)
 import argparse
 import json
+
+from utils.data.brats import prepare_data_brats17_no_hemi
 from utils.dispatch import (dispatch,
                             dispatch_argument_parser)
 
@@ -13,7 +15,7 @@ def get_parser():
     parser = dispatch_argument_parser(description="BRATS seg.")
     g_exp = parser.add_argument_group('Experiment')
     g_exp.add_argument('--dataset', type=str, default='brats13s',
-                       choices=['brats13s', 'brats17'])
+                       choices=['brats13s', 'brats17', 'brats17_no_hemi'])
     g_exp.add_argument('--data', type=str, default='./data/brats/2013')
     g_exp.add_argument('--slice_conditional', action='store_true')
     g_exp.add_argument('--path', type=str, default='./experiments')
@@ -144,6 +146,9 @@ def run(args):
     elif args.dataset=='brats13s':
         prepare_data_brats = prepare_data_brats13s
         target_class = [4,5]
+    elif args.dataset=='brats17_no_hemi':
+        prepare_data_brats = prepare_data_brats17_no_hemi
+        target_class = [1,2,4]
     else:
         raise ValueError("`dataset` must only be 'brats17' or 'brats13s'")
     data = prepare_data_brats(path_hgg=os.path.join(args.data, "hgg.h5"),
