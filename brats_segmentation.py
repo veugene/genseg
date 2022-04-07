@@ -3,7 +3,6 @@ from __future__ import (print_function,
 import argparse
 import json
 
-from utils.data.brats import prepare_data_brats17_no_hemi
 from utils.dispatch import (dispatch,
                             dispatch_argument_parser)
 
@@ -94,6 +93,7 @@ def run(args):
 
     from utils.data.brats import (prepare_data_brats13s,
                                   prepare_data_brats17,
+                                  prepare_data_brats17_no_hemi,
                                   preprocessor_brats)
     from utils.data.common import (data_flow_sampler,
                                    permuted_view)

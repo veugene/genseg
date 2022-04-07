@@ -22,6 +22,26 @@ from data_tools.data_augmentation import image_random_transform
 from data_tools.wrap import multi_source_array
 
 
+def prepare_data_brats17_no_hemi(path_hgg, path_lgg, masked_fraction=0, drop_masked=False, rng=None):
+    # Random 20% data split (10% validation, 10% testing).
+    rnd_state = np.random.RandomState(0)
+    hgg_indices = np.arange(0, 210)
+    lgg_indices = np.arange(0, 75)
+    rnd_state.shuffle(hgg_indices)
+    rnd_state.shuffle(lgg_indices)
+    hgg_val = hgg_indices[0:21]
+    lgg_val = lgg_indices[0:7]
+    hgg_test = hgg_indices[21:42]
+    lgg_test = lgg_indices[7:15]
+    validation_indices = {'hgg': hgg_val, 'lgg': lgg_val}
+    testing_indices = {'hgg': hgg_test, 'lgg': lgg_test}
+    return _prepare_data_brats(path_hgg, path_lgg,
+                               masked_fraction=masked_fraction,
+                               validation_indices=validation_indices,
+                               testing_indices=testing_indices,
+                               drop_masked=drop_masked,
+                               rng=rng)
+
 
 def prepare_data_brats17(path_hgg, path_lgg,
                          masked_fraction=0, drop_masked=False,
