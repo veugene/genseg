@@ -42,7 +42,7 @@ def parse():
     parser.add_argument('--no_crop',
                         help="Whether to not crop slices to the minimal "
                              "bounding box containing the brain.",
-                        required=False, action='store_true')
+                        required=False, action='store_false')
     parser.add_argument('--min_tumor_fraction',
                         help="Minimum amount of tumour per slice in [0, 1].",
                         required=False, type=float, default=0.01)
@@ -104,48 +104,7 @@ def data_loader(data_dir, crop=True):
         yield volume, segmentation, dn
         
         
-def get_slices(volume, segmentation, brain_mask, indices,
-               min_tumor_fraction, min_brain_fraction):
-    
-    assert min_tumor_fraction>=0 and min_tumor_fraction<=1
-    assert min_brain_fraction>=0 and min_brain_fraction<=1
-    
-    # Axis transpose order.
-    axis = 1
-    order = [1,0,2,3]
-    volume = volume.transpose(order)
-    segmentation = segmentation.transpose(order)
-    brain_mask = brain_mask.transpose(order)
-    
-    # Select slices. Slices with anomalies are sick, others are healthy.
-    indices_anomaly = []
-    indices_healthy = []
-    for i in range(len(volume)):
-        count_total = np.product(volume[i].shape)
-        count_brain = np.count_nonzero(brain_mask[i])
-        count_tumor = np.count_nonzero(segmentation[i])
-        if count_brain==0:
-            continue
-        tumor_fraction = count_tumor/float(count_brain)
-        brain_fraction = count_brain/float(count_total)
-        if brain_fraction>min_brain_fraction:
-            if tumor_fraction>min_tumor_fraction:
-                indices_anomaly.append(i)
-            if count_tumor==0:
-                indices_healthy.append(i)
-    
-    # Sort slices.
-    slices_dict = OrderedDict()
-    slices_dict['healthy'] = volume[indices_healthy]
-    slices_dict['sick'] = volume[indices_anomaly]
-    slices_dict['segmentation'] = segmentation[indices_anomaly]
-    slices_dict['h_indices'] = indices[indices_healthy]
-    slices_dict['s_indices'] = indices[indices_anomaly]
-    
-    return slices_dict
-
-
-def preprocess(volume, segmentation, skip_bias_correction=False):
+def preprocess(volume, segmentation, skip_bias_correction=True):
     volume_out = volume.copy()
     corrector = sitk.N4BiasFieldCorrectionImageFilter()
     corrector.SetMaximumNumberOfIterations([50,50,50,10])
@@ -192,44 +151,27 @@ def preprocess(volume, segmentation, skip_bias_correction=False):
     return volume_out, segmentation_out, brain_mask, indices
 
 
-def process_case(case_num, h5py_file, volume, segmentation, fn,
-                 min_tumor_fraction, min_brain_fraction,
-                 skip_bias_correction=False, save_debug_to=None):
+def process_case(case_num, h5py_file, volume, segmentation, fn):
     print("Processing case {}: {}".format(case_num, fn))
     group_p = h5py_file.create_group(str(case_num))
     # TODO: set attribute containing fn.
-    vol, seg, m, indices = preprocess(volume, segmentation,
-                                      skip_bias_correction)
-    slices = get_slices(vol, seg, m, indices,
-                        min_tumor_fraction, min_brain_fraction)
-    for key in slices.keys():
-        print('key: {}, len: {}'.format(key, len(slices[key])))
-        if len(slices[key])==0:
-            kwargs = {}
-        else:
-            kwargs = {'chunks': (1,)+slices[key].shape[1:],
-                      'compression': 'lzf'}
-        group_p.create_dataset(key,
-                               shape=slices[key].shape,
-                               data=slices[key],
-                               dtype=slices[key].dtype,
-                               **kwargs)
-    
-    # Debug outputs for inspection.
-    if save_debug_to is not None:
-        for key in slices.keys():
-            if "indices" in key:
-                continue
-            dest = os.path.join(save_debug_to, key)
-            if not os.path.exists(dest):
-                os.makedirs(dest)
-            for i in range(len(slices[key])):
-                im = slices[key][i]
-                for ch, im_ch in enumerate(im):
-                    scipy.misc.imsave(os.path.join(dest, "{}_{}_{}.png"
-                                                   "".format(case_num, i, ch)),
-                                      slices[key][i][ch])
-                                       
+    vol, seg, m, indices = preprocess(volume, segmentation)
+
+    kwargs = {'compression': 'lzf'}
+    group_p.create_dataset("vol",
+                           shape=vol.shape,
+                           data=vol,
+                           dtype=vol.dtype,
+                           **kwargs,
+                           )
+
+    group_p.create_dataset("seg",
+                           shape=seg.shape,
+                           data=seg,
+                           dtype=seg.dtype,
+                           **kwargs,
+                           )
+
                                        
 class thread_pool_executor(object):
     def __init__(self, max_workers, block=False):
@@ -297,17 +239,9 @@ if __name__=='__main__':
         #raise ValueError("Path to save data already exists. Aborting.")
     h5py_file = h5py.File(args.save_to, mode='w')
     try:
-        num_threads = args.num_threads
-        if num_threads is None:
-            num_threads = os.cpu_count()
-        executor = thread_pool_executor(max_workers=num_threads, block=True)
         for i, (vol, seg, fn) in enumerate(data_loader(args.data_dir,
                                                    not args.no_crop)):
-            executor.submit(process_case, i, h5py_file, vol, seg, fn,
-                            args.min_tumor_fraction,
-                            args.min_brain_fraction,
-                            args.skip_bias_correction,
-                            args.save_debug_to)
-        executor.shutdown(wait=True)
+            process_case(i, h5py_file, vol, seg, fn)
+
     except KeyboardInterrupt:
         pass
