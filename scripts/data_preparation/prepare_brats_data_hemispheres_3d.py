@@ -19,16 +19,13 @@ import h5py
 
 def parse():
     parser = argparse.ArgumentParser(description="Prepare BRATS data. Loads "
-        "BRATS 2017 data and stores volume slices in an HDF5 archive. "
-        "Slices are organized as a group per patient, containing three "
-        "groups: \'sick\', \'healthy\', and \'segmentations\'. Sick cases "
-        "contain any anomolous class, healthy cases contain no anomalies, and "
-        "segmentations are the segmentations of the anomalies. Each group "
-        "contains subgroups for each of the three orthogonal planes along "
-        "which slices are extracted. For each case, MRI sequences are stored "
-        "in a single volume, indexed along the first axis in the following "
-        "order: flair, t1ce, t1, t2. All slices are cropped to the minimal "
-        "bounding box containing the brain.")
+        "BRATS 2017 data and stores half-volumes (hemispheres) in an HDF5 "
+        "archive. Volumes are organized as a per patient as follows: "
+        "\'sick\', \'healthy\', and \'segmentations\'. Sick cases contain any "
+        "anomolous class, healthy cases contain no anomalies, and "
+        "segmentations are the segmentations of the anomalies. For each case, "
+        "MRI sequences are stored in a single volume, indexed along the first "
+        "axis in the following order: flair, t1ce, t1, t2.")
     parser.add_argument('--data_dir',
                         help="The directory containing the BRATS 2017 data. "
                              "Either HGG or LGG.",
@@ -43,19 +40,9 @@ def parse():
                         help="Whether to not crop slices to the minimal "
                              "bounding box containing the brain.",
                         required=False, action='store_false')
-    parser.add_argument('--min_tumor_fraction',
-                        help="Minimum amount of tumour per slice in [0, 1].",
-                        required=False, type=float, default=0.01)
-    parser.add_argument('--min_brain_fraction',
-                        help="Minimum amount of brain per slice in [0, 1].",
-                        required=False, type=float, default=0.05)
     parser.add_argument('--num_threads',
                         help="The number of parallel threads to execute.",
                         required=False, type=int, default=None)
-    parser.add_argument('--save_debug_to',
-                        help="Save images of each slice to this directory, "
-                             "for inspection.",
-                        required=False, type=str, default=None)
     return parser.parse_args()
 
 
@@ -154,18 +141,22 @@ def preprocess(volume, segmentation, skip_bias_correction=True):
 def process_case(case_num, h5py_file, volume, segmentation, fn):
     print("Processing case {}: {}".format(case_num, fn))
     group_p = h5py_file.create_group(str(case_num))
-    # TODO: set attribute containing fn.
-    vol, seg, m, indices = preprocess(volume, segmentation)
+    h, s, m, _, indices = preprocess(volume, segmentation)
 
     kwargs = {'compression': 'lzf'}
-    group_p.create_dataset("vol",
-                           shape=vol.shape,
-                           data=vol,
-                           dtype=vol.dtype,
+    group_p.create_dataset("healthy",
+                           shape=h.shape,
+                           data=h,
+                           dtype=h.dtype,
                            **kwargs,
                            )
-
-    group_p.create_dataset("seg",
+    group_p.create_dataset("sick",
+                           shape=s.shape,
+                           data=s,
+                           dtype=s.dtype,
+                           **kwargs,
+                           )
+    group_p.create_dataset("segmentation",
                            shape=seg.shape,
                            data=seg,
                            dtype=seg.dtype,
