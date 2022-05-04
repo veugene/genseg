@@ -111,57 +111,60 @@ def preprocess(volume, segmentation, skip_bias_correction=True):
     volume_out[brain_mask] -= volume_out[brain_mask].mean()
     volume_out[brain_mask] /= volume_out[brain_mask].std()*5    # fit in tanh
     
-    # Get slice indices, with 0 at the center.
-    #brain_mask_ax1 = brain_mask.sum(axis=(0,2,3))>0
-    #idx_min = np.argmax(brain_mask_ax1)
-    #idx_max = len(brain_mask_ax1)-1-np.argmax(np.flipud(brain_mask_ax1))
-    #idx_mid = (idx_max-idx_min)//2
-    #a = idx_mid-len(brain_mask_ax1)
-    #b = len(brain_mask_ax1)+a-1
-    #indices = np.arange(a, b)
-    indices = np.arange(brain_mask.shape[1])
-        
-    # Split volume along hemispheres.
-    mid0 = volume.shape[-1]//2
-    mid1 = mid0
-    if volume.shape[-1]%2:
-        mid0 += 1
-    volume_out = np.concatenate([volume_out[:,:,:,:mid0],
-                                 volume_out[:,:,:,mid1:]], axis=1)
-    segmentation_out = np.concatenate([segmentation[:,:,:,:mid0],
-                                       segmentation[:,:,:,mid1:]], axis=1)
-    brain_mask = np.concatenate([brain_mask[:,:,:,:mid0],
-                                 brain_mask[:,:,:,mid1:]], axis=1)
-    indices = np.concatenate([indices, indices])
-
-    print(volume_out.shape, segmentation_out.shape, brain_mask.shape, indices.shape)
-    return volume_out, segmentation_out, brain_mask, indices
+    return volume_out, segmentation
 
 
 def process_case(case_num, h5py_file, volume, segmentation, fn):
     print("Processing case {}: {}".format(case_num, fn))
     group_p = h5py_file.create_group(str(case_num))
-    h, s, m, _, indices = preprocess(volume, segmentation)
-
+    volume, segmentation = preprocess(volume, segmentation)
+    
+    # Split volume along hemispheres.
+    mid0 = volume.shape[-1]//2
+    mid1 = mid0
+    if volume.shape[-1]%2:
+        mid0 += 1
+    vol1 = volume[:,:,:,:mid0]
+    vol2 = volume[:,:,:,mid1:]
+    seg1 = segmentation[:,:,:,:mid0]
+    seg2 = segmentation[:,:,:,mid1:]
+    
+    # Identify healthy, sick.
+    hemispheres = {'h': [], 's': [], 'm': []}
+    if np.any(seg1==2):
+        hemispheres['s'].append(vol1)
+        hemispheres['m'].append(seg1)
+    else:
+        hemispheres['h'].append(vol1)
+    if np.any(seg2==2):
+        hemispheres['s'].append(vol2)
+        hemispheres['m'].append(seg2)
+    else:
+        hemispheres['h'].append(vol2)
+    stacks = {}
+    for key in hemispheres:
+        if len(hemispheres[key]) == 0:
+            stacks[key] = np.zeros((0,0,0,0,0), dtype=volume.dtype)
+        else:
+            stacks[key] = np.stack(hemispheres[key])
+    
+    # Save.
     kwargs = {'compression': 'lzf'}
     group_p.create_dataset("healthy",
-                           shape=h.shape,
-                           data=h,
-                           dtype=h.dtype,
-                           **kwargs,
-                           )
+                           shape=stacks['h'].shape,
+                           data=stacks['h'],
+                           dtype=stacks['h'].dtype,
+                           **kwargs)
     group_p.create_dataset("sick",
-                           shape=s.shape,
-                           data=s,
-                           dtype=s.dtype,
-                           **kwargs,
-                           )
+                           shape=stacks['s'].shape,
+                           data=stacks['s'],
+                           dtype=stacks['s'].dtype,
+                           **kwargs)
     group_p.create_dataset("segmentation",
-                           shape=seg.shape,
-                           data=seg,
-                           dtype=seg.dtype,
-                           **kwargs,
-                           )
+                           shape=stacks['m'].shape,
+                           data=stacks['m'],
+                           dtype=stacks['m'].dtype,
+                           **kwargs)
 
                                        
 class thread_pool_executor(object):
