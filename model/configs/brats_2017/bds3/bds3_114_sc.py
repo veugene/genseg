@@ -38,7 +38,7 @@ def build_model(lambda_disc=3,
                 lambda_enforce_sum=None):
     N = 512 # Number of features at the bottleneck.
     n = 128 # Number of features to sample at the bottleneck.
-    image_size = (4, 160, 240, 120)
+    image_size = (4, 77, 120, 60)
     
     # Rescale lambdas if a sum is enforced.
     lambda_scale = 1.
@@ -109,7 +109,7 @@ def build_model(lambda_disc=3,
     discriminator_kwargs = {
         'input_dim'           : image_size[0],
         'num_channels_list'   : [N//8, N//4, N//2, N],
-        'num_scales'          : 3,
+        'num_scales'          : 2,
         'normalization'       : layer_normalization,
         'norm_kwargs'         : None,
         'kernel_size'         : 4,
