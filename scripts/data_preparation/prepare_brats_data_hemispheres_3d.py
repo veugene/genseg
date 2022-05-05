@@ -150,20 +150,30 @@ def process_case(case_num, h5py_file, volume, segmentation, fn):
     
     # Save.
     kwargs = {'compression': 'lzf'}
-    group_p.create_dataset("healthy",
+    group_p.create_dataset('healthy',
                            shape=stacks['h'].shape,
                            data=stacks['h'],
                            dtype=stacks['h'].dtype,
                            **kwargs)
-    group_p.create_dataset("sick",
+    group_p.create_dataset('sick',
                            shape=stacks['s'].shape,
                            data=stacks['s'],
                            dtype=stacks['s'].dtype,
                            **kwargs)
-    group_p.create_dataset("segmentation",
+    group_p.create_dataset('segmentation',
                            shape=stacks['m'].shape,
                            data=stacks['m'],
                            dtype=stacks['m'].dtype,
+                           **kwargs)
+    group_p.create_dataset('h_indices',
+                           shape=len(stacks['h']),
+                           data=np.zeros(len(stacks['h'])),
+                           dtype=int,
+                           **kwargs)
+    group_p.create_dataset('s_indices',
+                           shape=len(stacks['s']),
+                           data=np.zeros(len(stacks['s'])),
+                           dtype=int,
                            **kwargs)
 
                                        
