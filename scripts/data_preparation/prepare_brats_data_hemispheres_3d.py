@@ -40,10 +40,38 @@ def parse():
                         help="Whether to not crop slices to the minimal "
                              "bounding box containing the brain.",
                         required=False, action='store_false')
+    parser.add_argument('--downscale',
+                        help="How much to downscale the image by in 3D.",
+                        required=False, type=int, default=2)
     parser.add_argument('--num_threads',
                         help="The number of parallel threads to execute.",
                         required=False, type=int, default=None)
     return parser.parse_args()
+
+
+def resize(stack, size, interpolator=sitk.sitkLinear):
+    if np.all(stack.shape[1:]==size):
+        return stack
+    out = np.zeros((len(stack),)+size, dtype=stack.dtype)
+    for i, image in enumerate(stack):
+        sitk_image = sitk.GetImageFromArray(image)
+        new_spacing = [x*y/z for x, y, z in zip(
+                    sitk_image.GetSpacing(),
+                    sitk_image.GetSize(),
+                    size[::-1])]
+        sitk_out = sitk.Resample(
+            sitk_image,
+            size[::-1],
+            sitk.Transform(),
+            interpolator,
+            sitk_image.GetOrigin(),
+            new_spacing,
+            sitk_image.GetDirection(),
+            0,
+            sitk_image.GetPixelID()
+        )
+        out[i] = sitk.GetArrayFromImage(sitk_out)
+    return out
 
 
 def data_loader(data_dir, crop=True):
@@ -114,10 +142,22 @@ def preprocess(volume, segmentation, skip_bias_correction=True):
     return volume_out, segmentation
 
 
-def process_case(case_num, h5py_file, volume, segmentation, fn):
+def process_case(case_num, h5py_file, volume, segmentation, fn, downscale):
     print("Processing case {}: {}".format(case_num, fn))
     group_p = h5py_file.create_group(str(case_num))
     volume, segmentation = preprocess(volume, segmentation)
+    
+    # Downscale.
+    assert downscale > 0
+    if downscale > 1:
+        target_shape = (
+            volume.shape[1] // downscale,
+            volume.shape[2] // downscale,
+            volume.shape[3] // downscale
+        )   
+        volume = resize(volume, target_shape, sitk.sitkLinear)
+        segmentation = resize(
+            segmentation, target_shape, sitk.sitkNearestNeighbor)
     
     # Split volume along hemispheres.
     mid0 = volume.shape[-1]//2
@@ -245,7 +285,7 @@ if __name__=='__main__':
     try:
         for i, (vol, seg, fn) in enumerate(data_loader(args.data_dir,
                                                    not args.no_crop)):
-            process_case(i, h5py_file, vol, seg, fn)
+            process_case(i, h5py_file, vol, seg, fn, args.downscale)
 
     except KeyboardInterrupt:
         pass
