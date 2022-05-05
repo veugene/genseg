@@ -557,7 +557,7 @@ class munit_discriminator(nn.Module):
         self.ndim = ndim
         self.downsample = avg_pooling(3,
                                       stride=2,
-                                      padding=[1, 1],
+                                      padding=1,
                                       count_include_pad=False,
                                       ndim=ndim)
         self.cnns = nn.ModuleList()
