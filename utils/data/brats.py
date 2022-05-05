@@ -764,12 +764,10 @@ def image_random_transform_(x, y=None, **kwargs):
         y_shape = y.shape
         if y.ndim > 3:
             y = np.reshape(y, (np.prod(y_shape[:-2]), y_shape[-2], y_shape[-1]))
-    print('DEBUG begin transform', y is None, x.shape)
     if y is not None:
         x, y = image_random_transform(x, y, **kwargs)
     else:
-        x = image_random_transform(x, y, **kwargs)
-    print('DEBUG end transform', y is None)
+        x = image_random_transform(x, **kwargs)
     if x.shape != x_shape:
         x = np.reshape(x, x_shape)
     if y is not None and y.shape != y_shape:
