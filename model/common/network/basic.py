@@ -5,6 +5,7 @@ from torch.nn.utils import (spectral_norm,
 from torch.nn import functional as F
 import numpy as np
 from fcn_maker.blocks import (adjust_to_size,
+                              convolution,
                               do_upsample,
                               get_nonlinearity,
                               get_initializer,
@@ -542,7 +543,7 @@ class munit_discriminator(nn.Module):
     def __init__(self, input_dim, num_channels_list, num_scales=3,
                  normalization=None, norm_kwargs=None, kernel_size=5,
                  nonlinearity=lambda:nn.LeakyReLU(0.2, inplace=True),
-                 padding_mode='reflect', init='kaiming_normal_'):
+                 padding_mode='reflect', init='kaiming_normal_', ndim=2):
         super(munit_discriminator, self).__init__()
         self.input_dim = input_dim
         self.num_channels_list = num_channels_list
@@ -553,10 +554,12 @@ class munit_discriminator(nn.Module):
         self.nonlinearity = nonlinearity
         self.padding_mode = padding_mode
         self.init = init
-        self.downsample = nn.AvgPool2d(3,
-                                       stride=2,
-                                       padding=[1, 1],
-                                       count_include_pad=False)
+        self.ndim = ndim
+        self.downsample = avg_pooling(3,
+                                      stride=2,
+                                      padding=[1, 1],
+                                      count_include_pad=False,
+                                      ndim=ndim)
         self.cnns = nn.ModuleList()
         for _ in range(self.num_scales):
             self.cnns.append(self._make_net())
@@ -569,7 +572,8 @@ class munit_discriminator(nn.Module):
                             stride=2,
                             padding=(self.kernel_size-1)//2,
                             padding_mode=self.padding_mode,
-                            init=self.init)
+                            init=self.init,
+                            ndim=self.ndim)
         cnn.append(layer)
         for i, (ch0, ch1) in enumerate(zip(self.num_channels_list[:-1],
                                            self.num_channels_list[1:])):
@@ -583,14 +587,16 @@ class munit_discriminator(nn.Module):
                                    init=self.init,
                                    nonlinearity=self.nonlinearity,
                                    normalization=normalization,
-                                   norm_kwargs=self.norm_kwargs)
+                                   norm_kwargs=self.norm_kwargs,
+                                   ndim=self.ndim)
             cnn.append(layer)
         layer = norm_nlin_conv(in_channels=self.num_channels_list[-1],
                                out_channels=1,
                                kernel_size=1,
                                nonlinearity=self.nonlinearity,
                                normalization=self.normalization,
-                               norm_kwargs=self.norm_kwargs)
+                               norm_kwargs=self.norm_kwargs,
+                               ndim=self.ndim)
         cnn.append(layer)
         cnn = nn.Sequential(*cnn)
         return cnn
@@ -644,11 +650,20 @@ class convolution(torch.nn.Module):
         return out
 
 
-def max_unpooling(ndim=2, *args, **kwargs):
+def max_unpooling(*args, ndim=2, **kwargs):
     if ndim==2:
         return torch.nn.MaxUnpool2d(*args, **kwargs)
     elif ndim==3:
         return torch.nn.MaxUnpool3d(*args, **kwargs)
+    else:
+        raise ValueError("ndim must be 2 or 3")
+
+
+def avg_pooling(*args, ndim=2, **kwargs):
+    if ndim==2:
+        return torch.nn.AvgPool2d(*args, **kwargs)
+    elif ndim==3:
+        return torch.nn.AvgPool3d(*args, **kwargs)
     else:
         raise ValueError("ndim must be 2 or 3")
 
