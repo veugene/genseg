@@ -19,16 +19,13 @@ import h5py
 
 def parse():
     parser = argparse.ArgumentParser(description="Prepare BRATS data. Loads "
-        "BRATS 2017 data and stores volume slices in an HDF5 archive. "
-        "Slices are organized as a group per patient, containing three "
-        "groups: \'sick\', \'healthy\', and \'segmentations\'. Sick cases "
-        "contain any anomolous class, healthy cases contain no anomalies, and "
-        "segmentations are the segmentations of the anomalies. Each group "
-        "contains subgroups for each of the three orthogonal planes along "
-        "which slices are extracted. For each case, MRI sequences are stored "
-        "in a single volume, indexed along the first axis in the following "
-        "order: flair, t1ce, t1, t2. All slices are cropped to the minimal "
-        "bounding box containing the brain.")
+        "BRATS 2017 data and stores half-volumes (hemispheres) in an HDF5 "
+        "archive. Volumes are organized as a per patient as follows: "
+        "\'sick\', \'healthy\', and \'segmentations\'. Sick cases contain any "
+        "anomolous class, healthy cases contain no anomalies, and "
+        "segmentations are the segmentations of the anomalies. For each case, "
+        "MRI sequences are stored in a single volume, indexed along the first "
+        "axis in the following order: flair, t1ce, t1, t2.")
     parser.add_argument('--data_dir',
                         help="The directory containing the BRATS 2017 data. "
                              "Either HGG or LGG.",
@@ -43,20 +40,38 @@ def parse():
                         help="Whether to not crop slices to the minimal "
                              "bounding box containing the brain.",
                         required=False, action='store_false')
-    parser.add_argument('--min_tumor_fraction',
-                        help="Minimum amount of tumour per slice in [0, 1].",
-                        required=False, type=float, default=0.01)
-    parser.add_argument('--min_brain_fraction',
-                        help="Minimum amount of brain per slice in [0, 1].",
-                        required=False, type=float, default=0.05)
+    parser.add_argument('--downscale',
+                        help="How much to downscale the image by in 3D.",
+                        required=False, type=int, default=2)
     parser.add_argument('--num_threads',
                         help="The number of parallel threads to execute.",
                         required=False, type=int, default=None)
-    parser.add_argument('--save_debug_to',
-                        help="Save images of each slice to this directory, "
-                             "for inspection.",
-                        required=False, type=str, default=None)
     return parser.parse_args()
+
+
+def resize(stack, size, interpolator=sitk.sitkLinear):
+    if np.all(stack.shape[1:]==size):
+        return stack
+    out = np.zeros((len(stack),)+size, dtype=stack.dtype)
+    for i, image in enumerate(stack):
+        sitk_image = sitk.GetImageFromArray(image)
+        new_spacing = [x*y/z for x, y, z in zip(
+                    sitk_image.GetSpacing(),
+                    sitk_image.GetSize(),
+                    size[::-1])]
+        sitk_out = sitk.Resample(
+            sitk_image,
+            size[::-1],
+            sitk.Transform(),
+            interpolator,
+            sitk_image.GetOrigin(),
+            new_spacing,
+            sitk_image.GetDirection(),
+            0,
+            sitk_image.GetPixelID()
+        )
+        out[i] = sitk.GetArrayFromImage(sitk_out)
+    return out
 
 
 def data_loader(data_dir, crop=True):
@@ -124,53 +139,82 @@ def preprocess(volume, segmentation, skip_bias_correction=True):
     volume_out[brain_mask] -= volume_out[brain_mask].mean()
     volume_out[brain_mask] /= volume_out[brain_mask].std()*5    # fit in tanh
     
-    # Get slice indices, with 0 at the center.
-    #brain_mask_ax1 = brain_mask.sum(axis=(0,2,3))>0
-    #idx_min = np.argmax(brain_mask_ax1)
-    #idx_max = len(brain_mask_ax1)-1-np.argmax(np.flipud(brain_mask_ax1))
-    #idx_mid = (idx_max-idx_min)//2
-    #a = idx_mid-len(brain_mask_ax1)
-    #b = len(brain_mask_ax1)+a-1
-    #indices = np.arange(a, b)
-    indices = np.arange(brain_mask.shape[1])
-        
+    return volume_out, segmentation
+
+
+def process_case(case_num, h5py_file, volume, segmentation, fn, downscale):
+    print("Processing case {}: {}".format(case_num, fn))
+    group_p = h5py_file.create_group(str(case_num))
+    volume, segmentation = preprocess(volume, segmentation)
+    
+    # Downscale.
+    assert downscale > 0
+    if downscale > 1:
+        target_shape = (
+            volume.shape[1] // downscale,
+            volume.shape[2] // downscale,
+            volume.shape[3] // downscale
+        )   
+        volume = resize(volume, target_shape, sitk.sitkLinear)
+        segmentation = resize(
+            segmentation, target_shape, sitk.sitkNearestNeighbor)
+    
     # Split volume along hemispheres.
     mid0 = volume.shape[-1]//2
     mid1 = mid0
     if volume.shape[-1]%2:
         mid0 += 1
-    volume_out = np.concatenate([volume_out[:,:,:,:mid0],
-                                 volume_out[:,:,:,mid1:]], axis=1)
-    segmentation_out = np.concatenate([segmentation[:,:,:,:mid0],
-                                       segmentation[:,:,:,mid1:]], axis=1)
-    brain_mask = np.concatenate([brain_mask[:,:,:,:mid0],
-                                 brain_mask[:,:,:,mid1:]], axis=1)
-    indices = np.concatenate([indices, indices])
-
-    print(volume_out.shape, segmentation_out.shape, brain_mask.shape, indices.shape)
-    return volume_out, segmentation_out, brain_mask, indices
-
-
-def process_case(case_num, h5py_file, volume, segmentation, fn):
-    print("Processing case {}: {}".format(case_num, fn))
-    group_p = h5py_file.create_group(str(case_num))
-    # TODO: set attribute containing fn.
-    vol, seg, m, indices = preprocess(volume, segmentation)
-
+    vol1 = volume[:,:,:,:mid0]
+    vol2 = volume[:,:,:,mid1:]
+    seg1 = segmentation[:,:,:,:mid0]
+    seg2 = segmentation[:,:,:,mid1:]
+    
+    # Identify healthy, sick.
+    hemispheres = {'h': [], 's': [], 'm': []}
+    if np.any(seg1==2):
+        hemispheres['s'].append(vol1)
+        hemispheres['m'].append(seg1)
+    else:
+        hemispheres['h'].append(vol1)
+    if np.any(seg2==2):
+        hemispheres['s'].append(vol2)
+        hemispheres['m'].append(seg2)
+    else:
+        hemispheres['h'].append(vol2)
+    stacks = {}
+    for key in hemispheres:
+        if len(hemispheres[key]) == 0:
+            stacks[key] = np.zeros((0,0,0,0,0), dtype=volume.dtype)
+        else:
+            stacks[key] = np.stack(hemispheres[key])
+    
+    # Save.
     kwargs = {'compression': 'lzf'}
-    group_p.create_dataset("vol",
-                           shape=vol.shape,
-                           data=vol,
-                           dtype=vol.dtype,
-                           **kwargs,
-                           )
-
-    group_p.create_dataset("seg",
-                           shape=seg.shape,
-                           data=seg,
-                           dtype=seg.dtype,
-                           **kwargs,
-                           )
+    group_p.create_dataset('healthy',
+                           shape=stacks['h'].shape,
+                           data=stacks['h'],
+                           dtype=stacks['h'].dtype,
+                           **kwargs)
+    group_p.create_dataset('sick',
+                           shape=stacks['s'].shape,
+                           data=stacks['s'],
+                           dtype=stacks['s'].dtype,
+                           **kwargs)
+    group_p.create_dataset('segmentation',
+                           shape=stacks['m'].shape,
+                           data=stacks['m'],
+                           dtype=stacks['m'].dtype,
+                           **kwargs)
+    group_p.create_dataset('h_indices',
+                           shape=len(stacks['h']),
+                           data=np.zeros(len(stacks['h'])),
+                           dtype=int,
+                           **kwargs)
+    group_p.create_dataset('s_indices',
+                           shape=len(stacks['s']),
+                           data=np.zeros(len(stacks['s'])),
+                           dtype=int,
+                           **kwargs)
 
                                        
 class thread_pool_executor(object):
@@ -241,7 +285,7 @@ if __name__=='__main__':
     try:
         for i, (vol, seg, fn) in enumerate(data_loader(args.data_dir,
                                                    not args.no_crop)):
-            process_case(i, h5py_file, vol, seg, fn)
+            process_case(i, h5py_file, vol, seg, fn, args.downscale)
 
     except KeyboardInterrupt:
         pass
