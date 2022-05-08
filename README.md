@@ -73,7 +73,7 @@ for fn in <data_dir>/*.nii; do echo "Compressing $fn" && gunzip $fn; done
 ```
 This data can then be prepared for training using as a provided script, as follows:
 ```
-python scripts/data_preparation/prepare_lits.py --data_dir <data_dir> --path_create data/lits/lits.h5
+python scripts/data_preparation/prepare_lits.py <data_dir> --path_create data/lits/lits.h5
 ```
 
 ### MNIST

@@ -1,4 +1,6 @@
-# like 106 for brats
+# Like bds3_106_sc but with `disable_latent_split=True`:
+#
+# All decoders use both common and unique inputs, together.
 
 from collections import OrderedDict
 import torch
@@ -35,11 +37,10 @@ def build_model(lambda_disc=3,
                 lambda_f_id=0,
                 lambda_cyc=50,
                 lambda_seg=0.01,
-                lambda_enforce_sum=None,
-                mixed_precision=True):
+                lambda_enforce_sum=None):
     N = 512 # Number of features at the bottleneck.
     n = 128 # Number of features to sample at the bottleneck.
-    image_size = (1, 256, 256)
+    image_size = (4, 240, 120)
     
     # Rescale lambdas if a sum is enforced.
     lambda_scale = 1.
@@ -71,7 +72,7 @@ def build_model(lambda_disc=3,
     enc_out_shape = encoder_instance.output_shape
     
     decoder_common_kwargs = {
-        'input_shape'         : (N-n,)+enc_out_shape[1:],
+        'input_shape'         : enc_out_shape,
         'output_shape'        : image_size,
         'num_conv_blocks'     : 5,
         'block_type'          : conv_block,
@@ -79,14 +80,12 @@ def build_model(lambda_disc=3,
         'skip'                : True,
         'dropout'             : 0.,
         'normalization'       : layer_normalization,
-         # nnunet uses the kwargs, they're not none.
         'norm_kwargs'         : None,
         'padding_mode'        : 'reflect',
         'kernel_size'         : 3,
         'init'                : 'kaiming_normal_',
         'upsample_mode'       : 'repeat',
         'nonlinearity'        : lambda : nn.ReLU(inplace=True),
-        # TODO DO WE NEED THIS?
         'long_skip_merge_mode': 'skinny_cat',
         'ndim'                : 2}
     
@@ -128,7 +127,10 @@ def build_model(lambda_disc=3,
         'decoder_common'    : decoder(**decoder_common_kwargs),
         'decoder_residual'  : decoder(**decoder_residual_kwargs),
         'segmenter'         : None,
-        'mutual_information': None,
+        'mutual_information': mi_estimation_network(
+                                            x_size=np.product(x_shape),
+                                            z_size=np.product(z_shape),
+                                            n_hidden=1000),
         'disc_A'            : munit_discriminator(**discriminator_kwargs),
         'disc_B'            : munit_discriminator(**discriminator_kwargs)}
     for m in submodel.values():
@@ -137,22 +139,11 @@ def build_model(lambda_disc=3,
         recursive_spectral_norm(m)
     remove_spectral_norm(submodel['decoder_residual'].out_conv[1].conv.op)
     remove_spectral_norm(submodel['decoder_residual'].classifier.op)
-
-
-    print(submodel["decoder_common"])
-    print(submodel["decoder_residual"])
-
-    # If mixed precision mode, create the amp gradient scaler.
-    scaler = None
-    if mixed_precision:
-        print("DEBUG using mixed precision")
-        scaler = torch.cuda.amp.GradScaler()
     
     model = segmentation_model(**submodel,
-                               scaler=scaler,
                                shape_sample=z_shape,
                                loss_gan='hinge',
-                               loss_seg=dice_loss(),
+                               loss_seg=dice_loss([1,2,4]),
                                relativistic=False,
                                rng=np.random.RandomState(1234),
                                lambda_disc=lambda_disc*lambda_scale,
@@ -160,16 +151,16 @@ def build_model(lambda_disc=3,
                                lambda_z_id=lambda_z_id*lambda_scale,
                                lambda_f_id=lambda_f_id*lambda_scale,
                                lambda_cyc=lambda_cyc*lambda_scale,
-                               lambda_seg=lambda_seg*lambda_scale)
+                               lambda_seg=lambda_seg*lambda_scale,
+                               debug_disable_latent_split=True,
+                               debug_unidirectional=True)
     
-    out = OrderedDict((
+    return OrderedDict((
         ('G', model),
         ('D', nn.ModuleList([model.separate_networks['disc_A'],
                              model.separate_networks['disc_B']])),
+        ('E', model.separate_networks['mi_estimator'])
         ))
-    if mixed_precision:
-        out['scaler'] = model.scaler
-    return out
 
 
 class encoder(nn.Module):
@@ -347,7 +338,6 @@ class decoder(nn.Module):
         for n in range(self.num_conv_blocks):
             def _select(a, b=None):
                 return a if n>0 else b
-            # no skip connection for the first blcok (no norm, no nonlinearity)
             block = self.block_type(
                 in_channels=last_channels,
                 num_filters=self.num_channels_list[n],
@@ -413,7 +403,7 @@ class decoder(nn.Module):
                 out_channels=self.num_classes,
                 kernel_size=1,
                 ndim=self.ndim)
-
+        
         
     def forward(self, z, skip_info=None, mode=0):
         # Set mode (0: trans, 1: seg).

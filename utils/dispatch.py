@@ -199,15 +199,23 @@ def _dispatch_canada(args):
     lock = open(lock_path, 'w')
     
     # Prepare command for sbatch.
-    pre_cmd = ("cd /home/veugene/home_projects/ssl-seg-eugene\n"
+    path_genseg_repository = os.getenv('PATH_GENSEG_REPOSITORY')
+    if path_genseg_repository is None:
+        path_genseg_repository = "/home/veugene/home_projects/ssl-seg-eugene"
+    print(f"Using code in {path_genseg_repository}")
+    path_python_daemon_wheel = os.getenv('PATH_PYTHON_DAEMON_WHEEL')
+    if path_python_daemon_wheel is None:
+        path_python_daemon_wheel = ("~/env/genseg/wheels/"
+                                    "python_daemon-2.3.0-py2.py3-none-any.whl")
+    pre_cmd = ("cd {}\n"
                "module load python/3.7 cuda cudnn scipy-stack\n"
                "virtualenv --no-download $SLURM_TMPDIR/env\n"
                "source $SLURM_TMPDIR/env/bin/activate\n"
                "pip install --no-index --upgrade pip\n"
                "pip install --no-index -r requirements.txt\n"
-               "pip install "
-               "~/env/genseg/wheels/python_daemon-2.3.0-py2.py3-none-any.whl\n"
-               "source register_submodules.sh\n")
+               "pip install {}\n"
+               "source register_submodules.sh\n"
+               "".format(path_genseg_repository, path_python_daemon_wheel))
     cmd = subprocess.list2cmdline(sys.argv)       # Shell executable.
     cmd = cmd.replace(" --dispatch_canada",   "") # Remove recursion.
     cmd = "#!/bin/bash\n {}\n python3 {}".format(pre_cmd, cmd)  # Combine.
@@ -239,6 +247,7 @@ def _dispatch_canada(args):
         print("Call to `sbatch` timed out after {}s : {}"
               "".format(SBATCH_TIMEOUT, e))
         proc.terminate()
+        exit()
     
     # Flush and close the lock file.
     lock.close()

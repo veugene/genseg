@@ -13,3 +13,9 @@
 [submodule "submodules/ddsm_normals"]
 	path = submodules/ddsm_normals
 	url = https://github.com/veugene/ddsm_normals
+[submodule "submodules/nnunet"]
+	path = submodules/nnunet
+	url = https://github.com/MIC-DKFZ/nnUNet.git
+[submodule "submodules/batchgenerators"]
+	path = submodules/batchgenerators
+	url = https://github.com/MIC-DKFZ/batchgenerators.git

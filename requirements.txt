@@ -24,7 +24,7 @@ scipy==1.6.0
 SimpleITK==2.0.2
 six==1.16.0
 tifffile==2020.9.3
-torch==1.8.1
+torch==1.9.0
 tqdm==4.60.0
 typing-extensions==3.10.0.0
 zarr==2.8.1

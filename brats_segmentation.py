@@ -2,6 +2,7 @@ from __future__ import (print_function,
                         division)
 import argparse
 import json
+
 from utils.dispatch import (dispatch,
                             dispatch_argument_parser)
 
@@ -13,7 +14,7 @@ def get_parser():
     parser = dispatch_argument_parser(description="BRATS seg.")
     g_exp = parser.add_argument_group('Experiment')
     g_exp.add_argument('--dataset', type=str, default='brats13s',
-                       choices=['brats13s', 'brats17'])
+                       choices=['brats13s', 'brats17', 'brats17_no_hemi'])
     g_exp.add_argument('--data', type=str, default='./data/brats/2013')
     g_exp.add_argument('--slice_conditional', action='store_true')
     g_exp.add_argument('--path', type=str, default='./experiments')
@@ -23,7 +24,11 @@ def get_parser():
     g_exp.add_argument('--weight_decay', type=float, default=1e-4)
     g_exp.add_argument('--labeled_fraction', type=float, default=0.1)
     g_exp.add_argument('--yield_only_labeled', action='store_true')
-    g_exp.add_argument('--augment_data', action='store_true')
+    g_exp_da = g_exp.add_mutually_exclusive_group()
+    g_exp_da.add_argument('--augment_data', action='store_true')
+    g_exp_da.add_argument('--augment_data_nnunet', action='store_true')
+    g_exp_da.add_argument('--augment_data_nnunet_default', action='store_true')
+    g_exp_da.add_argument('--augment_data_nnunet_default_3d', action='store_true')
     g_exp.add_argument('--batch_size_train', type=int, default=20)
     g_exp.add_argument('--batch_size_valid', type=int, default=20)
     g_exp.add_argument('--epochs', type=int, default=200)
@@ -88,6 +93,7 @@ def run(args):
 
     from utils.data.brats import (prepare_data_brats13s,
                                   prepare_data_brats17,
+                                  prepare_data_brats17_no_hemi,
                                   preprocessor_brats)
     from utils.data.common import (data_flow_sampler,
                                    permuted_view)
@@ -124,7 +130,13 @@ def run(args):
                  'spline_warp': True,
                  'warp_sigma': 5,
                  'warp_grid_size': 3}
-    if not args.augment_data:
+    if args.augment_data_nnunet:
+        da_kwargs='nnunet'
+    elif args.augment_data_nnunet_default:
+        da_kwargs='nnunet_default'
+    elif args.augment_data_nnunet_default_3d:
+        da_kwargs='nnunet_default_3d'
+    elif not args.augment_data:
         da_kwargs=None
     
     # Prepare data.
@@ -134,6 +146,9 @@ def run(args):
     elif args.dataset=='brats13s':
         prepare_data_brats = prepare_data_brats13s
         target_class = [4,5]
+    elif args.dataset=='brats17_no_hemi':
+        prepare_data_brats = prepare_data_brats17_no_hemi
+        target_class = [1,2,4]
     else:
         raise ValueError("`dataset` must only be 'brats17' or 'brats13s'")
     data = prepare_data_brats(path_hgg=os.path.join(args.data, "hgg.h5"),
@@ -284,9 +299,9 @@ def run(args):
             metrics[key]['DB']   = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_DB'])
             metrics[key]['miA']  = batchwise_loss_accumulator(
-                            output_transform=lambda x: x['l_mi_A'])
+                            output_transform=lambda x: x['l_mi_est_A'])
             metrics[key]['miBA'] = batchwise_loss_accumulator(
-                            output_transform=lambda x: x['l_mi_BA'])
+                            output_transform=lambda x: x['l_mi_est_BA'])
         elif isinstance(experiment_state.model['G'], model_mt):
             metrics[key]['seg']  = batchwise_loss_accumulator(
                             output_transform=lambda x: x['l_seg'])
@@ -325,9 +340,12 @@ def run(args):
         def output_transform(output, channel=channel):
             transformed = OrderedDict()
             for k, v in output.items():
-                if k.startswith('x_') and v is not None and v.dim()==4:
+                if k.startswith('x_') and v is not None and v.dim() in (4, 5):
                     k_new = k.replace('x_','')
                     v_new = v.cpu().numpy()
+                    if v_new.ndim==5:
+                        # 3D data: HACK take the center slice only
+                        v_new = v_new[:,:,v_new.shape[2]//2,:,:]
                     if k_new=='M' or k_new.startswith('AM'):
                         if v_new.shape[1]==1:
                             # 'M', or 'AM' with single class.

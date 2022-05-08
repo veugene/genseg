@@ -1,4 +1,4 @@
-# like 106 for brats
+# bds3_106_sc but with 3D instead of 2D
 
 from collections import OrderedDict
 import torch
@@ -35,11 +35,10 @@ def build_model(lambda_disc=3,
                 lambda_f_id=0,
                 lambda_cyc=50,
                 lambda_seg=0.01,
-                lambda_enforce_sum=None,
-                mixed_precision=True):
+                lambda_enforce_sum=None):
     N = 512 # Number of features at the bottleneck.
     n = 128 # Number of features to sample at the bottleneck.
-    image_size = (1, 256, 256)
+    image_size = (4, 77, 120, 60)
     
     # Rescale lambdas if a sum is enforced.
     lambda_scale = 1.
@@ -61,12 +60,12 @@ def build_model(lambda_disc=3,
         'dropout'             : 0.,
         'normalization'       : instance_normalization,
         'norm_kwargs'         : None,
-        'padding_mode'        : 'reflect',
+        'padding_mode'        : 'constant',
         'kernel_size'         : 3,
         'init'                : 'kaiming_normal_',
         'nonlinearity'        : lambda : nn.ReLU(inplace=True),
         'skip_pool_indices'   : False,
-        'ndim'                : 2}
+        'ndim'                : 3}
     encoder_instance = encoder(**encoder_kwargs)
     enc_out_shape = encoder_instance.output_shape
     
@@ -79,16 +78,14 @@ def build_model(lambda_disc=3,
         'skip'                : True,
         'dropout'             : 0.,
         'normalization'       : layer_normalization,
-         # nnunet uses the kwargs, they're not none.
         'norm_kwargs'         : None,
-        'padding_mode'        : 'reflect',
+        'padding_mode'        : 'constant',
         'kernel_size'         : 3,
         'init'                : 'kaiming_normal_',
         'upsample_mode'       : 'repeat',
         'nonlinearity'        : lambda : nn.ReLU(inplace=True),
-        # TODO DO WE NEED THIS?
         'long_skip_merge_mode': 'skinny_cat',
-        'ndim'                : 2}
+        'ndim'                : 3}
     
     decoder_residual_kwargs = {
         'input_shape'         : enc_out_shape,
@@ -101,24 +98,25 @@ def build_model(lambda_disc=3,
         'dropout'             : 0.,
         'normalization'       : layer_normalization,
         'norm_kwargs'         : None,
-        'padding_mode'        : 'reflect',
+        'padding_mode'        : 'constant',
         'kernel_size'         : 5,
         'init'                : 'kaiming_normal_',
         'upsample_mode'       : 'repeat',
         'nonlinearity'        : lambda : nn.ReLU(inplace=True),
         'long_skip_merge_mode': 'skinny_cat',
-        'ndim'                : 2}
+        'ndim'                : 3}
     
     discriminator_kwargs = {
         'input_dim'           : image_size[0],
         'num_channels_list'   : [N//8, N//4, N//2, N],
-        'num_scales'          : 3,
+        'num_scales'          : 2,
         'normalization'       : layer_normalization,
         'norm_kwargs'         : None,
         'kernel_size'         : 4,
         'nonlinearity'        : lambda : nn.LeakyReLU(0.2, inplace=True),
-        'padding_mode'        : 'reflect',
-        'init'                : 'kaiming_normal_'}
+        'padding_mode'        : 'constant',
+        'init'                : 'kaiming_normal_',
+        'ndim'                : 3}
     
     x_shape = (N-n,)+tuple(enc_out_shape[1:])
     z_shape = (n,)+tuple(enc_out_shape[1:])
@@ -128,7 +126,10 @@ def build_model(lambda_disc=3,
         'decoder_common'    : decoder(**decoder_common_kwargs),
         'decoder_residual'  : decoder(**decoder_residual_kwargs),
         'segmenter'         : None,
-        'mutual_information': None,
+        'mutual_information': mi_estimation_network(
+                                            x_size=np.product(x_shape),
+                                            z_size=np.product(z_shape),
+                                            n_hidden=1000),
         'disc_A'            : munit_discriminator(**discriminator_kwargs),
         'disc_B'            : munit_discriminator(**discriminator_kwargs)}
     for m in submodel.values():
@@ -137,22 +138,11 @@ def build_model(lambda_disc=3,
         recursive_spectral_norm(m)
     remove_spectral_norm(submodel['decoder_residual'].out_conv[1].conv.op)
     remove_spectral_norm(submodel['decoder_residual'].classifier.op)
-
-
-    print(submodel["decoder_common"])
-    print(submodel["decoder_residual"])
-
-    # If mixed precision mode, create the amp gradient scaler.
-    scaler = None
-    if mixed_precision:
-        print("DEBUG using mixed precision")
-        scaler = torch.cuda.amp.GradScaler()
     
     model = segmentation_model(**submodel,
-                               scaler=scaler,
                                shape_sample=z_shape,
                                loss_gan='hinge',
-                               loss_seg=dice_loss(),
+                               loss_seg=dice_loss([1,2,4]),
                                relativistic=False,
                                rng=np.random.RandomState(1234),
                                lambda_disc=lambda_disc*lambda_scale,
@@ -162,14 +152,12 @@ def build_model(lambda_disc=3,
                                lambda_cyc=lambda_cyc*lambda_scale,
                                lambda_seg=lambda_seg*lambda_scale)
     
-    out = OrderedDict((
+    return OrderedDict((
         ('G', model),
         ('D', nn.ModuleList([model.separate_networks['disc_A'],
                              model.separate_networks['disc_B']])),
+        ('E', model.separate_networks['mi_estimator'])
         ))
-    if mixed_precision:
-        out['scaler'] = model.scaler
-    return out
 
 
 class encoder(nn.Module):
@@ -220,7 +208,8 @@ class encoder(nn.Module):
                            stride=1,
                            padding=1,
                            padding_mode=self.padding_mode,
-                           init=self.init)
+                           init=self.init,
+                           ndim=self.ndim)
         self.blocks.append(conv)
         shape = get_output_shape(conv, shape)
         last_channels = self.num_channels_list[0]
@@ -347,7 +336,6 @@ class decoder(nn.Module):
         for n in range(self.num_conv_blocks):
             def _select(a, b=None):
                 return a if n>0 else b
-            # no skip connection for the first blcok (no norm, no nonlinearity)
             block = self.block_type(
                 in_channels=last_channels,
                 num_filters=self.num_channels_list[n],
@@ -391,7 +379,8 @@ class decoder(nn.Module):
                                        normalization=normalization_switch,
                                        norm_kwargs=self.norm_kwargs,
                                        nonlinearity=self.nonlinearity,
-                                       padding_mode=self.padding_mode)
+                                       padding_mode=self.padding_mode,
+                                       ndim=self.ndim)
         kwargs_out_conv = {
             'in_channels': last_channels,
             'out_channels': output_shape[0],
@@ -413,7 +402,7 @@ class decoder(nn.Module):
                 out_channels=self.num_classes,
                 kernel_size=1,
                 ndim=self.ndim)
-
+        
         
     def forward(self, z, skip_info=None, mode=0):
         # Set mode (0: trans, 1: seg).

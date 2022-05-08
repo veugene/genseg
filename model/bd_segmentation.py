@@ -87,9 +87,9 @@ class segmentation_model(nn.Module):
                  num_disc_updates=1, relativistic=False, grad_penalty=None,
                  disc_clip_norm=None,gen_clip_norm=None,  lambda_disc=1,
                  lambda_x_ae=10, lambda_x_id=10, lambda_z_id=1, lambda_f_id=1,
-                 lambda_seg=1, lambda_cyc=0,lambda_mi=0, lambda_slice=0.,
-                 debug_ac_gan=False,
-                 rng=None):
+                 lambda_seg=1, lambda_cyc=0, lambda_mi=0, lambda_slice=0.,
+                 debug_ac_gan=False, debug_disable_latent_split=False,
+                 debug_unidirectional=False, rng=None):
         super(segmentation_model, self).__init__()
         lambdas = OrderedDict((
             ('lambda_disc',       lambda_disc),
@@ -123,7 +123,9 @@ class segmentation_model(nn.Module):
                                                 grad_penalty_real=grad_penalty,
                                                 grad_penalty_fake=None,
                                                 grad_penalty_mean=0)),
-            ('debug_ac_gan',      debug_ac_gan)
+            ('debug_ac_gan',      debug_ac_gan),
+            ('debug_disable_latent_split', debug_disable_latent_split),
+            ('debug_unidirectional', debug_unidirectional)
             ))
         self.separate_networks = OrderedDict((
             ('segmenter',         segmenter),
@@ -148,7 +150,8 @@ class segmentation_model(nn.Module):
         # Outputs are placed on CPU when there are multiple GPUs.
         keys_forward = ['encoder', 'decoder_common', 'decoder_residual',
                         'decoder_autoencode',  'segmenter', 'shape_sample',
-                        'scaler', 'rng']
+                        'scaler', 'rng', 'debug_disable_latent_split',
+                        'debug_unidirectional']
         kwargs_forward = dict([(key, val) for key, val in kwargs.items()
                                if key in keys_forward])
         self._forward = _forward(**kwargs_forward, **lambdas)
@@ -158,7 +161,8 @@ class segmentation_model(nn.Module):
         # Module to compute discriminator losses on GPU.
         # Outputs are placed on CPU when there are multiple GPUs.
         keys_D = ['gan_objective', 'disc_A', 'disc_B', 'mi_estimator',
-                  'classifier_A', 'classifier_B', 'scaler', 'debug_ac_gan']
+                  'classifier_A', 'classifier_B', 'scaler', 'debug_ac_gan',
+                  'debug_unidirectional']
         kwargs_D = dict([(key, val) for key, val in kwargs.items()
                          if key in keys_D])
         self._loss_D = _loss_D(**kwargs_D, **lambdas)
@@ -169,7 +173,7 @@ class segmentation_model(nn.Module):
         # Outputs are placed on CPU when there are multiple GPUs.
         keys_G = ['gan_objective', 'disc_A', 'disc_B', 'mi_estimator',
                   'classifier_A', 'classifier_B', 'scaler', 'loss_rec',
-                  'debug_ac_gan']
+                  'debug_ac_gan', 'debug_unidirectional']
         kwargs_G = dict([(key, val) for key, val in kwargs.items()
                          if key in keys_G])
         self._loss_G = _loss_G(**kwargs_G, **lambdas)
@@ -213,6 +217,7 @@ class segmentation_model(nn.Module):
         
         # Evaluate discriminator loss and update.
         loss_disc = defaultdict(int)
+        loss_mi_est = defaultdict(int)
         loss_D = gradnorm_D = 0
         if self.lambda_disc:
             if intermediates['x_BA_list'] is None:
@@ -357,6 +362,8 @@ class segmentation_model(nn.Module):
         outputs['l_DB'] = _reduce([loss_disc['B']])
         outputs['l_gradnorm_D'] = gradnorm_D
         outputs['l_gradnorm_G'] = gradnorm_G
+        outputs['l_mi_est_A'] = loss_mi_est['A']
+        outputs['l_mi_est_BA'] = loss_mi_est['BA']
         
         return outputs
 
@@ -366,7 +373,8 @@ class _forward(nn.Module):
                  shape_sample, decoder_autoencode=None, scaler=None,
                  lambda_disc=1, lambda_x_ae=10, lambda_x_id=10, lambda_z_id=1,
                  lambda_f_id=1, lambda_seg=1, lambda_cyc=0, lambda_mi=0,
-                 lambda_slice=0, rng=None):
+                 lambda_slice=0, debug_disable_latent_split=False,
+                 debug_unidirectional=False, rng=None):
         super(_forward, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.encoder            = encoder
@@ -385,6 +393,8 @@ class _forward(nn.Module):
         self.lambda_cyc         = lambda_cyc
         self.lambda_mi          = lambda_mi
         self.lambda_slice       = lambda_slice
+        self.debug_disable_latent_split = debug_disable_latent_split
+        self.debug_unidirectional = debug_unidirectional
     
     def _z_sample(self, batch_size, rng=None):
         if rng is None:
@@ -437,7 +447,10 @@ class _forward(nn.Module):
         c_A, u_A = torch.split(s_A, [s_A.size(1)-self.shape_sample[0],
                                      self.shape_sample[0]], dim=1)
         if self.lambda_disc or self.lambda_x_id or self.lambda_z_id:
-            x_AB, _ = self.decoder_common(c_A, **info_AB)
+            if self.debug_disable_latent_split:
+                x_AB, _ = self.decoder_common(s_A, **info_AB)
+            else:
+                x_AB, _ = self.decoder_common(c_A, **info_AB)
             x_AA = add(x_AB, x_AB_residual)
             
             # Unpack.
@@ -448,14 +461,24 @@ class _forward(nn.Module):
         # B->(B, dA)->A
         x_BA = x_BA_residual = x_BB = z_BA = u_BA = c_B = None
         x_BA_list = x_BB_list = None
-        if self.lambda_disc or self.lambda_x_id or self.lambda_z_id:
+        if (not self.debug_unidirectional and
+            (
+                self.lambda_disc or
+                self.lambda_x_id or
+                self.lambda_z_id or
+                self.lambda_cyc
+            )
+        ):
             info_BA = {'skip_info': skip_B}
             if class_A is not None:
                 info_BA['class_info'] = class_B
             u_BA = self._z_sample(batch_size, rng=rng)
             c_B  = s_B[:,:s_B.size(1)-self.shape_sample[0]]
             z_BA = torch.cat([c_B, u_BA], dim=1)
-            x_BB, _ = self.decoder_common(c_B, **info_BA)
+            if self.debug_disable_latent_split:
+                x_BB, _ = self.decoder_common(s_B, **info_BA)
+            else:
+                x_BB, _ = self.decoder_common(c_B, **info_BA)
             x_BA_residual, _ = self.decoder_residual(z_BA, **info_BA)
             x_BA = add(x_BB, x_BA_residual)
             
@@ -495,13 +518,16 @@ class _forward(nn.Module):
         
         # Cycle.
         x_BAB = c_BA = u_BA = None
-        if self.lambda_cyc:
+        if not self.debug_unidirectional and self.lambda_cyc:
             info_BAB = {'skip_info': skip_BA}
             if class_A is not None:
                 info_BAB['class_info'] = class_B
             c_BA, u_BA = torch.split(s_BA, [s_BA.size(1)-self.shape_sample[0],
                                             self.shape_sample[0]], dim=1)
-            x_BAB, _ = self.decoder_common(c_BA, **info_BAB)
+            if self.debug_disable_latent_split:
+                x_BAB, _ = self.decoder_common(s_BA, **info_BAB)
+            else:
+                x_BAB, _ = self.decoder_common(c_BA, **info_BAB)
             x_BAB, _ = unpack(x_BAB)
         
         # Compile outputs and return.
@@ -548,7 +574,8 @@ class _loss_D(nn.Module):
                  classifier_B=None, mi_estimator=None, scaler=None,
                  lambda_disc=1, lambda_x_ae=10, lambda_x_id=10, lambda_z_id=1,
                  lambda_f_id=1, lambda_seg=1, lambda_cyc=0, lambda_mi=0,
-                 lambda_slice=0, debug_ac_gan=False):
+                 lambda_slice=0, debug_ac_gan=False,
+                 debug_unidirectional=False):
         super(_loss_D, self).__init__()
         self._gan               = gan_objective
         self.scaler             = scaler
@@ -562,6 +589,7 @@ class _loss_D(nn.Module):
         self.lambda_mi          = lambda_mi
         self.lambda_slice       = lambda_slice
         self.debug_ac_gan       = debug_ac_gan
+        self.debug_unidirectional = debug_unidirectional
         self.net = {'disc_A'    : disc_A,
                     'disc_B'    : disc_B,
                     'class_A'   : classifier_A,
@@ -572,24 +600,28 @@ class _loss_D(nn.Module):
     def forward(self, x_A, x_B, out_BA, out_AB, c_A, u_A, c_BA, u_BA,
                 class_A=None, class_B=None):
         # Detach all tensors; updating discriminator, not generator.
-        if isinstance(out_BA, list):
-            out_BA = [x.detach() for x in out_BA]
-        else:
-            out_BA = out_BA.detach()
+        if not self.debug_unidirectional:
+            if isinstance(out_BA, list):
+                out_BA = [x.detach() for x in out_BA]
+            else:
+                out_BA = out_BA.detach()
         if isinstance(out_AB, list):
             out_AB = [x.detach() for x in out_AB]
         else:
             out_AB = out_AB.detach()
         c_A = c_A.detach()
         u_A = u_A.detach()
-        c_BA = c_BA.detach()
-        u_BA = u_BA.detach()
+        if not self.debug_unidirectional:
+            c_BA = c_BA.detach()
+        if not self.debug_unidirectional:
+            u_BA = u_BA.detach()
         
         # If outputs are lists, get the last item (image).
         x_BA = out_BA
         x_AB = out_AB
-        if not isinstance(x_BA, torch.Tensor):
-            x_BA = out_BA[-1]
+        if not self.debug_unidirectional:
+            if not isinstance(x_BA, torch.Tensor):
+                x_BA = out_BA[-1]
         if not isinstance(x_AB, torch.Tensor):
             x_AB = out_AB[-1]
         
@@ -597,12 +629,14 @@ class _loss_D(nn.Module):
         kwargs_real = None if class_A is None else {'class_info': class_A}
         kwargs_fake = None if class_B is None else {'class_info': class_B}
         loss_disc = OrderedDict()
-        loss_disc_A = self._gan.D(self.net['disc_A'],
-                                  fake=out_BA,
-                                  real=x_A,
-                                  kwargs_real=kwargs_real,
-                                  kwargs_fake=kwargs_fake,
-                                  scaler=self.scaler)
+        loss_disc_A = 0
+        if not self.debug_unidirectional:
+            loss_disc_A = self._gan.D(self.net['disc_A'],
+                                      fake=out_BA,
+                                      real=x_A,
+                                      kwargs_real=kwargs_real,
+                                      kwargs_fake=kwargs_fake,
+                                      scaler=self.scaler)
         loss_disc['A'] = loss_disc_A
         kwargs_real = None if class_A is None else {'class_info': class_B}
         kwargs_fake = None if class_B is None else {'class_info': class_A}
@@ -631,7 +665,7 @@ class _loss_D(nn.Module):
         loss_mi_est = defaultdict(int)
         if self.net['mi'] is not None:
             loss_mi_est['A'] = self.net['mi'](c_A, u_A)
-            if self.lambda_cyc:
+            if self.lambda_cyc and not self.debug_unidirectional:
                 loss_mi_est['BA'] = self.net['mi'](c_BA, u_BA)
         
         return loss_disc, loss_slice_est, loss_mi_est
@@ -642,7 +676,8 @@ class _loss_G(nn.Module):
                  classifier_B=None, mi_estimator=None, scaler=None,
                  loss_rec=mae, lambda_disc=1, lambda_x_ae=10, lambda_x_id=10,
                  lambda_z_id=1, lambda_f_id=1, lambda_seg=1, lambda_cyc=0,
-                 lambda_mi=0, lambda_slice=0, debug_ac_gan=False):
+                 lambda_mi=0, lambda_slice=0, debug_ac_gan=False,
+                 debug_unidirectional=False):
         super(_loss_G, self).__init__()
         self._gan               = gan_objective
         self.scaler             = scaler
@@ -657,6 +692,7 @@ class _loss_G(nn.Module):
         self.lambda_mi          = lambda_mi
         self.lambda_slice       = lambda_slice
         self.debug_ac_gan       = debug_ac_gan
+        self.debug_unidirectional = debug_unidirectional
         self.net = {'disc_A'    : disc_A,
                     'disc_B'    : disc_B,
                     'class_A'   : classifier_A,
@@ -709,7 +745,7 @@ class _loss_G(nn.Module):
             loss_rec['AA_ae'] = self.lambda_x_ae*self.loss_rec(x_AA_ae, x_A)
         if self.lambda_x_ae and x_BB_ae is not None:
             loss_rec['BB_ae'] = self.lambda_x_ae*self.loss_rec(x_BB_ae, x_B)
-        if self.lambda_x_id and self.lambda_cyc:
+        if self.lambda_x_id and self.lambda_cyc and not self.debug_unidirectional:
             loss_rec['BB'] += self.lambda_cyc*self.loss_rec(x_BAB, x_B)
         if self.lambda_z_id:
             loss_rec['z_BA'] = self.lambda_z_id*self.loss_rec(s_BA, z_BA)
