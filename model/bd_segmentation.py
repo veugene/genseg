@@ -15,7 +15,8 @@ from .common.losses import (bce,
                             dist_ratio_mse_abs,
                             gan_objective,
                             mae,
-                            mse)
+                            mse,
+                            relevancy)
 from .common.mine import mine
 
 
@@ -88,8 +89,9 @@ class segmentation_model(nn.Module):
                  disc_clip_norm=None,gen_clip_norm=None,  lambda_disc=1,
                  lambda_x_ae=10, lambda_x_id=10, lambda_z_id=1, lambda_f_id=1,
                  lambda_seg=1, lambda_cyc=0, lambda_mi=0, lambda_slice=0.,
-                 debug_ac_gan=False, debug_disable_latent_split=False,
-                 debug_unidirectional=False, rng=None):
+                 lambda_relevancy=0.5, debug_ac_gan=False,
+                 debug_disable_latent_split=False, debug_unidirectional=False,
+                 rng=None):
         super(segmentation_model, self).__init__()
         lambdas = OrderedDict((
             ('lambda_disc',       lambda_disc),
@@ -100,7 +102,8 @@ class segmentation_model(nn.Module):
             ('lambda_seg',        lambda_seg),
             ('lambda_cyc',        lambda_cyc),
             ('lambda_mi',         lambda_mi),
-            ('lambda_slice',      lambda_slice)
+            ('lambda_slice',      lambda_slice),
+            ('lambda_relevancy',  lambda_relevancy)
             ))
         kwargs = OrderedDict((
             ('rng',               rng if rng else np.random.RandomState()),
@@ -279,18 +282,9 @@ class segmentation_model(nn.Module):
         gradnorm_G = 0
         with torch.set_grad_enabled(do_updates_bool):
             with self._autocast_if_needed():
-                losses_G = self._loss_G(x_AM=visible['x_AM'],
-                                        x_A=x_A,
-                                        class_A=class_A,
-                                        x_AB=visible['x_AB'],
-                                        x_AA=visible['x_AA'],
-                                        x_B=x_B,
+                losses_G = self._loss_G(class_A=class_A,
                                         class_B=class_B,
-                                        x_BA=visible['x_BA'],
-                                        x_BB=visible['x_BB'],
-                                        x_BAB=visible['x_BAB'],
-                                        x_AA_ae=visible['x_AA_ae'],
-                                        x_BB_ae=visible['x_BB_ae'],
+                                        **visible,
                                         **hidden,
                                         **intermediates)
         
@@ -373,8 +367,9 @@ class _forward(nn.Module):
                  shape_sample, decoder_autoencode=None, scaler=None,
                  lambda_disc=1, lambda_x_ae=10, lambda_x_id=10, lambda_z_id=1,
                  lambda_f_id=1, lambda_seg=1, lambda_cyc=0, lambda_mi=0,
-                 lambda_slice=0, debug_disable_latent_split=False,
-                 debug_unidirectional=False, rng=None):
+                 lambda_slice=0, lambda_relevancy=0.5,
+                 debug_disable_latent_split=False, debug_unidirectional=False,
+                 rng=None):
         super(_forward, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.encoder            = encoder
@@ -393,6 +388,7 @@ class _forward(nn.Module):
         self.lambda_cyc         = lambda_cyc
         self.lambda_mi          = lambda_mi
         self.lambda_slice       = lambda_slice
+        self.lambda_relevancy   = lambda_relevancy
         self.debug_disable_latent_split = debug_disable_latent_split
         self.debug_unidirectional = debug_unidirectional
     
@@ -436,6 +432,19 @@ class _forward(nn.Module):
                 x, x_list = x[-1], x[:-1]
             return x, x_list
         
+        # Segment.
+        x_AM = None
+        if self.lambda_seg:
+            if self.segmenter[0] is not None:
+                x_AM = self.segmenter[0](s_A, skip_info=skip_AM)
+            else:
+                # Re-use residual decoder in mode 1.
+                info_AM = {'skip_info': skip_AM}
+                if class_A is not None:
+                    info_AM['class_info'] = class_A
+                x_AM = self.decoder_residual(s_A, **info_AM, mode=1)
+                x_AM, _ = unpack(x_AM)
+        
         # A->(B, dA)->A
         x_AB = x_AB_residual = x_AA = x_AB_list = x_AA_list = None
         if (self.lambda_seg
@@ -451,7 +460,12 @@ class _forward(nn.Module):
                 x_AB, _ = self.decoder_common(s_A, **info_AB)
             else:
                 x_AB, _ = self.decoder_common(c_A, **info_AB)
-            x_AA = add(x_AB, x_AB_residual)
+            if self.lambda_relevancy:
+                # x_AB_residual is infilling
+                assert isinstance(x_AB, torch.Tensor)   # Not a list
+                x_AA = x_AB_residual * x_AM + (1 - x_AM) * x_AB
+            else:
+                x_AA = add(x_AB, x_AB_residual)
             
             # Unpack.
             x_AA, x_AA_list = unpack(x_AA)
@@ -480,7 +494,12 @@ class _forward(nn.Module):
             else:
                 x_BB, _ = self.decoder_common(c_B, **info_BA)
             x_BA_residual, _ = self.decoder_residual(z_BA, **info_BA)
-            x_BA = add(x_BB, x_BA_residual)
+            if self.lambda_relevancy:
+                # x_BA_residual is infilling
+                assert isinstance(x_AB, torch.Tensor)   # Not a list
+                x_BA = x_BA_residual * x_AM + (1 - x_AM) * x_BB
+            else:
+                x_BA = add(x_BB, x_BA_residual)
             
             # Unpack.
             x_BA, x_BA_list = unpack(x_BA)
@@ -492,19 +511,6 @@ class _forward(nn.Module):
         if self.lambda_x_ae and self.decoder_autoencode is not None:
             x_AA_ae, _ = self.decoder_autoencode(s_A, skip_info=skip_A)
             x_BB_ae, _ = self.decoder_autoencode(s_B, skip_info=skip_B)
-        
-        # Segment.
-        x_AM = None
-        if self.lambda_seg:
-            if self.segmenter[0] is not None:
-                x_AM = self.segmenter[0](s_A, skip_info=skip_AM)
-            else:
-                # Re-use residual decoder in mode 1.
-                info_AM = {'skip_info': skip_AM}
-                if class_A is not None:
-                    info_AM['class_info'] = class_A
-                x_AM = self.decoder_residual(s_A, **info_AM, mode=1)
-                x_AM, _ = unpack(x_AM)
         
         # Reconstruct latent codes.
         s_BA = s_AA = c_AB = c_BB = None
@@ -574,7 +580,7 @@ class _loss_D(nn.Module):
                  classifier_B=None, mi_estimator=None, scaler=None,
                  lambda_disc=1, lambda_x_ae=10, lambda_x_id=10, lambda_z_id=1,
                  lambda_f_id=1, lambda_seg=1, lambda_cyc=0, lambda_mi=0,
-                 lambda_slice=0, debug_ac_gan=False,
+                 lambda_slice=0, lambda_relevancy=0.5, debug_ac_gan=False,
                  debug_unidirectional=False):
         super(_loss_D, self).__init__()
         self._gan               = gan_objective
@@ -588,6 +594,7 @@ class _loss_D(nn.Module):
         self.lambda_cyc         = lambda_cyc
         self.lambda_mi          = lambda_mi
         self.lambda_slice       = lambda_slice
+        self.lambda_relevancy   = lambda_relevancy
         self.debug_ac_gan       = debug_ac_gan
         self.debug_unidirectional = debug_unidirectional
         self.net = {'disc_A'    : disc_A,
@@ -676,8 +683,8 @@ class _loss_G(nn.Module):
                  classifier_B=None, mi_estimator=None, scaler=None,
                  loss_rec=mae, lambda_disc=1, lambda_x_ae=10, lambda_x_id=10,
                  lambda_z_id=1, lambda_f_id=1, lambda_seg=1, lambda_cyc=0,
-                 lambda_mi=0, lambda_slice=0, debug_ac_gan=False,
-                 debug_unidirectional=False):
+                 lambda_mi=0, lambda_slice=0, lambda_relevancy=0.5,
+                 debug_ac_gan=False, debug_unidirectional=False):
         super(_loss_G, self).__init__()
         self._gan               = gan_objective
         self.scaler             = scaler
@@ -691,6 +698,7 @@ class _loss_G(nn.Module):
         self.lambda_cyc         = lambda_cyc
         self.lambda_mi          = lambda_mi
         self.lambda_slice       = lambda_slice
+        self.lambda_relevancy   = lambda_relevancy
         self.debug_ac_gan       = debug_ac_gan
         self.debug_unidirectional = debug_unidirectional
         self.net = {'disc_A'    : disc_A,
@@ -700,10 +708,11 @@ class _loss_G(nn.Module):
                     'mi'        : mi_estimator}  # Separate params.
     
     @autocast_if_needed()
-    def forward(self, x_AM, x_A, x_AB, x_AA, x_B, x_BA, x_BB, x_BAB,
-                s_BA, s_AA, c_AB, c_BB, z_BA, s_A, c_A, u_A, c_B, c_BA, u_BA,
-                x_AA_list, x_AB_list, x_BB_list, x_BA_list, skip_A, skip_B,
-                x_AA_ae=None, x_BB_ae=None, class_A=None, class_B=None):
+    def forward(self, x_AM, x_A, x_AB, x_AB_residual, x_AA, x_B, x_BA,
+                x_BA_residual, x_BB, x_BAB, s_BA, s_AA, c_AB, c_BB, z_BA, s_A,
+                c_A, u_A, c_B, c_BA, u_BA, x_AA_list, x_AB_list, x_BB_list,
+                x_BA_list, skip_A, skip_B, x_AA_ae=None, x_BB_ae=None,
+                class_A=None, class_B=None):
         # Mutual information loss for generator.
         loss_mi_gen = defaultdict(int)
         if self.net['mi'] is not None and self.lambda_mi:
@@ -764,11 +773,21 @@ class _loss_G(nn.Module):
                 loss_rec['BB'] += _reduce([ self.lambda_f_id
                                            *self.loss_rec(s, t)])
         
+        loss_relevancy = {'AA': 0, 'BA': 0}
+        if self.lambda_relevancy:
+            loss_relevancy['AA'] = relevancy(segmentation=x_AM,
+                                             infilling=x_AB_residual,
+                                             image=x_AB)
+            loss_relevancy['BA'] = relevancy(segmentation=x_AM,
+                                             infilling=x_BA_residual,
+                                             image=x_BB)
+        
         # All generator losses combined.
         loss_G = ( _reduce(loss_gen.values())
                   +_reduce(loss_rec.values())
                   +_reduce(loss_mi_gen.values())
-                  +_reduce(loss_slice_gen.values()))
+                  +_reduce(loss_slice_gen.values())
+                  +_reduce(loss_relevancy.values()))
         
         # Compile outputs and return.
         losses = OrderedDict((
@@ -792,6 +811,8 @@ class _loss_G(nn.Module):
             ('l_slice',       _reduce([loss_slice_gen['BA'],
                                        loss_slice_gen['AB']])),
             ('l_slice_BA',    _reduce([loss_slice_gen['BA']])),
-            ('l_slice_AB',    _reduce([loss_slice_gen['AB']]))
+            ('l_slice_AB',    _reduce([loss_slice_gen['AB']])),
+            ('l_relevancy_AA', _reduce([loss_relevancy['AA']])),
+            ('l_relevancy_BA', _reduce([loss_relevancy['BA']])),
             ))
         return losses
