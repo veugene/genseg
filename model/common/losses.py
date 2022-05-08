@@ -287,19 +287,3 @@ def _set_requires_grad(x, mode=True):
             _set_requires_grad(elem)
     else:
         x.requires_grad = mode
-
-
-def relevancy(segmentation, infilling, image):
-    """
-    Relevancy loss as per Andermatt et al.
-    
-    https://arxiv.org/pdf/1805.10344.pdf
-    
-    NOTE: translation is achieved by adding `infilling` to `image`.
-    """
-    t1 = torch.log(1 - segmentation**2)
-    t2_num = segmentation * (image - infilling)
-    t2_den = segmentation
-    loss = -torch.norm(t1, p=1) \
-           -torch.norm(t2_num, p=1)/torch.norm(t2_den, p=1)
-    return loss
