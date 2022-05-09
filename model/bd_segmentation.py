@@ -89,7 +89,7 @@ class segmentation_model(nn.Module):
                  disc_clip_norm=None,gen_clip_norm=None,  lambda_disc=1,
                  lambda_x_ae=10, lambda_x_id=10, lambda_z_id=1, lambda_f_id=1,
                  lambda_seg=1, lambda_cyc=0, lambda_mi=0, lambda_slice=0.,
-                 lambda_relevancy=0.5, debug_ac_gan=False,
+                 lambda_relevancy=0, debug_ac_gan=False,
                  debug_disable_latent_split=False, debug_unidirectional=False,
                  rng=None):
         super(segmentation_model, self).__init__()
@@ -367,7 +367,7 @@ class _forward(nn.Module):
                  shape_sample, decoder_autoencode=None, scaler=None,
                  lambda_disc=1, lambda_x_ae=10, lambda_x_id=10, lambda_z_id=1,
                  lambda_f_id=1, lambda_seg=1, lambda_cyc=0, lambda_mi=0,
-                 lambda_slice=0, lambda_relevancy=0.5,
+                 lambda_slice=0, lambda_relevancy=0,
                  debug_disable_latent_split=False, debug_unidirectional=False,
                  rng=None):
         super(_forward, self).__init__()
@@ -582,7 +582,7 @@ class _loss_D(nn.Module):
                  classifier_B=None, mi_estimator=None, scaler=None,
                  lambda_disc=1, lambda_x_ae=10, lambda_x_id=10, lambda_z_id=1,
                  lambda_f_id=1, lambda_seg=1, lambda_cyc=0, lambda_mi=0,
-                 lambda_slice=0, lambda_relevancy=0.5, debug_ac_gan=False,
+                 lambda_slice=0, lambda_relevancy=0, debug_ac_gan=False,
                  debug_unidirectional=False):
         super(_loss_D, self).__init__()
         self._gan               = gan_objective
@@ -685,7 +685,7 @@ class _loss_G(nn.Module):
                  classifier_B=None, mi_estimator=None, scaler=None,
                  loss_rec=mae, lambda_disc=1, lambda_x_ae=10, lambda_x_id=10,
                  lambda_z_id=1, lambda_f_id=1, lambda_seg=1, lambda_cyc=0,
-                 lambda_mi=0, lambda_slice=0, lambda_relevancy=0.5,
+                 lambda_mi=0, lambda_slice=0, lambda_relevancy=0,
                  debug_ac_gan=False, debug_unidirectional=False):
         super(_loss_G, self).__init__()
         self._gan               = gan_objective
