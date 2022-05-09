@@ -465,6 +465,8 @@ class _forward(nn.Module):
             if self.lambda_relevancy:
                 # x_AB_residual is infilling
                 assert isinstance(x_AB, torch.Tensor)   # Not a list
+                assert isinstance(x_AB_residual, torch.Tensor)   # Not a list
+                x_AB = x_AB * x_AM + (1 - x_AM) * x_A
                 x_AA = x_AB_residual * x_AM + (1 - x_AM) * x_AB
             else:
                 x_AA = add(x_AB, x_AB_residual)
@@ -499,6 +501,9 @@ class _forward(nn.Module):
             if self.lambda_relevancy:
                 # x_BA_residual is infilling
                 assert isinstance(x_AB, torch.Tensor)   # Not a list
+                assert isinstance(x_BB, torch.Tensor)   # Not a list
+                assert isinstance(x_BA_residual, torch.Tensor)   # Not a list
+                x_BB = x_BB * x_AM + (1 - x_AM) * x_B
                 x_BA = x_BA_residual * x_AM + (1 - x_AM) * x_BB
             else:
                 x_BA = add(x_BB, x_BA_residual)
@@ -775,8 +780,16 @@ class _loss_G(nn.Module):
                 loss_rec['BB'] += _reduce([ self.lambda_f_id
                                            *self.loss_rec(s, t)])
         
-        loss_relevancy = {'AA': 0, 'BA': 0}
+        loss_relevancy = {'AB': 0, 'BB': 0, 'AA': 0, 'BA': 0}
         if self.lambda_relevancy:
+            loss_relevancy['AB'] = self.lambda_relevancy * relevancy(
+                segmentation=x_AM,
+                infilling=x_AB,
+                image=x_A)
+            loss_relevancy['BB'] = self.lambda_relevancy * relevancy(
+                segmentation=x_AM,
+                infilling=x_BB,
+                image=x_B)
             loss_relevancy['AA'] = self.lambda_relevancy * relevancy(
                 segmentation=x_AM,
                 infilling=x_AB_residual,
@@ -816,7 +829,13 @@ class _loss_G(nn.Module):
                                        loss_slice_gen['AB']])),
             ('l_slice_BA',    _reduce([loss_slice_gen['BA']])),
             ('l_slice_AB',    _reduce([loss_slice_gen['AB']])),
+            ('l_relevancy_AA', _reduce([loss_relevancy['AB']])),
+            ('l_relevancy_BA', _reduce([loss_relevancy['BB']])),
             ('l_relevancy_AA', _reduce([loss_relevancy['AA']])),
             ('l_relevancy_BA', _reduce([loss_relevancy['BA']])),
+            ('l_relevancy', _reduce([loss_relevancy['AB'],
+                                     loss_relevancy['BB'],
+                                     loss_relevancy['AA'],
+                                     loss_relevancy['BA']])),
             ))
         return losses
