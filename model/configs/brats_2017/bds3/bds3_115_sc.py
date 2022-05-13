@@ -34,7 +34,8 @@ def build_model(lambda_disc=3,
                 lambda_cyc=50,
                 lambda_seg=0.01,
                 lambda_relevancy=0.5,
-                lambda_enforce_sum=None):
+                lambda_enforce_sum=None,
+                debug_infill_only_residual=False):
     N = 512 # Number of features at the bottleneck.
     n = 128 # Number of features to sample at the bottleneck.
     image_size = (4, 240, 120)
@@ -149,7 +150,9 @@ def build_model(lambda_disc=3,
                                lambda_f_id=lambda_f_id*lambda_scale,
                                lambda_cyc=lambda_cyc*lambda_scale,
                                lambda_seg=lambda_seg*lambda_scale,
-                               lambda_relevancy=lambda_relevancy*lambda_scale)
+                               lambda_relevancy=lambda_relevancy*lambda_scale,
+                               debug_infill_only_residual=\
+                                   debug_infill_only_residual)
     
     return OrderedDict((
         ('G', model),

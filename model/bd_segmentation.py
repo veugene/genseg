@@ -91,7 +91,7 @@ class segmentation_model(nn.Module):
                  lambda_seg=1, lambda_cyc=0, lambda_mi=0, lambda_slice=0.,
                  lambda_relevancy=0, debug_ac_gan=False,
                  debug_disable_latent_split=False, debug_unidirectional=False,
-                 rng=None):
+                 debug_infill_only_residual=False, rng=None):
         super(segmentation_model, self).__init__()
         lambdas = OrderedDict((
             ('lambda_disc',       lambda_disc),
@@ -128,7 +128,8 @@ class segmentation_model(nn.Module):
                                                 grad_penalty_mean=0)),
             ('debug_ac_gan',      debug_ac_gan),
             ('debug_disable_latent_split', debug_disable_latent_split),
-            ('debug_unidirectional', debug_unidirectional)
+            ('debug_unidirectional', debug_unidirectional),
+            ('debug_infill_only_residual', debug_infill_only_residual)
             ))
         self.separate_networks = OrderedDict((
             ('segmenter',         segmenter),
@@ -369,7 +370,7 @@ class _forward(nn.Module):
                  lambda_f_id=1, lambda_seg=1, lambda_cyc=0, lambda_mi=0,
                  lambda_slice=0, lambda_relevancy=0,
                  debug_disable_latent_split=False, debug_unidirectional=False,
-                 rng=None):
+                 debug_infill_only_residual=False, rng=None):
         super(_forward, self).__init__()
         self.rng = rng if rng else np.random.RandomState()
         self.encoder            = encoder
@@ -391,6 +392,7 @@ class _forward(nn.Module):
         self.lambda_relevancy   = lambda_relevancy
         self.debug_disable_latent_split = debug_disable_latent_split
         self.debug_unidirectional = debug_unidirectional
+        self.debug_infill_only_residual = debug_infill_only_residual
     
     def _z_sample(self, batch_size, rng=None):
         if rng is None:
@@ -466,7 +468,8 @@ class _forward(nn.Module):
                 # x_AB_residual is infilling
                 assert isinstance(x_AB, torch.Tensor)   # Not a list
                 assert isinstance(x_AB_residual, torch.Tensor)   # Not a list
-                x_AB = x_AB * x_AM + (1 - x_AM) * x_A
+                if not self.debug_infill_only_residual:
+                    x_AB = x_AB * x_AM + (1 - x_AM) * x_A
                 x_AA = x_AB_residual * x_AM + (1 - x_AM) * x_AB
             else:
                 x_AA = add(x_AB, x_AB_residual)
@@ -503,7 +506,8 @@ class _forward(nn.Module):
                 assert isinstance(x_AB, torch.Tensor)   # Not a list
                 assert isinstance(x_BB, torch.Tensor)   # Not a list
                 assert isinstance(x_BA_residual, torch.Tensor)   # Not a list
-                x_BB = x_BB * x_AM + (1 - x_AM) * x_B
+                if not self.debug_infill_only_residual:
+                    x_BB = x_BB * x_AM + (1 - x_AM) * x_B
                 x_BA = x_BA_residual * x_AM + (1 - x_AM) * x_BB
             else:
                 x_BA = add(x_BB, x_BA_residual)
@@ -588,7 +592,7 @@ class _loss_D(nn.Module):
                  lambda_disc=1, lambda_x_ae=10, lambda_x_id=10, lambda_z_id=1,
                  lambda_f_id=1, lambda_seg=1, lambda_cyc=0, lambda_mi=0,
                  lambda_slice=0, lambda_relevancy=0, debug_ac_gan=False,
-                 debug_unidirectional=False):
+                 debug_unidirectional=False, debug_infill_only_residual=False):
         super(_loss_D, self).__init__()
         self._gan               = gan_objective
         self.scaler             = scaler
@@ -604,6 +608,7 @@ class _loss_D(nn.Module):
         self.lambda_relevancy   = lambda_relevancy
         self.debug_ac_gan       = debug_ac_gan
         self.debug_unidirectional = debug_unidirectional
+        self.debug_infill_only_residual = debug_infill_only_residual
         self.net = {'disc_A'    : disc_A,
                     'disc_B'    : disc_B,
                     'class_A'   : classifier_A,
@@ -691,7 +696,8 @@ class _loss_G(nn.Module):
                  loss_rec=mae, lambda_disc=1, lambda_x_ae=10, lambda_x_id=10,
                  lambda_z_id=1, lambda_f_id=1, lambda_seg=1, lambda_cyc=0,
                  lambda_mi=0, lambda_slice=0, lambda_relevancy=0,
-                 debug_ac_gan=False, debug_unidirectional=False):
+                 debug_ac_gan=False, debug_unidirectional=False,
+                 debug_infill_only_residual=False):
         super(_loss_G, self).__init__()
         self._gan               = gan_objective
         self.scaler             = scaler
@@ -708,6 +714,7 @@ class _loss_G(nn.Module):
         self.lambda_relevancy   = lambda_relevancy
         self.debug_ac_gan       = debug_ac_gan
         self.debug_unidirectional = debug_unidirectional
+        self.debug_infill_only_residual = debug_infill_only_residual
         self.net = {'disc_A'    : disc_A,
                     'disc_B'    : disc_B,
                     'class_A'   : classifier_A,
@@ -782,14 +789,15 @@ class _loss_G(nn.Module):
         
         loss_relevancy = {'AB': 0, 'BB': 0, 'AA': 0, 'BA': 0}
         if self.lambda_relevancy:
-            loss_relevancy['AB'] = self.lambda_relevancy * relevancy(
-                segmentation=x_AM,
-                infilling=x_AB,
-                image=x_A)
-            loss_relevancy['BB'] = self.lambda_relevancy * relevancy(
-                segmentation=x_AM,
-                infilling=x_BB,
-                image=x_B)
+            if not self.debug_infill_only_residual:
+                loss_relevancy['AB'] = self.lambda_relevancy * relevancy(
+                    segmentation=x_AM,
+                    infilling=x_AB,
+                    image=x_A)
+                loss_relevancy['BB'] = self.lambda_relevancy * relevancy(
+                    segmentation=x_AM,
+                    infilling=x_BB,
+                    image=x_B)
             loss_relevancy['AA'] = self.lambda_relevancy * relevancy(
                 segmentation=x_AM,
                 infilling=x_AB_residual,
