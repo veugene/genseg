@@ -434,20 +434,18 @@ class _forward(nn.Module):
                 x, x_list = x[-1], x[:-1]
             return x, x_list
         
-        # A->(B, dA) : encoding
-        x_AB = x_AB_residual = x_AA = x_AB_list = x_AA_list = None
+        # A->(B, dA)->A
+        x_AB = x_AB_residual = x_AA = x_AB_list = x_AA_list = x_AM = None
         if (self.lambda_seg
-         or self.lambda_disc or self.lambda_x_id or self.lambda_z_id):
+         or self.lambda_disc or self.lambda_x_id or self.lambda_z_id
+         or self.lambda_relevancy is not None):
             info_AB = {'skip_info': skip_A}
             if class_A is not None:
                 info_AB['class_info'] = class_A
             x_AB_residual, skip_AM = self.decoder_residual(s_A, **info_AB)
         c_A, u_A = torch.split(s_A, [s_A.size(1)-self.shape_sample[0],
                                      self.shape_sample[0]], dim=1)
-        
-        # Segment.
-        x_AM = None
-        if self.lambda_seg:
+        if self.lambda_seg or self.lambda_relevancy is not None:
             if self.segmenter[0] is not None:
                 x_AM = self.segmenter[0](s_A, skip_info=skip_AM)
             else:
@@ -457,14 +455,12 @@ class _forward(nn.Module):
                     info_AM['class_info'] = class_A
                 x_AM = self.decoder_residual(s_A, **info_AM, mode=1)
                 x_AM, _ = unpack(x_AM)
-        
-        # (B, dA)->A : decoding
         if self.lambda_disc or self.lambda_x_id or self.lambda_z_id:
             if self.debug_disable_latent_split:
                 x_AB, _ = self.decoder_common(s_A, **info_AB)
             else:
                 x_AB, _ = self.decoder_common(c_A, **info_AB)
-            if self.lambda_relevancy:
+            if self.lambda_relevancy is not None:
                 # x_AB_residual is infilling
                 assert isinstance(x_AB, torch.Tensor)   # Not a list
                 assert isinstance(x_AB_residual, torch.Tensor)   # Not a list
@@ -491,7 +487,7 @@ class _forward(nn.Module):
             )
         ):
             info_BA = {'skip_info': skip_B}
-            if class_A is not None:
+            if class_B is not None:
                 info_BA['class_info'] = class_B
             u_BA = self._z_sample(batch_size, rng=rng)
             c_B  = s_B[:,:s_B.size(1)-self.shape_sample[0]]
@@ -501,7 +497,7 @@ class _forward(nn.Module):
             else:
                 x_BB, _ = self.decoder_common(c_B, **info_BA)
             x_BA_residual, _ = self.decoder_residual(z_BA, **info_BA)
-            if self.lambda_relevancy:
+            if self.lambda_relevancy is not None:
                 # x_BA_residual is infilling
                 assert isinstance(x_AB, torch.Tensor)   # Not a list
                 assert isinstance(x_BB, torch.Tensor)   # Not a list
