@@ -214,6 +214,7 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
         len_h = sum([len(elem) for elem in volumes_h[key]])
         len_s = sum([len(elem) for elem in volumes_s[key]])
         if len_h < len_s:
+            assert len_h > 0
             m = int(np.ceil(len_s / len_h))
         data[key]['h']  = multi_source_array(volumes_h[key]*m)
         data[key]['s']  = multi_source_array(volumes_s[key])

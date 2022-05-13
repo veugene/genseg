@@ -496,15 +496,22 @@ class _forward(nn.Module):
                 x_BB, _ = self.decoder_common(s_B, **info_BA)
             else:
                 x_BB, _ = self.decoder_common(c_B, **info_BA)
-            x_BA_residual, _ = self.decoder_residual(z_BA, **info_BA)
+            x_BA_residual, skip_BAM = self.decoder_residual(z_BA, **info_BA)
             if self.lambda_relevancy is not None:
+                if self.segmenter[0] is not None:
+                    x_BAM = self.segmenter[0](z_BA, skip_info=skip_BAM)
+                else:
+                    # Re-use residual decoder in mode 1.
+                    info_AM = {'skip_info': skip_BAM}
+                    x_BAM = self.decoder_residual(z_BA, **info_AM, mode=1)
+                    x_BAM, _ = unpack(x_BAM)
                 # x_BA_residual is infilling
                 assert isinstance(x_AB, torch.Tensor)   # Not a list
                 assert isinstance(x_BB, torch.Tensor)   # Not a list
                 assert isinstance(x_BA_residual, torch.Tensor)   # Not a list
                 if not self.debug_infill_only_residual:
-                    x_BB = x_BB * x_AM + (1 - x_AM) * x_B
-                x_BA = x_BA_residual * x_AM + (1 - x_AM) * x_BB
+                    x_BB = x_BB * x_BAM + (1 - x_BAM) * x_B
+                x_BA = x_BA_residual * x_BAM + (1 - x_BAM) * x_BB
             else:
                 x_BA = add(x_BB, x_BA_residual)
             
@@ -791,7 +798,7 @@ class _loss_G(nn.Module):
                     infilling=x_AB,
                     image=x_A)
                 loss_relevancy['BB'] = self.lambda_relevancy * relevancy(
-                    segmentation=x_AM,
+                    segmentation=x_BAM,
                     infilling=x_BB,
                     image=x_B)
             loss_relevancy['AA'] = self.lambda_relevancy * relevancy(
@@ -799,7 +806,7 @@ class _loss_G(nn.Module):
                 infilling=x_AB_residual,
                 image=x_AB)
             loss_relevancy['BA'] = self.lambda_relevancy * relevancy(
-                segmentation=x_AM,
+                segmentation=x_BAM,
                 infilling=x_BA_residual,
                 image=x_BB)
         
