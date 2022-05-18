@@ -478,6 +478,7 @@ class _forward(nn.Module):
         # B->(B, dA)->A
         x_BA = x_BA_residual = x_BB = z_BA = u_BA = c_B = None
         x_BA_list = x_BB_list = None
+        x_BAM = None
         if (not self.debug_unidirectional and
             (
                 self.lambda_disc or
@@ -553,6 +554,7 @@ class _forward(nn.Module):
         # Compile outputs and return.
         visible = OrderedDict((
             ('x_AM',          x_AM),
+            ('x_BAM',         x_BAM),
             ('x_A',           x_A),
             ('x_AB',          x_AB),
             ('x_AB_residual', x_AB_residual),
@@ -725,7 +727,7 @@ class _loss_G(nn.Module):
                     'mi'        : mi_estimator}  # Separate params.
     
     @autocast_if_needed()
-    def forward(self, x_AM, x_A, x_AB, x_AB_residual, x_AA, x_B, x_BA,
+    def forward(self, x_AM, x_BAM, x_A, x_AB, x_AB_residual, x_AA, x_B, x_BA,
                 x_BA_residual, x_BB, x_BAB, s_BA, s_AA, c_AB, c_BB, z_BA, s_A,
                 c_A, u_A, c_B, c_BA, u_BA, x_AA_list, x_AB_list, x_BB_list,
                 x_BA_list, skip_A, skip_B, x_AA_ae=None, x_BB_ae=None,
