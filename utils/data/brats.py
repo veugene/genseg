@@ -340,11 +340,11 @@ def preprocessor_brats(data_augmentation_kwargs=None, label_warp=None,
                 s = _
         elif data_augmentation_kwargs is not None:
             if h is not None:
-                h = image_random_transform(h, **data_augmentation_kwargs,
-                                           n_warp_threads=1)
+                h = image_random_transform_(h, **data_augmentation_kwargs,
+                                            n_warp_threads=1)
             if s is not None:
-                _ = image_random_transform(s, m, **data_augmentation_kwargs,
-                                           n_warp_threads=1)
+                _ = image_random_transform_(s, m, **data_augmentation_kwargs,
+                                            n_warp_threads=1)
             if m is not None:
                 assert s is not None
                 s, m = _
@@ -354,11 +354,11 @@ def preprocessor_brats(data_augmentation_kwargs=None, label_warp=None,
         # Corrupt the mask by warping it.
         if label_warp is not None:
             if m is not None:
-                m = image_random_transform(m,
-                                           spline_warp=True,
-                                           warp_sigma=label_warp,
-                                           warp_grid_size=3,
-                                           n_warp_threads=1)
+                m = image_random_transform_(m,
+                                            spline_warp=True,
+                                            warp_sigma=label_warp,
+                                            warp_grid_size=3,
+                                            n_warp_threads=1)
         if label_shift is not None:
             if m is not None:
                 m_shift = np.zeros(m.shape, dtype=m.dtype)
@@ -754,3 +754,25 @@ def nnunet_transform_default_3d(img, seg=None, border_val_seg=-1, order_seg=0, o
         return img_output
     seg_output = out['seg'][0]
     return img_output, seg_output
+
+
+def image_random_transform_(x, y=None, **kwargs):
+    x_shape = x.shape
+    if x.ndim > 3:
+        x = np.reshape(x, (np.prod(x_shape[:-2]), x_shape[-2], x_shape[-1]))
+    if y is not None:
+        y_shape = y.shape
+        if y.ndim > 3:
+            y = np.reshape(y, (np.prod(y_shape[:-2]), y_shape[-2], y_shape[-1]))
+    if y is not None:
+        x, y = image_random_transform(x, y, **kwargs)
+    else:
+        x = image_random_transform(x, **kwargs)
+    if x.shape != x_shape:
+        x = np.reshape(x, x_shape)
+    if y is not None and y.shape != y_shape:
+            y = np.reshape(y, y_shape)
+    if y is not None:
+        return x, y
+    return x
+    

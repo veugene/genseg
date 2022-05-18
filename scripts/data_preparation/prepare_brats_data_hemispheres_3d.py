@@ -19,16 +19,13 @@ import h5py
 
 def parse():
     parser = argparse.ArgumentParser(description="Prepare BRATS data. Loads "
-        "BRATS 2017 data and stores volume slices in an HDF5 archive. "
-        "Slices are organized as a group per patient, containing three "
-        "groups: \'sick\', \'healthy\', and \'segmentations\'. Sick cases "
-        "contain any anomolous class, healthy cases contain no anomalies, and "
-        "segmentations are the segmentations of the anomalies. Each group "
-        "contains subgroups for each of the three orthogonal planes along "
-        "which slices are extracted. For each case, MRI sequences are stored "
-        "in a single volume, indexed along the first axis in the following "
-        "order: flair, t1ce, t1, t2. All slices are cropped to the minimal "
-        "bounding box containing the brain.")
+        "BRATS 2017 data and stores half-volumes (hemispheres) in an HDF5 "
+        "archive. Volumes are organized as a per patient as follows: "
+        "\'sick\', \'healthy\', and \'segmentations\'. Sick cases contain any "
+        "anomolous class, healthy cases contain no anomalies, and "
+        "segmentations are the segmentations of the anomalies. For each case, "
+        "MRI sequences are stored in a single volume, indexed along the first "
+        "axis in the following order: flair, t1ce, t1, t2.")
     parser.add_argument('--data_dir',
                         help="The directory containing the BRATS 2017 data. "
                              "Either HGG or LGG.",
@@ -42,21 +39,39 @@ def parse():
     parser.add_argument('--no_crop',
                         help="Whether to not crop slices to the minimal "
                              "bounding box containing the brain.",
-                        required=False, action='store_true')
-    parser.add_argument('--min_tumor_fraction',
-                        help="Minimum amount of tumour per slice in [0, 1].",
-                        required=False, type=float, default=0.01)
-    parser.add_argument('--min_brain_fraction',
-                        help="Minimum amount of brain per slice in [0, 1].",
-                        required=False, type=float, default=0.05)
+                        required=False, action='store_false')
+    parser.add_argument('--downscale',
+                        help="How much to downscale the image by in 3D.",
+                        required=False, type=int, default=2)
     parser.add_argument('--num_threads',
                         help="The number of parallel threads to execute.",
                         required=False, type=int, default=None)
-    parser.add_argument('--save_debug_to',
-                        help="Save images of each slice to this directory, "
-                             "for inspection.",
-                        required=False, type=str, default=None)
     return parser.parse_args()
+
+
+def resize(stack, size, interpolator=sitk.sitkLinear):
+    if np.all(stack.shape[1:]==size):
+        return stack
+    out = np.zeros((len(stack),)+size, dtype=stack.dtype)
+    for i, image in enumerate(stack):
+        sitk_image = sitk.GetImageFromArray(image)
+        new_spacing = [x*y/z for x, y, z in zip(
+                    sitk_image.GetSpacing(),
+                    sitk_image.GetSize(),
+                    size[::-1])]
+        sitk_out = sitk.Resample(
+            sitk_image,
+            size[::-1],
+            sitk.Transform(),
+            interpolator,
+            sitk_image.GetOrigin(),
+            new_spacing,
+            sitk_image.GetDirection(),
+            0,
+            sitk_image.GetPixelID()
+        )
+        out[i] = sitk.GetArrayFromImage(sitk_out)
+    return out
 
 
 def data_loader(data_dir, crop=True):
@@ -104,48 +119,7 @@ def data_loader(data_dir, crop=True):
         yield volume, segmentation, dn
         
         
-def get_slices(volume, segmentation, brain_mask, indices,
-               min_tumor_fraction, min_brain_fraction):
-    
-    assert min_tumor_fraction>=0 and min_tumor_fraction<=1
-    assert min_brain_fraction>=0 and min_brain_fraction<=1
-    
-    # Axis transpose order.
-    axis = 1
-    order = [1,0,2,3]
-    volume = volume.transpose(order)
-    segmentation = segmentation.transpose(order)
-    brain_mask = brain_mask.transpose(order)
-    
-    # Select slices. Slices with anomalies are sick, others are healthy.
-    indices_anomaly = []
-    indices_healthy = []
-    for i in range(len(volume)):
-        count_total = np.product(volume[i].shape)
-        count_brain = np.count_nonzero(brain_mask[i])
-        count_tumor = np.count_nonzero(segmentation[i])
-        if count_brain==0:
-            continue
-        tumor_fraction = count_tumor/float(count_brain)
-        brain_fraction = count_brain/float(count_total)
-        if brain_fraction>min_brain_fraction:
-            if tumor_fraction>min_tumor_fraction:
-                indices_anomaly.append(i)
-            if count_tumor==0:
-                indices_healthy.append(i)
-    
-    # Sort slices.
-    slices_dict = OrderedDict()
-    slices_dict['healthy'] = volume[indices_healthy]
-    slices_dict['sick'] = volume[indices_anomaly]
-    slices_dict['segmentation'] = segmentation[indices_anomaly]
-    slices_dict['h_indices'] = indices[indices_healthy]
-    slices_dict['s_indices'] = indices[indices_anomaly]
-    
-    return slices_dict
-
-
-def preprocess(volume, segmentation, skip_bias_correction=False):
+def preprocess(volume, segmentation, skip_bias_correction=True):
     volume_out = volume.copy()
     corrector = sitk.N4BiasFieldCorrectionImageFilter()
     corrector.SetMaximumNumberOfIterations([50,50,50,10])
@@ -165,71 +139,83 @@ def preprocess(volume, segmentation, skip_bias_correction=False):
     volume_out[brain_mask] -= volume_out[brain_mask].mean()
     volume_out[brain_mask] /= volume_out[brain_mask].std()*5    # fit in tanh
     
-    # Get slice indices, with 0 at the center.
-    #brain_mask_ax1 = brain_mask.sum(axis=(0,2,3))>0
-    #idx_min = np.argmax(brain_mask_ax1)
-    #idx_max = len(brain_mask_ax1)-1-np.argmax(np.flipud(brain_mask_ax1))
-    #idx_mid = (idx_max-idx_min)//2
-    #a = idx_mid-len(brain_mask_ax1)
-    #b = len(brain_mask_ax1)+a-1
-    #indices = np.arange(a, b)
-    indices = np.arange(brain_mask.shape[1])
-        
+    return volume_out, segmentation
+
+
+def process_case(case_num, h5py_file, volume, segmentation, fn, downscale):
+    print("Processing case {}: {}".format(case_num, fn))
+    group_p = h5py_file.create_group(str(case_num))
+    volume, segmentation = preprocess(volume, segmentation)
+    
+    # Downscale.
+    assert downscale > 0
+    if downscale > 1:
+        target_shape = (
+            volume.shape[1] // downscale,
+            volume.shape[2] // downscale,
+            volume.shape[3] // downscale
+        )   
+        volume = resize(volume, target_shape, sitk.sitkLinear)
+        segmentation = resize(
+            segmentation, target_shape, sitk.sitkNearestNeighbor)
+    
     # Split volume along hemispheres.
     mid0 = volume.shape[-1]//2
     mid1 = mid0
     if volume.shape[-1]%2:
         mid0 += 1
-    volume_out = np.concatenate([volume_out[:,:,:,:mid0],
-                                 volume_out[:,:,:,mid1:]], axis=1)
-    segmentation_out = np.concatenate([segmentation[:,:,:,:mid0],
-                                       segmentation[:,:,:,mid1:]], axis=1)
-    brain_mask = np.concatenate([brain_mask[:,:,:,:mid0],
-                                 brain_mask[:,:,:,mid1:]], axis=1)
-    indices = np.concatenate([indices, indices])
-
-    print(volume_out.shape, segmentation_out.shape, brain_mask.shape, indices.shape)
-    return volume_out, segmentation_out, brain_mask, indices
-
-
-def process_case(case_num, h5py_file, volume, segmentation, fn,
-                 min_tumor_fraction, min_brain_fraction,
-                 skip_bias_correction=False, save_debug_to=None):
-    print("Processing case {}: {}".format(case_num, fn))
-    group_p = h5py_file.create_group(str(case_num))
-    # TODO: set attribute containing fn.
-    vol, seg, m, indices = preprocess(volume, segmentation,
-                                      skip_bias_correction)
-    slices = get_slices(vol, seg, m, indices,
-                        min_tumor_fraction, min_brain_fraction)
-    for key in slices.keys():
-        print('key: {}, len: {}'.format(key, len(slices[key])))
-        if len(slices[key])==0:
-            kwargs = {}
-        else:
-            kwargs = {'chunks': (1,)+slices[key].shape[1:],
-                      'compression': 'lzf'}
-        group_p.create_dataset(key,
-                               shape=slices[key].shape,
-                               data=slices[key],
-                               dtype=slices[key].dtype,
-                               **kwargs)
+    vol1 = volume[:,:,:,:mid0]
+    vol2 = volume[:,:,:,mid1:]
+    seg1 = segmentation[:,:,:,:mid0]
+    seg2 = segmentation[:,:,:,mid1:]
     
-    # Debug outputs for inspection.
-    if save_debug_to is not None:
-        for key in slices.keys():
-            if "indices" in key:
-                continue
-            dest = os.path.join(save_debug_to, key)
-            if not os.path.exists(dest):
-                os.makedirs(dest)
-            for i in range(len(slices[key])):
-                im = slices[key][i]
-                for ch, im_ch in enumerate(im):
-                    scipy.misc.imsave(os.path.join(dest, "{}_{}_{}.png"
-                                                   "".format(case_num, i, ch)),
-                                      slices[key][i][ch])
-                                       
+    # Identify healthy, sick.
+    hemispheres = {'h': [], 's': [], 'm': []}
+    if np.any(seg1==2):
+        hemispheres['s'].append(vol1)
+        hemispheres['m'].append(seg1)
+    else:
+        hemispheres['h'].append(vol1)
+    if np.any(seg2==2):
+        hemispheres['s'].append(vol2)
+        hemispheres['m'].append(seg2)
+    else:
+        hemispheres['h'].append(vol2)
+    stacks = {}
+    for key in hemispheres:
+        if len(hemispheres[key]) == 0:
+            stacks[key] = np.zeros((0,0,0,0,0), dtype=volume.dtype)
+        else:
+            stacks[key] = np.stack(hemispheres[key])
+    
+    # Save.
+    kwargs = {'compression': 'lzf'}
+    group_p.create_dataset('healthy',
+                           shape=stacks['h'].shape,
+                           data=stacks['h'],
+                           dtype=stacks['h'].dtype,
+                           **kwargs)
+    group_p.create_dataset('sick',
+                           shape=stacks['s'].shape,
+                           data=stacks['s'],
+                           dtype=stacks['s'].dtype,
+                           **kwargs)
+    group_p.create_dataset('segmentation',
+                           shape=stacks['m'].shape,
+                           data=stacks['m'],
+                           dtype=stacks['m'].dtype,
+                           **kwargs)
+    group_p.create_dataset('h_indices',
+                           shape=len(stacks['h']),
+                           data=np.zeros(len(stacks['h'])),
+                           dtype=int,
+                           **kwargs)
+    group_p.create_dataset('s_indices',
+                           shape=len(stacks['s']),
+                           data=np.zeros(len(stacks['s'])),
+                           dtype=int,
+                           **kwargs)
+
                                        
 class thread_pool_executor(object):
     def __init__(self, max_workers, block=False):
@@ -297,17 +283,9 @@ if __name__=='__main__':
         #raise ValueError("Path to save data already exists. Aborting.")
     h5py_file = h5py.File(args.save_to, mode='w')
     try:
-        num_threads = args.num_threads
-        if num_threads is None:
-            num_threads = os.cpu_count()
-        executor = thread_pool_executor(max_workers=num_threads, block=True)
         for i, (vol, seg, fn) in enumerate(data_loader(args.data_dir,
                                                    not args.no_crop)):
-            executor.submit(process_case, i, h5py_file, vol, seg, fn,
-                            args.min_tumor_fraction,
-                            args.min_brain_fraction,
-                            args.skip_bias_correction,
-                            args.save_debug_to)
-        executor.shutdown(wait=True)
+            process_case(i, h5py_file, vol, seg, fn, args.downscale)
+
     except KeyboardInterrupt:
         pass

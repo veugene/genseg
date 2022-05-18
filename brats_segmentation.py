@@ -340,9 +340,12 @@ def run(args):
         def output_transform(output, channel=channel):
             transformed = OrderedDict()
             for k, v in output.items():
-                if k.startswith('x_') and v is not None and v.dim()==4:
+                if k.startswith('x_') and v is not None and v.dim() in (4, 5):
                     k_new = k.replace('x_','')
                     v_new = v.cpu().numpy()
+                    if v_new.ndim==5:
+                        # 3D data: HACK take the center slice only
+                        v_new = v_new[:,:,v_new.shape[2]//2,:,:]
                     if k_new=='M' or k_new.startswith('AM'):
                         if v_new.shape[1]==1:
                             # 'M', or 'AM' with single class.
