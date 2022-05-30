@@ -89,7 +89,7 @@ class segmentation_model(nn.Module):
                  disc_clip_norm=None,gen_clip_norm=None,  lambda_disc=1,
                  lambda_x_ae=10, lambda_x_id=10, lambda_z_id=1, lambda_f_id=1,
                  lambda_seg=1, lambda_cyc=0, lambda_mi=0, lambda_slice=0.,
-                 lambda_relevancy=0, debug_ac_gan=False,
+                 lambda_relevancy=0, debug_infilling=False, debug_ac_gan=False,
                  debug_disable_latent_split=False, debug_unidirectional=False,
                  debug_infill_only_residual=False, rng=None):
         super(segmentation_model, self).__init__()
@@ -126,6 +126,7 @@ class segmentation_model(nn.Module):
                                                 grad_penalty_real=grad_penalty,
                                                 grad_penalty_fake=None,
                                                 grad_penalty_mean=0)),
+            ('debug_infilling',   debug_infilling),
             ('debug_ac_gan',      debug_ac_gan),
             ('debug_disable_latent_split', debug_disable_latent_split),
             ('debug_unidirectional', debug_unidirectional),
@@ -368,7 +369,7 @@ class _forward(nn.Module):
                  shape_sample, decoder_autoencode=None, scaler=None,
                  lambda_disc=1, lambda_x_ae=10, lambda_x_id=10, lambda_z_id=1,
                  lambda_f_id=1, lambda_seg=1, lambda_cyc=0, lambda_mi=0,
-                 lambda_slice=0, lambda_relevancy=0,
+                 lambda_slice=0, lambda_relevancy=0, debug_infilling=False,
                  debug_disable_latent_split=False, debug_unidirectional=False,
                  debug_infill_only_residual=False, rng=None):
         super(_forward, self).__init__()
@@ -390,6 +391,7 @@ class _forward(nn.Module):
         self.lambda_mi          = lambda_mi
         self.lambda_slice       = lambda_slice
         self.lambda_relevancy   = lambda_relevancy
+        self.debug_infilling    = debug_infilling
         self.debug_disable_latent_split = debug_disable_latent_split
         self.debug_unidirectional = debug_unidirectional
         self.debug_infill_only_residual = debug_infill_only_residual
@@ -438,14 +440,14 @@ class _forward(nn.Module):
         x_AB = x_AB_residual = x_AA = x_AB_list = x_AA_list = x_AM = None
         if (self.lambda_seg
          or self.lambda_disc or self.lambda_x_id or self.lambda_z_id
-         or self.lambda_relevancy is not None):
+         or self.debug_infilling):
             info_AB = {'skip_info': skip_A}
             if class_A is not None:
                 info_AB['class_info'] = class_A
             x_AB_residual, skip_AM = self.decoder_residual(s_A, **info_AB)
         c_A, u_A = torch.split(s_A, [s_A.size(1)-self.shape_sample[0],
                                      self.shape_sample[0]], dim=1)
-        if self.lambda_seg or self.lambda_relevancy is not None:
+        if self.lambda_seg or self.debug_infilling:
             if self.segmenter[0] is not None:
                 x_AM = self.segmenter[0](s_A, skip_info=skip_AM)
             else:
@@ -460,7 +462,7 @@ class _forward(nn.Module):
                 x_AB, _ = self.decoder_common(s_A, **info_AB)
             else:
                 x_AB, _ = self.decoder_common(c_A, **info_AB)
-            if self.lambda_relevancy is not None:
+            if self.debug_infilling:
                 # x_AB_residual is infilling
                 assert isinstance(x_AB, torch.Tensor)   # Not a list
                 assert isinstance(x_AB_residual, torch.Tensor)   # Not a list
@@ -498,7 +500,7 @@ class _forward(nn.Module):
             else:
                 x_BB, _ = self.decoder_common(c_B, **info_BA)
             x_BA_residual, skip_BAM = self.decoder_residual(z_BA, **info_BA)
-            if self.lambda_relevancy is not None:
+            if self.debug_infilling:
                 if self.segmenter[0] is not None:
                     x_BAM = self.segmenter[0](z_BA, skip_info=skip_BAM)
                 else:
@@ -596,8 +598,9 @@ class _loss_D(nn.Module):
                  classifier_B=None, mi_estimator=None, scaler=None,
                  lambda_disc=1, lambda_x_ae=10, lambda_x_id=10, lambda_z_id=1,
                  lambda_f_id=1, lambda_seg=1, lambda_cyc=0, lambda_mi=0,
-                 lambda_slice=0, lambda_relevancy=0, debug_ac_gan=False,
-                 debug_unidirectional=False, debug_infill_only_residual=False):
+                 lambda_slice=0, lambda_relevancy=0, debug_infilling=False,
+                 debug_ac_gan=False, debug_unidirectional=False,
+                 debug_infill_only_residual=False):
         super(_loss_D, self).__init__()
         self._gan               = gan_objective
         self.scaler             = scaler
@@ -611,6 +614,7 @@ class _loss_D(nn.Module):
         self.lambda_mi          = lambda_mi
         self.lambda_slice       = lambda_slice
         self.lambda_relevancy   = lambda_relevancy
+        self.debug_infilling    = debug_infilling
         self.debug_ac_gan       = debug_ac_gan
         self.debug_unidirectional = debug_unidirectional
         self.debug_infill_only_residual = debug_infill_only_residual
@@ -701,8 +705,8 @@ class _loss_G(nn.Module):
                  loss_rec=mae, lambda_disc=1, lambda_x_ae=10, lambda_x_id=10,
                  lambda_z_id=1, lambda_f_id=1, lambda_seg=1, lambda_cyc=0,
                  lambda_mi=0, lambda_slice=0, lambda_relevancy=0,
-                 debug_ac_gan=False, debug_unidirectional=False,
-                 debug_infill_only_residual=False):
+                 debug_infilling=False, debug_ac_gan=False,
+                 debug_unidirectional=False, debug_infill_only_residual=False):
         super(_loss_G, self).__init__()
         self._gan               = gan_objective
         self.scaler             = scaler
@@ -717,6 +721,7 @@ class _loss_G(nn.Module):
         self.lambda_mi          = lambda_mi
         self.lambda_slice       = lambda_slice
         self.lambda_relevancy   = lambda_relevancy
+        self.debug_infilling    = debug_infilling
         self.debug_ac_gan       = debug_ac_gan
         self.debug_unidirectional = debug_unidirectional
         self.debug_infill_only_residual = debug_infill_only_residual
@@ -793,7 +798,7 @@ class _loss_G(nn.Module):
                                            *self.loss_rec(s, t)])
         
         loss_relevancy = {'AB': 0, 'BB': 0, 'AA': 0, 'BA': 0}
-        if self.lambda_relevancy:
+        if self.lambda_relevancy and self.debug_infilling:
             if not self.debug_infill_only_residual:
                 loss_relevancy['AB'] = self.lambda_relevancy * relevancy(
                     segmentation=x_AM,
