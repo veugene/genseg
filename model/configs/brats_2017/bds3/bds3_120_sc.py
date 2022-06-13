@@ -1,4 +1,5 @@
-# bds3_117_sc with discriminator kernel size 4 instead of 3 and replication padding
+# bds3_117_sc with discriminator kernel size 4 instead of 3 and 
+# replication padding; residual decoder with ks3 instead of ks5
 
 from collections import OrderedDict
 import torch
@@ -103,7 +104,7 @@ def build_model(lambda_disc=3,
         'normalization'       : layer_normalization,
         'norm_kwargs'         : None,
         'padding_mode'        : 'replicate',
-        'kernel_size'         : 5,
+        'kernel_size'         : 3,
         'init'                : 'kaiming_normal_',
         'upsample_mode'       : 'repeat',
         'nonlinearity'        : lambda : nn.ReLU(inplace=True),
