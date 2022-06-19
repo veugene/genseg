@@ -19,6 +19,8 @@ def parse():
                         nargs='+', type=str, required=True)
     parser.add_argument('--experiment_paths_B',
                         nargs='+', type=str, required=True)
+    parser.add_argument('--confidence_level',
+                        nargs='+', type=float, default=[0.999, 0.99, 0.95])
     return parser.parse_args()
 
 
@@ -229,72 +231,38 @@ if __name__ == '__main__':
                             np.sum(m[idx]) + np.sum(p[idx]),
                         )
                     )
-                pbar.set_postfix({'dice', dice(counts)})
+                pbar.set_postfix({'dice': dice(counts)})
             results[key].append(counts)
             print(f'Dice = {dice(counts):.4f}')
             del model
     
-    # Bootstrap.
+    def is_significant(confidence_level, paired):
+        result = bootstrap(
+            data=[np.stack(results['A']), np.stack(results['B'])],
+            statistic=mean_dice_diff,
+            method='basic',
+            paired=paired,
+            axis=1,
+            confidence_level=confidence_level,
+        )
+        
+        # Significant difference if CI does not contain zero.
+        low = result.confidence_interval.low
+        high = result.confidence_interval.high
+        if low <= 0 and high >= 0:
+            return False
+        return True
+    
+    # Bootstrap
     print('Bootstrapping...')
-    print('Paired, confidence_level=0.999')
-    ci = bootstrap(
-        data=[np.stack(results['A']), np.stack(results['B'])],
-        statistic=mean_dice_diff,
-        method='basic',
-        paired=True,
-        axis=1,
-        confidence_level=0.999,
-    )
-    print(ci)
-    print('Unpaired, confidence_level=0.999')
-    ci = bootstrap(
-        data=[np.stack(results['A']), np.stack(results['B'])],
-        statistic=mean_dice_diff,
-        method='basic',
-        paired=False,
-        axis=1,
-        confidence_level=0.999,
-    )
-    print(ci)
-    print('Bootstrapping...')
-    print('Paired, confidence_level=0.95')
-    ci = bootstrap(
-        data=[np.stack(results['A']), np.stack(results['B'])],
-        statistic=mean_dice_diff,
-        method='basic',
-        paired=True,
-        axis=1,
-        confidence_level=0.95,
-    )
-    print(ci)
-    print('Unpaired, confidence_level=0.95')
-    ci = bootstrap(
-        data=[np.stack(results['A']), np.stack(results['B'])],
-        statistic=mean_dice_diff,
-        method='basic',
-        paired=False,
-        axis=1,
-        confidence_level=0.95,
-    )
-    print(ci)
-    print('Bootstrapping...')
-    print('Paired, confidence_level=0.9')
-    ci = bootstrap(
-        data=[np.stack(results['A']), np.stack(results['B'])],
-        statistic=mean_dice_diff,
-        method='basic',
-        paired=True,
-        axis=1,
-        confidence_level=0.9,
-    )
-    print(ci)
-    print('Unpaired, confidence_level=0.9')
-    ci = bootstrap(
-        data=[np.stack(results['A']), np.stack(results['B'])],
-        statistic=mean_dice_diff,
-        method='basic',
-        paired=False,
-        axis=1,
-        confidence_level=0.9,
-    )
-    print(ci)
+    for confidence_level in args.confidence_level:
+        for is_paired in [True, False]:
+            if is_paired:
+                is_paired_str = 'paired'
+            else:
+                is_paired_str = 'unpaired'
+            print(
+                f'Confidence level {confidence_level} '
+                f'({is_paired_str}) : '
+                f'{is_significant(confidence_level, is_paired)}'
+            )
