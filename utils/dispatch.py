@@ -24,35 +24,7 @@ def dispatch_argument_parser(*args, **kwargs):
     parser.add_argument('--force_resume', action='store_true',
                         help="Resume a job even if it has already completed "
                              "the requested number of epochs.")
-    g_sel = parser.add_argument_group('Cluster select.')
-    mutex_cluster = g_sel.add_mutually_exclusive_group()
-    mutex_cluster.add_argument('--dispatch_dgx', action='store_true')
-    mutex_cluster.add_argument('--dispatch_ngc', action='store_true')
-    mutex_cluster.add_argument('--dispatch_canada', action='store_true')
-    g_dgx = parser.add_argument_group('DGX cluster')
-    g_dgx.add_argument('--cluster_id', type=int, default=425)
-    g_dgx.add_argument('--docker_id', type=str,
-                       default="nvidian_general/"
-                               "9.0-cudnn7-devel-ubuntu16.04_genseg:v2")
-    g_dgx.add_argument('--gdx_gpu', type=int, default=1)
-    g_dgx.add_argument('--gdx_cpu', type=int, default=2)
-    g_dgx.add_argument('--gdx_mem', type=int, default=12)
-    g_dgx.add_argument('--nfs_host', type=str, default="dcg-zfs-03.nvidia.com")
-    g_dgx.add_argument('--nfs_path', type=str,
-                       default="/export/ganloc.cosmos253/")
-    g_ngc = parser.add_argument_group('NGC cluster')
-    g_ngc.add_argument('--ace', type=str, default='nv-us-west-2')
-    g_ngc.add_argument('--instance', type=str, default='ngcv1',
-                       choices=['ngcv1', 'ngcv2', 'ngcv4', 'ngcv8'],
-                       help="Number of GPUs.")
-    g_ngc.add_argument('--image', type=str,
-                       default="nvidian/lpr/"
-                               "9.0-cudnn7-devel-ubuntu16.04_genseg:v2")
-    g_ngc.add_argument('--source_id', type=str, default=None)
-    g_ngc.add_argument('--dataset_id', type=str, default=None)
-    g_ngc.add_argument('--workspace', type=str,
-                       default='8CfEU-RDR_eu5BDfnMypNQ:/workspace')
-    g_ngc.add_argument('--result', type=str, default="/results")
+    parser.add_argument('--dispatch_canada', action='store_true')
     g_cca = parser.add_argument_group('Compute Canada cluster')
     g_cca.add_argument('--account', type=str, default='rrg-bengioy-ad')
     g_cca.add_argument('--cca_gpu', type=int, default=1)
@@ -105,11 +77,7 @@ def dispatch(parser, run):
         args = parser.parse_args(namespace=args)
     
     # Dispatch on a cluster (or run locally if none specified).
-    if args.dispatch_dgx:
-        _dispatch_dgx(args)
-    elif args.dispatch_ngc:
-        _dispatch_ngc(args)
-    elif args.dispatch_canada:
+    if args.dispatch_canada:
         if _isrunning_canada(args.path):
             # If a job is already running on this path, exit.
             print("WARNING: aborting dispatch since there is already an "
@@ -142,44 +110,6 @@ def dispatch(parser, run):
                     shutil.copyfile(args.data, target)
                 args.data = target
         run(args)
-
-
-def _dispatch_dgx(args):
-    pre_cmd = ("export HOME=/tmp; "
-               "export ROOT=/scratch/; "
-               "cd /scratch/ssl-seg-eugene; "
-               "source register_submodules.sh;")
-    cmd = subprocess.list2cmdline(sys.argv)       # Shell executable.
-    cmd = cmd.replace(" --_dispatch_dgx", "")     # Remove recursion.
-    cmd = "bash -c '{} python3 {};'".format(pre_cmd, cmd)  # Combine.
-    mount_point = "/scratch"
-    subprocess.run(["dgx", "job", "submit",
-                    "-i", str(args.docker_id),
-                    "--gpu", str(args.dgx_gpu),
-                    "--cpu", str(args.dgx_cpu),
-                    "--mem", str(args.dgx_mem),
-                    "--clusterid", str(args.cluster_id),
-                    "--volume", "{}@{}:{}".format(args.nfs_path,
-                                                  args.nfs_host,
-                                                  mount_point),
-                    "-c", cmd])
-
-
-def _dispatch_ngc(args):
-    pre_cmd = ("cd /repo; "
-               "source register_submodules.sh;")
-    cmd = subprocess.list2cmdline(sys.argv)       # Shell executable.
-    cmd = cmd.replace(" --_dispatch_ngc", "")     # Remove recursion.
-    cmd = "bash -c '{} python3 {};'".format(pre_cmd, cmd)  # Combine.
-    subprocess.run(["ngc", "batch", "run",
-                    "--image", args.image,
-                    "--ace", args.ace,
-                    "--instance", args.instance,
-                    "--commandline", cmd,
-                    "--datasetid", args.dataset_id,
-                    "--datasetid", args.source_id,
-                    "--workspace", args.workspace,
-                    "--result", args.result])
 
 
 def _dispatch_canada(args):

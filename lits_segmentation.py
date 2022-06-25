@@ -39,11 +39,6 @@ def get_parser():
     g_exp.add_argument('--data_seed', type=int, default=0)
     g_exp.add_argument('--data_split_seed', type=int, default=0)
     split = g_exp.add_mutually_exclusive_group()
-    split.add_argument('--data_split_by_slice', action='store_true',
-                       help="Split data to training, validation, test subsets "
-                            "by randomly sampling from all slices without "
-                            "making sure that a volume's slices are not "
-                            "present in more than one subset.")
     split.add_argument('--data_fold', type=int, default=None,
                        choices=[0,1,2,3], help="For 4-fold cross-validation.")
     return parser
@@ -69,8 +64,7 @@ def run(args):
     from ignite.handlers import ModelCheckpoint
 
     from utils.data.lits import collate_lits
-    from utils.data.lits import prepare_data_lits as lits_by_volume
-    from utils.data.lits_by_slice import prepare_data_lits as lits_by_slice
+    from utils.data.lits import prepare_data_lits
     from utils.experiment import experiment
     from utils.metrics import (batchwise_loss_accumulator,
                                dice_global,
@@ -111,10 +105,6 @@ def run(args):
         da_kwargs=None
     
     # Prepare data.
-    if args.data_split_by_slice:
-        prepare_data_lits = lits_by_slice
-    else:
-        prepare_data_lits = lits_by_volume
     dataset = prepare_data_lits(path=args.data,
                                 masked_fraction=1.-args.labeled_fraction,
                                 drop_masked=args.yield_only_labeled,
