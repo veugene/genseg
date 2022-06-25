@@ -2,25 +2,10 @@
 
 ## Initialization
 
+Run `pip install -r requirements.txt` to install dependencies.__
 Run `git submodule init` to initialize submodules.  
 Run `git submodule update` to download submodules.  
 Run `source link_submodules.sh` from *within the root directory of the source tree* to set up submodule links and add then to the PYTHONPATH.  
-
-Requires:  
-- h5py  
-- imageio  
-- natsort  
-- numpy  
-- protobuf  
-- psutil  
-- python-daemon  
-- scikit-image  
-- scipy  
-- SimpleITK  
-- six  
-- torch  
-- tqdm  
-- zarr  
 
 ## Models
 
@@ -48,8 +33,8 @@ def build_model():
 ## Tasks
 
 `brats_segmentation.py` : BRATS  
+`lits_segmentation.py` : LITS__
 `cluttered_mnist_segmentation.py` : Cluttered MNIST  
-`ddsm_segmentation.py` : DDSM
 
 Task launchers are used to start/resume an experiment.
 
@@ -79,19 +64,6 @@ python scripts/data_preparation/prepare_lits.py <data_dir> --path_create data/li
 ### MNIST
 
 The cluttered MNIST digit data is created automatically by the MNIST task launcher from MNIST data that is also downloaded automatically.
-
-### DDSM
-
-The DDSM breast cancer data consists of DDSM data (http://www.eng.usf.edu/cvprg/Mammography/Database.html) with CBIS-DDSM (https://wiki.cancerimagingarchive.net/display/Public/CBIS-DDSM) annotations for sick cases. To prepare DDSM data for training, these two sets of data need to be downloaded to `<ddsm_download_dir>` and `<cbis_download_dir>`, respectively. The raw DDSM data can be downloaded from its original FTP source using the following script:
-
-```
-python scripts/data_preparation/download_ddsm.py <ddsm_download_dir>
-```
-
-Once downloaded, the dataset can be prepared as follows:
-```
-python scripts/data_preparation/prepare_ddsm_data.py <ddsm_download_dir> <cbis_download_dir> --path_create data/ddsm/ddsm.h5 --resize 256
-```
 
 ### Launching
 
@@ -127,40 +99,6 @@ Upon resuming, the model configuration file is loaded from the saved checkpoint.
 ## Dispatching on a compute cluster
 
 To launch an experiment on a cluster, simply run the launcher with the appropriate `dispatch` argument and the task launcher will set up and queue the job on the cluster. Each cluster has cluster-specific arguments that can be set (see `--help`).
-
-### Nvidia DGX ###
-
-The task launcher could be run on any system that has DGX interface tools set up and will set up and queue the job on the remote DGX cluster.
-
-To the task arguments, add the argument `--dispatch_dgx`, along with any aditional DGX-specific arguments:
-
-`--cluster_id` : the integer ID of the cluster (default=425)  
-`--docker_id` : the registered docker image containing the environment  
-`--gdx_gpu` : number of GPUs to request  
-`--gdx_cpu` : number of CPU cores to request  
-`--gdx_mem` : memory in GB to request  
-`--nfs_host` : the domain of the NFS share to mount, containing code and data  
-`--nfs_path` : the path (on the host) of the NFS share to mount  
-
-### Nvidia NGC ###
-
-The task launcher could be run on any system that has NGC interface tools set up and will set up and queue the job on the remote NGC cluster.
-
-To the task arguments, add the argument `--dispatch_dgx`, along with any aditional NGC-specific arguments:
-
-`--ace` : the specific cluster to use (default=nv-us-west-2)  
-`--instance` : the resource configuration (ngcv1, ngcv2, ngcv4, ngcv8 for 1, 2, 4, or 8 GPUs)  
-`--image` : the registered docker image containing the environment  
-`--source_id` : the dataset ID containing the source code (read only)  
-`--dataset_id` : the dataset ID containing the dataset (read only)  
-`--workspace` : the workspace ID and mountpoint (read, write)  
-`--result` : the mountpoint of the working directory for writes  
-
-NGC provides read only, write only, and read/write storage. Read only storage is "datasets" (`source_id` and `dataset_id`); write only storage is automatically created for each experiment (`result`); and read/write storage is the slowest and the only storage that can be mounted outside of the NGC job (`workspace`).
-
-If the source code is stored in a dataset, it should be mounted on "/repo" with `--source_id "<source code dataset id>:/repo"`.
-
-If the source code is stored in a workspace, the workspace should be mounted on "/repo" with `--workspace "<workspace id>:/repo"`.
 
 ### Compute Canada ###
 
