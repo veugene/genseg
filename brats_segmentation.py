@@ -346,7 +346,7 @@ def run(args):
                     if v_new.ndim==5:
                         # 3D data: HACK take the center slice only
                         v_new = v_new[:,:,v_new.shape[2]//2,:,:]
-                    if k_new=='M' or k_new.startswith('AM'):
+                    if k_new=='M' or k_new.endswith('AM'):
                         if v_new.shape[1]==1:
                             # 'M', or 'AM' with single class.
                             v_new = np.squeeze(v_new, axis=1)

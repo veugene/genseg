@@ -213,6 +213,15 @@ def _prepare_data_brats(path_hgg, path_lgg, validation_indices,
         m = 1
         len_h = sum([len(elem) for elem in volumes_h[key]])
         len_s = sum([len(elem) for elem in volumes_s[key]])
+        assert len_s > 0
+        if len_h == 0:
+            # Create a dummy volume.
+            print('Warning: no healthy volumes found! Creating a dummy empty '
+                  'volume.')
+            volumes_h[key] = [np.zeros((1,)+volumes_s[key][0].shape[1:],
+                                       dtype=volumes_s[key][0].dtype)]
+            indices_h[key] = [np.zeros(1, dtype=np.uint32)]
+            len_h = 1
         if len_h < len_s:
             m = int(np.ceil(len_s / len_h))
         data[key]['h']  = multi_source_array(volumes_h[key]*m)

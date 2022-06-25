@@ -578,25 +578,29 @@ class munit_discriminator(nn.Module):
         for i, (ch0, ch1) in enumerate(zip(self.num_channels_list[:-1],
                                            self.num_channels_list[1:])):
             normalization = self.normalization if i>0 else None
-            layer = norm_nlin_conv(in_channels=ch0,
-                                   out_channels=ch1,
-                                   kernel_size=self.kernel_size,
-                                   subsample=True,
-                                   conv_padding=True,
-                                   padding_mode=self.padding_mode,
-                                   init=self.init,
-                                   nonlinearity=self.nonlinearity,
-                                   normalization=normalization,
-                                   norm_kwargs=self.norm_kwargs,
-                                   ndim=self.ndim)
+            layer = munit_norm_nlin_conv(
+                in_channels=ch0,
+                out_channels=ch1,
+                kernel_size=self.kernel_size,
+                subsample=True,
+                conv_padding=True,
+                padding_mode=self.padding_mode,
+                init=self.init,
+                nonlinearity=self.nonlinearity,
+                normalization=normalization,
+                norm_kwargs=self.norm_kwargs,
+                ndim=self.ndim
+            )
             cnn.append(layer)
-        layer = norm_nlin_conv(in_channels=self.num_channels_list[-1],
-                               out_channels=1,
-                               kernel_size=1,
-                               nonlinearity=self.nonlinearity,
-                               normalization=self.normalization,
-                               norm_kwargs=self.norm_kwargs,
-                               ndim=self.ndim)
+        layer = munit_norm_nlin_conv(
+            in_channels=self.num_channels_list[-1],
+            out_channels=1,
+            kernel_size=1,
+            nonlinearity=self.nonlinearity,
+            normalization=self.normalization,
+            norm_kwargs=self.norm_kwargs,
+            ndim=self.ndim
+        )
         cnn.append(layer)
         cnn = nn.Sequential(*cnn)
         return cnn
@@ -609,12 +613,79 @@ class munit_discriminator(nn.Module):
         return outputs
 
 
+"""
+Helper to build a norm -> ReLU -> conv block
+This is an improved scheme proposed in http://arxiv.org/pdf/1603.05027v2.pdf
+"""
+class munit_norm_nlin_conv(torch.nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size,
+                 subsample=False, upsample=False, upsample_mode='repeat',
+                 nonlinearity='ReLU', normalization=batch_normalization,
+                 norm_kwargs=None, conv_padding=True, padding_mode='constant',
+                 init='kaiming_normal_', ndim=2):
+        super().__init__()
+        if norm_kwargs is None:
+            norm_kwargs = {}
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
+        self.subsample = subsample
+        self.upsample = upsample
+        self.upsample_mode = upsample_mode
+        self.nonlinearity = nonlinearity
+        self.normalization = normalization
+        self.norm_kwargs = norm_kwargs
+        self.padding_mode = padding_mode
+        self.init = init
+        self.ndim = ndim
+        if normalization is not None:
+            self._modules['norm'] = normalization(ndim=ndim,
+                                                  num_features=in_channels,
+                                                  **norm_kwargs)
+        self._modules['nlin'] = get_nonlinearity(nonlinearity)
+        if upsample:
+            self._modules['upsample'] = do_upsample(mode=upsample_mode,
+                                                    ndim=ndim,
+                                                    in_channels=in_channels,
+                                                    out_channels=in_channels,
+                                                    kernel_size=2)
+        stride = 1
+        if subsample:
+            stride = 2
+        if conv_padding:
+            # For odd kernel sizes, equivalent to kernel_size//2.
+            # For even kernel sizes, two cases:
+            #    (1) [kernel_size//2-1, kernel_size//2] @ stride 1
+            #    (2) kernel_size//2 @ stride 2
+            # This way, even kernel sizes yield the same output size as
+            # odd kernel sizes. When subsampling, even kernel sizes allow
+            # possible downscaling without aliasing.
+            padding = [(kernel_size-1)//2,
+                       (kernel_size-int(subsample))//2]*ndim
+        else:
+            padding = 0
+        self._modules['conv'] = convolution(in_channels=in_channels,
+                                            out_channels=out_channels,
+                                            kernel_size=kernel_size,
+                                            ndim=ndim,
+                                            stride=stride,
+                                            init=init,
+                                            padding=padding,
+                                            padding_mode=padding_mode,
+                                            autopad=True)
+    def forward(self, input):
+        out = input
+        for op in self._modules.values():
+            out = op(out)
+        return out
+
+
 class convolution(torch.nn.Module):
     """
     Select 2D or 3D as argument (ndim) and initialize weights on creation.
     """
     def __init__(self, ndim=2, init=None, padding=None,
-                 padding_mode='constant', *args, **kwargs):
+                 padding_mode='constant', autopad=False, *args, **kwargs):
         super(convolution, self).__init__()
         if ndim==2:
             conv = torch.nn.Conv2d
@@ -626,6 +697,7 @@ class convolution(torch.nn.Module):
         self.init = init
         self.padding = padding
         self.padding_mode = padding_mode
+        self.autopad = autopad
         self.op = conv(*args, **kwargs)
         self.in_channels = self.op.in_channels
         self.out_channels = self.op.out_channels
@@ -646,6 +718,13 @@ class convolution(torch.nn.Module):
                 # dimension. Else, use constant.
                 padding_mode = 'constant'
             out = F.pad(out, pad=padding, mode=padding_mode, value=0)
+        if self.autopad:
+            # If the input is smaller than the kernel size, pad it.
+            padding = []
+            for i in range(self.ndim):
+                diff = max(0, self.op.kernel_size[i] - input.size(2+i))
+                padding.extend([diff//2, diff//2 + diff%2])
+            out = F.pad(out, pad=padding, mode=self.padding_mode, value=0)
         out = self.op(out)
         return out
 
